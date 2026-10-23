@@ -1,41 +1,45 @@
-import { NextResponse } from 'next/server'
-import { requireAdmin } from '@/lib/auth-helpers'
+import { NextRequest, NextResponse } from 'next/server'
+import { ADMIN, parseQuery, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
+import { pagination } from '@/lib/validation/common'
 
 export const dynamic = 'force-dynamic'
 
-// GET - List all recordings (admin only), for storage management
-export async function GET() {
-  try {
-    await requireAdmin()
+const recordingsQuery = pagination(50, 200)
 
-    const recordings = await prisma.meetingRecording.findMany({
+// GET /api/admin/recordings?limit&offset - paginated recording list for storage management (admin only)
+export const GET = withApiAuth(ADMIN, async (req: NextRequest) => {
+  const { limit, offset } = parseQuery(req, recordingsQuery)
+
+  const [rows, total] = await Promise.all([
+    prisma.meetingRecording.findMany({
       orderBy: { recordedAt: 'desc' },
+      take: limit,
+      skip: offset,
       include: {
         meeting: {
-          include: {
+          select: {
+            meetingDate: true,
             employee: { select: { name: true, email: true } },
             reporter: { select: { name: true } },
           },
         },
       },
-    })
+    }),
+    prisma.meetingRecording.count(),
+  ])
 
-    const list = recordings.map((r) => ({
-      id: r.id,
-      meetingId: r.meetingId,
-      meetingDate: r.meeting?.meetingDate ? r.meeting.meetingDate.toISOString() : null,
-      employeeName: r.meeting?.employee?.name ?? null,
-      reporterName: r.meeting?.reporter?.name ?? null,
-      status: r.status,
-      duration: r.duration,
-      fileSize: r.fileSize,
-      recordedAt: r.recordedAt ? r.recordedAt.toISOString() : null,
-    }))
+  const recordings = rows.map((r) => ({
+    id: r.id,
+    meetingId: r.meetingId,
+    meetingDate: r.meeting?.meetingDate ? r.meeting.meetingDate.toISOString() : null,
+    employeeName: r.meeting?.employee?.name ?? null,
+    reporterName: r.meeting?.reporter?.name ?? null,
+    status: r.status,
+    duration: r.duration,
+    fileSize: r.fileSize,
+    recordedAt: r.recordedAt ? r.recordedAt.toISOString() : null,
+  }))
 
-    return NextResponse.json(list)
-  } catch (error) {
-    console.error('Error listing recordings:', error)
-    return NextResponse.json({ error: 'Failed to list recordings' }, { status: 500 })
-  }
-}
+  return NextResponse.json({ recordings, total, limit, offset })
+})

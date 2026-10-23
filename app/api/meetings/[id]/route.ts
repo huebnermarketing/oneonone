@@ -1,194 +1,88 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAuth } from '@/lib/auth-helpers'
+import { ADMIN, notFound, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { logMeetingUpdated, logMeetingDeleted } from '@/lib/audit'
 import { parseZoomMeetingId } from '@/lib/zoom'
+import { assertAccess, canManageMeeting } from '@/lib/meeting-access'
+import { completeMeeting, loadMeeting } from '@/lib/meeting-state'
+import { updateCalendarEvent, deleteCalendarEvent } from '@/lib/google-calendar'
+import { updateMeetingSchema } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await requireAuth()
-    const body = await request.json()
-    const { meetingDate, status, meetingType, meetingLink } = body
+/**
+ * PATCH /api/meetings/[id]
+ * Reporter or admin: change date, meeting type/link, or mark COMPLETED.
+ * Cancelling is a separate endpoint (POST /cancel) governed by the cancel policy.
+ */
+export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
+  const body = await parseBody(req, updateMeetingSchema)
 
-    const meeting = await prisma.meeting.findUnique({
-      where: { id: params.id },
-      include: {
-        employee: { select: { name: true, email: true } },
-        reporter: { select: { name: true, email: true } },
-        calendarEvent: true,
-      },
-    })
+  const meeting = await loadMeeting(params.id)
+  if (!meeting) throw notFound('Meeting')
+  assertAccess(canManageMeeting(user, meeting), 'Only the reporter or an admin can update this meeting')
 
-    if (!meeting) {
-      return NextResponse.json({ error: 'Meeting not found' }, { status: 404 })
-    }
-
-    // Only reporter or admin can update
-    if (meeting.reporterId !== user.id && user.role !== 'SUPER_ADMIN') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
-
-    // Block marking as Completed until the check-in form is submitted when setting requires it
-    if (status === 'COMPLETED') {
-      const sys = await prisma.systemSettings.findUnique({
-        where: { id: 'system' },
-        select: { requireFormBeforeComplete: true },
-      })
-      const requireForm = sys?.requireFormBeforeComplete ?? true
-      if (requireForm && !meeting.formSubmittedAt) {
-        return NextResponse.json(
-          { error: 'Please submit the required meeting form before marking this meeting as completed.' },
-          { status: 400 }
-        )
-      }
-    }
-
-    const updateData: {
-      meetingDate?: Date
-      status?: 'SCHEDULED' | 'COMPLETED' | 'CANCELLED'
-      meetingType?: 'IN_PERSON' | 'ZOOM'
-      meetingLink?: string | null
-      zoomMeetingId?: string | null
-    } = {}
-    if (meetingDate) updateData.meetingDate = new Date(meetingDate)
-    if (status === 'CANCELLED') {
-      return NextResponse.json(
-        { error: 'You do not have permission to cancel meetings.' },
-        { status: 403 }
-      )
-    }
-    if (status === 'COMPLETED' || status === 'SCHEDULED') updateData.status = status
-    if (meetingType === 'IN_PERSON' || meetingType === 'ZOOM') {
-      updateData.meetingType = meetingType
-      const link = meetingType === 'IN_PERSON' ? null : (meetingLink !== undefined ? (meetingLink ? String(meetingLink).trim() : null) : undefined)
-      updateData.meetingLink = link
-      updateData.zoomMeetingId = meetingType === 'IN_PERSON' ? null : (link ? parseZoomMeetingId(link) : undefined)
-    } else if (meetingLink !== undefined && meeting.meetingType === 'ZOOM') {
-      const link = meetingLink ? String(meetingLink).trim() : null
-      updateData.meetingLink = link
-      updateData.zoomMeetingId = link ? parseZoomMeetingId(link) : null
-    }
-
-    const updatedMeeting = await prisma.meeting.update({
-      where: { id: params.id },
-      data: updateData,
-      include: {
-        employee: { select: { name: true, email: true } },
-        reporter: { select: { name: true, email: true } },
-      },
-    })
-
-    // Audit log
-    await logMeetingUpdated(user.id, params.id, {
-      changes: updateData,
-      employeeName: meeting.employee.name,
-    })
-
-    // Update Google Calendar event if it exists
-    if (meeting.calendarEvent && meetingDate) {
-      try {
-        const { updateCalendarEvent } = await import('@/lib/google-calendar')
-        await updateCalendarEvent(
-          meeting.calendarEvent.googleEventId,
-          meeting.reporterId,
-          new Date(meetingDate),
-          meeting.employee.name,
-          meeting.reporter.name
-        )
-      } catch (error) {
-        console.error('Failed to update calendar event:', error)
-      }
-    }
-
-    // Delete Google Calendar event when meeting is cancelled
-    if (meeting.calendarEvent && status === 'CANCELLED') {
-      try {
-        const { deleteCalendarEvent } = await import('@/lib/google-calendar')
-        await deleteCalendarEvent(meeting.calendarEvent.googleEventId, meeting.reporterId)
-      } catch (error) {
-        console.error('Failed to delete calendar event on cancellation:', error)
-      }
-    }
-
-    // Create in-app notifications for status changes
-    try {
-      if (status === 'CANCELLED') {
-        const { notifyMeetingCancelled } = await import('@/lib/notifications')
-        await notifyMeetingCancelled(
-          meeting.employeeId,
-          user.name || 'Manager',
-          meeting.meetingDate,
-          params.id
-        )
-      } else if (status === 'COMPLETED') {
-        const { notifyMeetingCompleted } = await import('@/lib/notifications')
-        await notifyMeetingCompleted(
-          meeting.employeeId,
-          meeting.reporter.name,
-          params.id
-        )
-      }
-    } catch (error) {
-      console.error('Failed to create notification:', error)
-    }
-
-    return NextResponse.json(updatedMeeting)
-  } catch (error) {
-    console.error('Error updating meeting:', error)
-    return NextResponse.json({ error: 'Failed to update meeting' }, { status: 500 })
+  // Status change is handled by the state machine, separately from field edits
+  if (body.status === 'COMPLETED') {
+    return NextResponse.json(await completeMeeting(meeting, user.id))
   }
-}
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await requireAuth()
+  const updateData: {
+    meetingDate?: Date
+    meetingType?: 'IN_PERSON' | 'ZOOM'
+    meetingLink?: string | null
+    zoomMeetingId?: string | null
+  } = {}
 
-    const meeting = await prisma.meeting.findUnique({
-      where: { id: params.id },
-      include: {
-        calendarEvent: true,
-      },
-    })
+  if (body.meetingDate) updateData.meetingDate = body.meetingDate
 
-    if (!meeting) {
-      return NextResponse.json({ error: 'Meeting not found' }, { status: 404 })
-    }
-
-    // Only SUPER_ADMIN can delete meetings
-    if (user.role !== 'SUPER_ADMIN') {
-      return NextResponse.json({ error: 'Only Super Admin can delete meetings' }, { status: 403 })
-    }
-
-    // Delete Google Calendar event if it exists
-    if (meeting.calendarEvent) {
-      try {
-        const { deleteCalendarEvent } = await import('@/lib/google-calendar')
-        await deleteCalendarEvent(meeting.calendarEvent.googleEventId, meeting.reporterId)
-      } catch (error) {
-        console.error('Failed to delete calendar event:', error)
-      }
-    }
-
-    await prisma.meeting.delete({
-      where: { id: params.id },
-    })
-
-    // Audit log
-    await logMeetingDeleted(user.id, params.id, {
-      meetingDate: meeting.meetingDate,
-    })
-
-    return NextResponse.json({ success: true })
-  } catch (error) {
-    console.error('Error deleting meeting:', error)
-    return NextResponse.json({ error: 'Failed to delete meeting' }, { status: 500 })
+  if (body.meetingType) {
+    updateData.meetingType = body.meetingType
+    const link = body.meetingType === 'IN_PERSON' ? null : body.meetingLink ?? meeting.meetingLink
+    updateData.meetingLink = link
+    updateData.zoomMeetingId = link ? parseZoomMeetingId(link) : null
+  } else if (body.meetingLink !== undefined && meeting.meetingType === 'ZOOM') {
+    updateData.meetingLink = body.meetingLink
+    updateData.zoomMeetingId = body.meetingLink ? parseZoomMeetingId(body.meetingLink) : null
   }
-}
+
+  const updatedMeeting = await prisma.meeting.update({
+    where: { id: params.id },
+    data: updateData,
+    include: {
+      employee: { select: { name: true, email: true } },
+      reporter: { select: { name: true, email: true } },
+    },
+  })
+
+  await logMeetingUpdated(user.id, params.id, { changes: updateData, employeeName: meeting.employee.name })
+
+  if (meeting.calendarEvent && body.meetingDate) {
+    await updateCalendarEvent(
+      meeting.calendarEvent.googleEventId,
+      meeting.reporterId,
+      body.meetingDate,
+      meeting.employee.name,
+      meeting.reporter.name
+    ).catch((error) => console.error('Failed to update calendar event:', error))
+  }
+
+  return NextResponse.json(updatedMeeting)
+})
+
+/** DELETE /api/meetings/[id] — hard delete, Super Admin only. Todos linked to it are kept (meetingId → null). */
+export const DELETE = withApiAuth(ADMIN, async (_req: NextRequest, { user, params }) => {
+  const meeting = await loadMeeting(params.id)
+  if (!meeting) throw notFound('Meeting')
+
+  if (meeting.calendarEvent) {
+    await deleteCalendarEvent(meeting.calendarEvent.googleEventId, meeting.reporterId).catch((error) =>
+      console.error('Failed to delete calendar event:', error)
+    )
+  }
+
+  await prisma.meeting.delete({ where: { id: params.id } })
+  await logMeetingDeleted(user.id, params.id, { meetingDate: meeting.meetingDate })
+
+  return NextResponse.json({ success: true })
+})

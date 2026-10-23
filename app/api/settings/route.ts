@@ -1,199 +1,107 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireRole } from '@/lib/auth-helpers'
-import { getSettings, updateSettings } from '@/lib/settings'
+import { ADMIN, badRequest, parseBody, withApiAuth } from '@/lib/api'
+import { getSettings, updateSettings, SystemSettings } from '@/lib/settings'
 import { maskApiKey } from '@/lib/encryption'
-import { UserRole } from '@prisma/client'
 import { logSettingsChanged } from '@/lib/audit'
+import { settingsActionSchema, updateSettingsSchema } from '@/lib/validation/admin'
 
 export const dynamic = 'force-dynamic'
 
-// GET - Fetch settings (masked for security)
-export async function GET() {
-  try {
-    await requireRole([UserRole.SUPER_ADMIN])
-    
-    const settings = await getSettings()
+const SECRET_KEYS: (keyof SystemSettings)[] = ['openaiApiKey', 'awsAccessKeyId', 'awsSecretKey']
 
-    // Return masked sensitive values
-    return NextResponse.json({
-      openaiApiKey: maskApiKey(settings.openaiApiKey),
-      openaiApiKeySet: !!settings.openaiApiKey,
-      openaiModel: settings.openaiModel,
-      whisperModel: settings.whisperModel,
-      awsRegion: settings.awsRegion,
-      awsAccessKeyId: maskApiKey(settings.awsAccessKeyId),
-      awsAccessKeyIdSet: !!settings.awsAccessKeyId,
-      awsSecretKey: maskApiKey(settings.awsSecretKey),
-      awsSecretKeySet: !!settings.awsSecretKey,
-      awsS3Bucket: settings.awsS3Bucket,
-      maxRecordingMins: settings.maxRecordingMins,
-    })
-  } catch (error) {
-    console.error('Error fetching settings:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch settings' },
-      { status: 500 }
-    )
+function maskedView(s: SystemSettings) {
+  return {
+    // AI
+    openaiApiKey: maskApiKey(s.openaiApiKey),
+    openaiApiKeySet: !!s.openaiApiKey,
+    openaiModel: s.openaiModel,
+    whisperModel: s.whisperModel,
+    // Storage
+    awsRegion: s.awsRegion,
+    awsAccessKeyId: maskApiKey(s.awsAccessKeyId),
+    awsAccessKeyIdSet: !!s.awsAccessKeyId,
+    awsSecretKey: maskApiKey(s.awsSecretKey),
+    awsSecretKeySet: !!s.awsSecretKey,
+    awsS3Bucket: s.awsS3Bucket,
+    maxRecordingMins: s.maxRecordingMins,
+    // Policies
+    requireFormBeforeComplete: s.requireFormBeforeComplete,
+    cancelPolicy: s.cancelPolicy,
+    employeeCanViewRecording: s.employeeCanViewRecording,
+    employeeCanViewNotes: s.employeeCanViewNotes,
+    enableEmailReminders: s.enableEmailReminders,
+    reminderHoursBefore: s.reminderHoursBefore,
+    shortReminderHoursBefore: s.shortReminderHoursBefore,
   }
 }
 
-// PUT - Update settings
-export async function PUT(request: NextRequest) {
-  try {
-    const user = await requireRole([UserRole.SUPER_ADMIN])
-    
-    const body = await request.json()
-    const {
-      openaiApiKey,
-      openaiModel,
-      whisperModel,
-      awsRegion,
-      awsAccessKeyId,
-      awsSecretKey,
-      awsS3Bucket,
-      maxRecordingMins,
-    } = body
+// GET - settings with secrets masked
+export const GET = withApiAuth(ADMIN, async () => {
+  return NextResponse.json(maskedView(await getSettings()))
+})
 
-    const updates: Record<string, string | number | null> = {}
+// PUT - partial update. Empty string on a secret/optional field clears it; omitted fields are untouched.
+export const PUT = withApiAuth(ADMIN, async (req: NextRequest, { user }) => {
+  const body = await parseBody(req, updateSettingsSchema)
 
-    // Only update fields that are explicitly provided
-    // Empty string means clear, undefined means don't change
-    if (openaiApiKey !== undefined) updates.openaiApiKey = openaiApiKey || null
-    if (openaiModel !== undefined) updates.openaiModel = openaiModel
-    if (whisperModel !== undefined) updates.whisperModel = whisperModel
-    if (awsRegion !== undefined) updates.awsRegion = awsRegion || null
-    if (awsAccessKeyId !== undefined) updates.awsAccessKeyId = awsAccessKeyId || null
-    if (awsSecretKey !== undefined) updates.awsSecretKey = awsSecretKey || null
-    if (awsS3Bucket !== undefined) updates.awsS3Bucket = awsS3Bucket || null
-    if (maxRecordingMins !== undefined) updates.maxRecordingMins = parseInt(maxRecordingMins) || 25
-
-    await updateSettings(updates)
-
-    // Audit log (mask sensitive fields)
-    const safeChanges = Object.keys(updates).reduce((acc, key) => {
-      acc[key] = ['openaiApiKey', 'awsAccessKeyId', 'awsSecretKey'].includes(key) ? '***updated***' : updates[key]
-      return acc
-    }, {} as Record<string, string | number | null>)
-    await logSettingsChanged(user.id, safeChanges)
-
-    // Return updated settings (masked)
-    const settings = await getSettings()
-    return NextResponse.json({
-      openaiApiKey: maskApiKey(settings.openaiApiKey),
-      openaiApiKeySet: !!settings.openaiApiKey,
-      openaiModel: settings.openaiModel,
-      whisperModel: settings.whisperModel,
-      awsRegion: settings.awsRegion,
-      awsAccessKeyId: maskApiKey(settings.awsAccessKeyId),
-      awsAccessKeyIdSet: !!settings.awsAccessKeyId,
-      awsSecretKey: maskApiKey(settings.awsSecretKey),
-      awsSecretKeySet: !!settings.awsSecretKey,
-      awsS3Bucket: settings.awsS3Bucket,
-      maxRecordingMins: settings.maxRecordingMins,
-      message: 'Settings updated successfully',
-    })
-  } catch (error) {
-    console.error('Error updating settings:', error)
-    return NextResponse.json(
-      { error: 'Failed to update settings' },
-      { status: 500 }
-    )
+  const updates: Partial<SystemSettings> = {}
+  for (const [key, value] of Object.entries(body)) {
+    if (value === undefined) continue
+    // nullable string fields: '' -> null
+    ;(updates as Record<string, unknown>)[key] = value === '' ? null : value
   }
-}
+  if (Object.keys(updates).length === 0) throw badRequest('No settings provided')
 
-// POST - Test OpenAI connection
-export async function POST(request: NextRequest) {
-  try {
-    await requireRole([UserRole.SUPER_ADMIN])
-    
-    const body = await request.json()
-    const { action } = body
+  const settings = await updateSettings(updates)
 
-    if (action === 'test-openai') {
-      const settings = await getSettings()
-      
-      if (!settings.openaiApiKey) {
-        return NextResponse.json(
-          { error: 'OpenAI API key not configured' },
-          { status: 400 }
-        )
-      }
+  const safeChanges = Object.fromEntries(
+    Object.entries(updates).map(([k, v]) => [k, SECRET_KEYS.includes(k as keyof SystemSettings) ? '***updated***' : v])
+  )
+  await logSettingsChanged(user.id, safeChanges)
 
-      // Test the API key with a simple request
-      const OpenAI = (await import('openai')).default
-      const openai = new OpenAI({ apiKey: settings.openaiApiKey })
-      
-      try {
-        await openai.models.list()
-        return NextResponse.json({ success: true, message: 'OpenAI connection successful' })
-      } catch (err: unknown) {
-        return NextResponse.json(
-          { error: `OpenAI connection failed: ${err instanceof Error ? err.message : 'Unknown error'}` },
-          { status: 400 }
-        )
-      }
+  return NextResponse.json({ ...maskedView(settings), message: 'Settings updated successfully' })
+})
+
+// POST - connectivity tests
+export const POST = withApiAuth(ADMIN, async (req: NextRequest) => {
+  const { action } = await parseBody(req, settingsActionSchema)
+  const settings = await getSettings()
+
+  if (action === 'test-openai') {
+    if (!settings.openaiApiKey) throw badRequest('OpenAI API key not configured')
+    const OpenAI = (await import('openai')).default
+    const openai = new OpenAI({ apiKey: settings.openaiApiKey })
+    try {
+      await openai.models.list()
+      return NextResponse.json({ success: true, message: 'OpenAI connection successful' })
+    } catch (err: unknown) {
+      throw badRequest(`OpenAI connection failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
     }
-
-    if (action === 'test-s3') {
-      const settings = await getSettings()
-      
-      const region = settings.awsRegion || process.env.AWS_REGION
-      const accessKeyId = settings.awsAccessKeyId || process.env.AWS_ACCESS_KEY_ID
-      const secretAccessKey = settings.awsSecretKey || process.env.AWS_SECRET_ACCESS_KEY
-      const bucket = settings.awsS3Bucket || process.env.AWS_S3_BUCKET
-
-      if (!region || !accessKeyId || !secretAccessKey || !bucket) {
-        return NextResponse.json(
-          { error: 'AWS S3 not fully configured. Please provide Region, Access Key, Secret Key, and Bucket Name.' },
-          { status: 400 }
-        )
-      }
-
-      try {
-        const { S3Client, HeadBucketCommand } = await import('@aws-sdk/client-s3')
-        
-        const s3Client = new S3Client({
-          region,
-          credentials: {
-            accessKeyId,
-            secretAccessKey,
-          },
-        })
-
-        // Test by checking if bucket exists and is accessible
-        await s3Client.send(new HeadBucketCommand({ Bucket: bucket }))
-        
-        return NextResponse.json({ 
-          success: true, 
-          message: `S3 connection successful! Bucket "${bucket}" is accessible.` 
-        })
-      } catch (err: unknown) {
-        const s3Error = err as { message?: string; name?: string; Code?: string; $metadata?: { httpStatusCode?: number } }
-        let errorMessage = s3Error.message || 'Unknown error'
-        
-        if (s3Error.name === 'NotFound' || s3Error.$metadata?.httpStatusCode === 404) {
-          errorMessage = `Bucket "${bucket}" not found. Please check the bucket name.`
-        } else if (s3Error.name === 'InvalidAccessKeyId' || s3Error.Code === 'InvalidAccessKeyId') {
-          errorMessage = 'Invalid Access Key ID. Please check your credentials.'
-        } else if (s3Error.name === 'SignatureDoesNotMatch') {
-          errorMessage = 'Invalid Secret Access Key. Please check your credentials.'
-        } else if (s3Error.name === 'AccessDenied' || s3Error.$metadata?.httpStatusCode === 403) {
-          errorMessage = `Access denied to bucket "${bucket}". Please check IAM permissions.`
-        }
-        
-        return NextResponse.json(
-          { error: `S3 connection failed: ${errorMessage}` },
-          { status: 400 }
-        )
-      }
-    }
-
-    return NextResponse.json({ error: 'Unknown action' }, { status: 400 })
-  } catch (error) {
-    console.error('Error testing settings:', error)
-    return NextResponse.json(
-      { error: 'Failed to test settings' },
-      { status: 500 }
-    )
   }
-}
+
+  // test-s3
+  const { awsRegion: region, awsAccessKeyId: accessKeyId, awsSecretKey: secretAccessKey, awsS3Bucket: bucket } = settings
+  if (!region || !accessKeyId || !secretAccessKey || !bucket) {
+    throw badRequest('AWS S3 not fully configured. Please provide Region, Access Key, Secret Key, and Bucket Name.')
+  }
+
+  try {
+    const { S3Client, HeadBucketCommand } = await import('@aws-sdk/client-s3')
+    const s3Client = new S3Client({ region, credentials: { accessKeyId, secretAccessKey } })
+    await s3Client.send(new HeadBucketCommand({ Bucket: bucket }))
+    return NextResponse.json({ success: true, message: `S3 connection successful! Bucket "${bucket}" is accessible.` })
+  } catch (err: unknown) {
+    const s3Error = err as { message?: string; name?: string; Code?: string; $metadata?: { httpStatusCode?: number } }
+    let errorMessage = s3Error.message || 'Unknown error'
+    if (s3Error.name === 'NotFound' || s3Error.$metadata?.httpStatusCode === 404) {
+      errorMessage = `Bucket "${bucket}" not found. Please check the bucket name.`
+    } else if (s3Error.name === 'InvalidAccessKeyId' || s3Error.Code === 'InvalidAccessKeyId') {
+      errorMessage = 'Invalid Access Key ID. Please check your credentials.'
+    } else if (s3Error.name === 'SignatureDoesNotMatch') {
+      errorMessage = 'Invalid Secret Access Key. Please check your credentials.'
+    } else if (s3Error.name === 'AccessDenied' || s3Error.$metadata?.httpStatusCode === 403) {
+      errorMessage = `Access denied to bucket "${bucket}". Please check IAM permissions.`
+    }
+    throw badRequest(`S3 connection failed: ${errorMessage}`)
+  }
+})

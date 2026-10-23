@@ -1,138 +1,89 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAdmin, getCurrentUser, handleApiError } from '@/lib/auth-helpers'
+import { ADMIN, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
+import { logDataCleared } from '@/lib/audit'
+import { deleteS3Prefix, isS3Configured } from '@/lib/s3'
+import { clearDataSchema } from '@/lib/validation/admin'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(request: NextRequest) {
-  try {
-    await requireAdmin()
-    const currentUser = await getCurrentUser()
-    
-    if (!currentUser) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const body = await request.json()
-    const { clearType, keepCurrentUser } = body
-
-    // Get counts before deletion for reporting
-    const counts = {
-      recordings: await prisma.meetingRecording.count(),
-      todos: await prisma.todo.count(),
-      meetings: await prisma.meeting.count(),
-      calendarEvents: await prisma.calendarEvent.count(),
-      users: await prisma.user.count(),
-      departments: await prisma.department.count(),
-    }
-
-    let deleted = {
-      recordings: 0,
-      todos: 0,
-      meetings: 0,
-      calendarEvents: 0,
-      users: 0,
-      departments: 0,
-    }
-
-    // Clear data based on type
-    if (clearType === 'all' || clearType === 'recordings') {
-      const result = await prisma.meetingRecording.deleteMany({})
-      deleted.recordings = result.count
-    }
-
-    if (clearType === 'all' || clearType === 'todos') {
-      const result = await prisma.todo.deleteMany({})
-      deleted.todos = result.count
-    }
-
-    if (clearType === 'all' || clearType === 'meetings') {
-      // Delete calendar events first (foreign key constraint)
-      const calResult = await prisma.calendarEvent.deleteMany({})
-      deleted.calendarEvents = calResult.count
-
-      // Delete recordings first (foreign key constraint)
-      if (clearType !== 'recordings') {
-        const recResult = await prisma.meetingRecording.deleteMany({})
-        deleted.recordings = recResult.count
-      }
-
-      // Delete todos associated with meetings
-      if (clearType !== 'todos') {
-        const todoResult = await prisma.todo.deleteMany({})
-        deleted.todos = todoResult.count
-      }
-
-      const result = await prisma.meeting.deleteMany({})
-      deleted.meetings = result.count
-    }
-
-    if (clearType === 'all' || clearType === 'users') {
-      // First clear foreign key references
-      if (clearType !== 'meetings') {
-        await prisma.calendarEvent.deleteMany({})
-        await prisma.meetingRecording.deleteMany({})
-        await prisma.todo.deleteMany({})
-        await prisma.meeting.deleteMany({})
-      }
-
-      // Clear reportsTo relationships
-      await prisma.user.updateMany({
-        data: { reportsToId: null }
-      })
-
-      if (keepCurrentUser) {
-        // Delete all users except the current one
-        const result = await prisma.user.deleteMany({
-          where: { 
-            id: { not: currentUser.id }
-          }
-        })
-        deleted.users = result.count
-      } else {
-        const result = await prisma.user.deleteMany({})
-        deleted.users = result.count
-      }
-    }
-
-    if (clearType === 'all' || clearType === 'departments') {
-      // Remove department references from users first
-      await prisma.user.updateMany({
-        data: { departmentId: null }
-      })
-      
-      const result = await prisma.department.deleteMany({})
-      deleted.departments = result.count
-    }
-
-    return NextResponse.json({
-      success: true,
-      message: 'Data cleared successfully',
-      deleted,
-      previous: counts,
-    })
-  } catch (error) {
-    console.error('Error clearing data:', error)
-    return NextResponse.json({ error: 'Failed to clear data' }, { status: 500 })
-  }
+async function getCounts() {
+  const [recordings, todos, meetings, calendarEvents, users, departments, recurringSchedules, attachments] =
+    await Promise.all([
+      prisma.meetingRecording.count(),
+      prisma.todo.count(),
+      prisma.meeting.count(),
+      prisma.calendarEvent.count(),
+      prisma.user.count(),
+      prisma.department.count(),
+      prisma.recurringSchedule.count(),
+      prisma.attachment.count(),
+    ])
+  return { recordings, todos, meetings, calendarEvents, users, departments, recurringSchedules, attachments }
 }
 
-export async function GET(request: NextRequest) {
-  try {
-    await requireAdmin()
+export const GET = withApiAuth(ADMIN, async () => NextResponse.json(await getCounts()))
 
-    // Get current counts
-    const counts = {
-      recordings: await prisma.meetingRecording.count(),
-      todos: await prisma.todo.count(),
-      meetings: await prisma.meeting.count(),
-      calendarEvents: await prisma.calendarEvent.count(),
-      users: await prisma.user.count(),
-      departments: await prisma.department.count(),
-    }
+/**
+ * POST /api/admin/clear-data { clearType, keepCurrentUser, confirm }
+ * Destructive. Runs in one transaction (all-or-nothing), is audit-logged, and requires the caller
+ * to echo the clearType in `confirm`. S3 objects for deleted recordings/attachments are removed afterwards.
+ */
+export const POST = withApiAuth(ADMIN, async (req: NextRequest, { user }) => {
+  const { clearType, keepCurrentUser } = await parseBody(req, clearDataSchema)
+  const previous = await getCounts()
 
-    return NextResponse.json(counts)
-  } catch (error) {
-    return handleApiError(error)
+  const clearRecordings = clearType === 'all' || clearType === 'recordings' || clearType === 'meetings' || clearType === 'users'
+  const clearTodos = clearType === 'all' || clearType === 'todos' || clearType === 'meetings' || clearType === 'users'
+  const clearMeetings = clearType === 'all' || clearType === 'meetings' || clearType === 'users'
+  const clearUsers = clearType === 'all' || clearType === 'users'
+  const clearDepartments = clearType === 'all' || clearType === 'departments'
+
+  // Collect S3 keys before rows disappear
+  const s3Prefixes: string[] = []
+  if (clearRecordings) {
+    const recs = await prisma.meetingRecording.findMany({ where: { audioKey: { not: null } }, select: { audioKey: true } })
+    s3Prefixes.push(...recs.map((r) => r.audioKey!.replace(/\/final\.webm$/, '')))
   }
-}
+  if (clearMeetings) {
+    const atts = await prisma.attachment.findMany({ select: { s3Key: true } })
+    s3Prefixes.push(...atts.map((a) => a.s3Key))
+  }
+
+  const deleted = await prisma.$transaction(async (tx) => {
+    const d = { recordings: 0, todos: 0, meetings: 0, calendarEvents: 0, attachments: 0, recurringSchedules: 0, notifications: 0, users: 0, departments: 0 }
+
+    if (clearRecordings) d.recordings = (await tx.meetingRecording.deleteMany({})).count
+    if (clearTodos) d.todos = (await tx.todo.deleteMany({})).count
+    if (clearMeetings) {
+      d.calendarEvents = (await tx.calendarEvent.deleteMany({})).count
+      d.attachments = (await tx.attachment.deleteMany({})).count
+      d.meetings = (await tx.meeting.deleteMany({})).count
+      d.recurringSchedules = (await tx.recurringSchedule.deleteMany({})).count
+      d.notifications = (await tx.notification.deleteMany({})).count
+    }
+    if (clearUsers) {
+      const where = keepCurrentUser ? { id: { not: user.id } } : {}
+      await tx.meeting.updateMany({ data: { proposedById: null } })
+      await tx.user.updateMany({ data: { reportsToId: null } })
+      // AuditLog, Session, Account, Notification, RecurringSchedule cascade from User
+      d.users = (await tx.user.deleteMany({ where })).count
+    }
+    if (clearDepartments) {
+      await tx.user.updateMany({ data: { departmentId: null } })
+      d.departments = (await tx.department.deleteMany({})).count
+    }
+    return d
+  }, { timeout: 60_000 })
+
+  await logDataCleared(user.id, clearType, deleted)
+
+  // Best-effort storage cleanup
+  if (s3Prefixes.length > 0 && (await isS3Configured())) {
+    for (const prefix of s3Prefixes) {
+      await deleteS3Prefix(prefix).catch((e) => console.warn('[clear-data] S3 cleanup failed for', prefix, e))
+    }
+  }
+
+  return NextResponse.json({ success: true, message: 'Data cleared successfully', deleted, previous })
+})

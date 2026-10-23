@@ -1,146 +1,109 @@
-# AWS Deployment Guide
+# Deployment
 
-This guide covers deploying the AMI One-on-One application to AWS.
+Production runs as a **single Node process under PM2 on an EC2 host, behind Nginx with Let's Encrypt TLS**, talking to a PostgreSQL database. There is no Docker/ECS path (removed — it was never functional). Everything below reflects the files actually in the repo: `deploy.sh`, `ecosystem.config.cjs`, `deploy/nginx-ssl.conf`, `deploy/setup-ssl-on-server.sh`.
 
-## Prerequisites
+```
+Browser ──443──▶ Nginx (TLS, 50 MB uploads, 1800 s proxy timeout) ──3000──▶ next start (PM2 "oneonone") ──▶ PostgreSQL
+                                                                                      ├──▶ Google OAuth / Calendar
+                                                                                      ├──▶ OpenAI (Whisper + GPT)
+                                                                                      ├──▶ S3 (recordings, attachments)
+                                                                                      └──▶ SMTP or SES (email)
+```
 
-- AWS Account
-- AWS CLI configured
-- Docker installed (for containerization)
-- PostgreSQL database (AWS RDS recommended)
+## Server prerequisites (one-time)
 
-## Architecture
+- Ubuntu 22.04+, Node 20 LTS or newer, `npm`, `pm2` (`npm i -g pm2`), Nginx, Certbot, `ffmpeg` (optional — `ffmpeg-static` is bundled, system ffmpeg is the fallback).
+- PostgreSQL reachable from the host (local Postgres or RDS). Database `ami_oneonone`, user with full rights on it.
+- App checked out at `/var/www/oneonone` on branch `main` (`deploy.sh` does `git pull origin main`).
+- `.env` in the app root — see "Environment" below. `deploy.sh` writes a placeholder and exits if it is missing.
+- Security group: inbound 80 + 443. Port 3000 must **not** be public.
 
-- **Application**: Next.js app running on AWS ECS (Fargate) or EC2
-- **Database**: PostgreSQL on AWS RDS
-- **Email**: AWS SES
-- **Storage**: Optional S3 for file uploads
-
-## Step 1: Set Up AWS RDS PostgreSQL
-
-1. Create an RDS PostgreSQL instance:
-   ```bash
-   aws rds create-db-instance \
-     --db-instance-identifier ami-one-on-one-db \
-     --db-instance-class db.t3.micro \
-     --engine postgres \
-     --master-username admin \
-     --master-user-password YourSecurePassword \
-     --allocated-storage 20 \
-     --vpc-security-group-ids sg-xxxxx
-   ```
-
-2. Note the endpoint URL for your `DATABASE_URL` environment variable:
-   ```
-   postgresql://admin:YourSecurePassword@ami-one-on-one-db.xxxxx.us-east-1.rds.amazonaws.com:5432/ami_one_on_one
-   ```
-
-## Step 2: Configure AWS SES
-
-1. Verify your sending domain in SES
-2. Request production access if in sandbox mode
-3. Note your AWS credentials for email sending
-
-## Step 3: Set Up Google OAuth
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create OAuth 2.0 credentials
-3. Add authorized redirect URI: `https://yourdomain.com/api/auth/callback/google`
-4. Note your Client ID and Client Secret
-
-## Step 4: Build and Push Docker Image
+## Routine deploy
 
 ```bash
-# Build the image
-docker build -t ami-one-on-one .
-
-# Tag for ECR
-docker tag ami-one-on-one:latest YOUR_ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ami-one-on-one:latest
-
-# Push to ECR
-aws ecr get-login-password --region REGION | docker login --username AWS --password-stdin YOUR_ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com
-docker push YOUR_ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/ami-one-on-one:latest
+ssh <host>
+cd /var/www/oneonone
+bash deploy.sh
 ```
 
-## Step 5: Deploy to ECS (Fargate)
+`deploy.sh` does, in order: `git pull origin main` → `npm ci` → `prisma generate` → `prisma migrate deploy` → `next build` (3 GB heap) → verify `.next/BUILD_ID` → `pm2 delete oneonone; pm2 start ecosystem.config.cjs; pm2 save`. Any step failing aborts before PM2 is touched, so a bad build never replaces a running one.
 
-1. Create ECS cluster:
-   ```bash
-   aws ecs create-cluster --cluster-name ami-one-on-one
-   ```
+Never run `npm run db:seed` on the server — it wipes every table.
 
-2. Create task definition (see `ecs-task-definition.json`)
+## Database migrations
 
-3. Create service:
-   ```bash
-   aws ecs create-service \
-     --cluster ami-one-on-one \
-     --service-name ami-one-on-one-service \
-     --task-definition ami-one-on-one \
-     --desired-count 1 \
-     --launch-type FARGATE \
-     --network-configuration "awsvpcConfiguration={subnets=[subnet-xxxxx],securityGroups=[sg-xxxxx],assignPublicIp=ENABLED}"
-   ```
-
-## Step 6: Run Database Migrations
+Schema changes ship as files under `prisma/migrations/`. Workflow:
 
 ```bash
-# Connect to your ECS task or use a separate migration container
-npx prisma migrate deploy
+# locally, after editing prisma/schema.prisma
+npx prisma migrate dev --name <describe_change>    # creates + applies the migration, regenerates client
+git add prisma/migrations && git commit
+# on the server, deploy.sh runs: npx prisma migrate deploy
 ```
 
-## Step 7: Environment Variables
+### Migrating a database that was created with `db push` (one-time)
 
-Set these in your ECS task definition or EC2 instance:
+Before the migrations baseline (`0_init`) existed, the production schema was applied with `prisma db push`. The first `migrate deploy` on such a database would try to re-create every table and fail. Mark the baseline as already applied, once:
 
-```env
-DATABASE_URL=postgresql://...
-NEXTAUTH_URL=https://yourdomain.com
-NEXTAUTH_SECRET=your-secret-key
-GOOGLE_CLIENT_ID=...
-GOOGLE_CLIENT_SECRET=...
-GOOGLE_WORKSPACE_DOMAIN=yourcompany.com
-GOOGLE_CALENDAR_CLIENT_ID=...
-GOOGLE_CALENDAR_CLIENT_SECRET=...
-AWS_REGION=us-east-1
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
-AWS_SES_FROM_EMAIL=noreply@yourcompany.com
+```bash
+cd /var/www/oneonone
+git pull origin main
+npx prisma migrate resolve --applied 0_init
+npx prisma migrate status        # expect: "Database schema is up to date!"
+bash deploy.sh
 ```
 
-## Step 8: Set Up Load Balancer (Optional)
+If `migrate status` reports drift (columns that exist in the DB but not in `0_init`, or vice versa), stop and compare with `npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema-datamodel prisma/schema.prisma` before proceeding.
 
-For production, use an Application Load Balancer:
-1. Create ALB in AWS Console
-2. Configure target group pointing to your ECS service
-3. Set up SSL certificate with ACM
-4. Configure DNS to point to ALB
+## Environment
 
-## Alternative: EC2 Deployment
+`.env` on the server (never committed). Required:
 
-1. Launch EC2 instance (Ubuntu 22.04 LTS recommended)
-2. Install Node.js, Docker, and dependencies
-3. Clone repository and build
-4. Set up PM2 or systemd service
-5. Configure Nginx as reverse proxy
-6. Set up SSL with Let's Encrypt — **see [deploy/SSL-SETUP.md](deploy/SSL-SETUP.md)** and use **deploy/nginx-ssl.conf** on the server
+| Var | Notes |
+|---|---|
+| `DATABASE_URL` | `postgresql://user:pass@host:5432/ami_oneonone?schema=public` |
+| `NEXTAUTH_URL` | Exactly how users reach the app, e.g. `https://oneonone.example.com` (no trailing slash). Must match the Google OAuth redirect URI `${NEXTAUTH_URL}/api/auth/callback/google`. |
+| `NEXTAUTH_SECRET` | `openssl rand -base64 32`. **Also the encryption key for API keys stored in Admin → Settings** — rotating it invalidates them. |
+| `NODE_ENV` | `production` (also set by `ecosystem.config.cjs`) |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | OAuth client with Calendar API enabled (`deploy/GOOGLE-CALENDAR-SETUP.md`) |
+| `GOOGLE_WORKSPACE_DOMAIN` | Restrict sign-in to one domain. Leaving it unset allows **any** Google account. |
+| `INITIAL_ADMIN_EMAILS` | Comma-separated emails promoted to SUPER_ADMIN on sign-in (first-admin bootstrap; only promotes, never demotes). |
+| `CRON_SECRET` | Required for `/api/cron/meetings` in production. |
 
-## Monitoring
+Optional: `OPENAI_API_KEY`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET` (all can be set in Admin → Settings instead; DB wins over env), email via `SMTP_HOST/PORT/USER/PASSWORD` + `EMAIL_FROM` (`deploy/EMAIL-SMTP-SETUP.md`) or `AWS_SES_FROM_EMAIL`, `FATHOM_WEBHOOK_SECRET`, `KEKA_*` (`docs/KEKA_INTEGRATION.md`). Full list with defaults: `docs/ENV_VARIABLES.md`, template: `env.example`.
 
-- Set up CloudWatch logs for application logs
-- Configure CloudWatch alarms for errors
-- Set up health check endpoint: `/api/health`
+## Scheduled jobs
 
-## Backup Strategy
+Nothing in the repo schedules the cron endpoint. Add a system cron on the host (hourly):
 
-- Enable automated RDS backups
-- Set up daily database snapshots
-- Consider S3 backups for important data
+```
+0 * * * * curl -s -X POST -H "x-cron-secret: $CRON_SECRET" https://<host>/api/cron/meetings > /dev/null
+```
 
-## Security
+It generates upcoming recurring meetings, sends 24 h / 1 h reminders, and form reminders.
 
-- Use AWS Secrets Manager for sensitive credentials
-- Enable VPC for database isolation
-- Configure security groups properly
-- Use IAM roles instead of access keys where possible
-- Enable CloudTrail for audit logging
+## TLS / Nginx
+
+`deploy/nginx-ssl.conf` (80 → 301 → 443, proxy to `127.0.0.1:3000`, `client_max_body_size 50M`, long proxy timeouts for recording uploads). First-time setup and certificate steps: `deploy/SSL-SETUP.md` / `bash deploy/setup-ssl-on-server.sh`. The hostname is hardcoded in those files — edit it when deploying to a new domain.
+
+## Operations
+
+```bash
+pm2 status                 # process "oneonone"
+pm2 logs oneonone --lines 200
+pm2 restart oneonone       # after editing .env
+curl -s https://<host>/api/health   # {"status":"healthy"}
+```
+
+Backups: use managed Postgres snapshots (RDS) or `pg_dump` on a schedule. The in-app Admin → Backup export is a partial JSON dump (users, departments, meetings, todos, recording text) and is not a substitute. S3 recordings are not covered by either — enable bucket versioning.
+
+## Rollback
+
+```bash
+cd /var/www/oneonone
+git log --oneline -5                 # pick the previous good commit
+git checkout <sha> -- . && npm ci && npx prisma generate && npm run build
+pm2 restart oneonone
+```
+
+Migrations are forward-only; if a release included a migration, restore the DB from a snapshot taken before deploying rather than editing `_prisma_migrations` by hand.

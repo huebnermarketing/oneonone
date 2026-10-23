@@ -1,129 +1,74 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAuth } from '@/lib/auth-helpers'
+import { forbidden, notFound, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
-import { TodoStatus, TodoPriority } from '@prisma/client'
+import { UserRole } from '@prisma/client'
 import { logTodoUpdated, logTodoDeleted } from '@/lib/audit'
+import { updateTodoSchema } from '@/lib/validation/todos'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await requireAuth()
+type TodoRef = { assignedToId: string; createdById: string }
+const isAdmin = (role: UserRole) => role === UserRole.SUPER_ADMIN
+const canView = (user: { id: string; role: UserRole }, t: TodoRef) =>
+  isAdmin(user.role) || t.assignedToId === user.id || t.createdById === user.id
+const canDelete = (user: { id: string; role: UserRole }, t: TodoRef) => isAdmin(user.role) || t.createdById === user.id
 
-    const todo = await prisma.todo.findUnique({
-      where: { id: params.id },
-      include: {
-        assignedTo: { select: { id: true, name: true, email: true } },
-        createdBy: { select: { id: true, name: true, email: true } },
-        meeting: { select: { id: true, meetingDate: true, employee: { select: { name: true } }, reporter: { select: { name: true } } } },
-      },
-    })
+export const GET = withApiAuth(async (_req: NextRequest, { user, params }) => {
+  const todo = await prisma.todo.findUnique({
+    where: { id: params.id },
+    include: {
+      assignedTo: { select: { id: true, name: true, email: true } },
+      createdBy: { select: { id: true, name: true, email: true } },
+      meeting: { select: { id: true, meetingDate: true, employee: { select: { name: true } }, reporter: { select: { name: true } } } },
+    },
+  })
+  if (!todo) throw notFound('Todo')
+  if (!canView(user, todo)) throw forbidden()
+  return NextResponse.json(todo)
+})
 
-    if (!todo) {
-      return NextResponse.json({ error: 'Todo not found' }, { status: 404 })
-    }
+/** Assignee, creator or admin. Only the creator/admin may change title/description. */
+export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
+  const body = await parseBody(req, updateTodoSchema)
 
-    if (todo.assignedToId !== user.id && todo.createdById !== user.id && user.role !== 'SUPER_ADMIN') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
-
-    return NextResponse.json(todo)
-  } catch (error) {
-    console.error('Error fetching todo:', error)
-    return NextResponse.json({ error: 'Failed to fetch todo' }, { status: 500 })
+  const todo = await prisma.todo.findUnique({ where: { id: params.id } })
+  if (!todo) throw notFound('Todo')
+  if (!canView(user, todo)) throw forbidden()
+  if ((body.title !== undefined || body.description !== undefined) && !canDelete(user, todo)) {
+    throw forbidden('Only the task creator can edit its title or description')
   }
-}
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await requireAuth()
-    const body = await request.json()
-    const { status, priority, dueDate } = body
-
-    const todo = await prisma.todo.findUnique({
-      where: { id: params.id },
-    })
-
-    if (!todo) {
-      return NextResponse.json({ error: 'Todo not found' }, { status: 404 })
-    }
-
-    // Assigned user, task creator (reporter), or admin can update
-    if (todo.assignedToId !== user.id && todo.createdById !== user.id && user.role !== 'SUPER_ADMIN') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
-
-    const updateData: { status?: TodoStatus; priority?: TodoPriority; dueDate?: Date; completedAt?: Date | null } = {}
-    if (status) updateData.status = status as TodoStatus
-    if (priority) updateData.priority = priority as TodoPriority
-    if (dueDate) updateData.dueDate = new Date(dueDate)
-    if (status === 'DONE') {
-      updateData.completedAt = new Date()
-    } else if (status !== 'DONE' && todo.status === 'DONE') {
-      updateData.completedAt = null
-    }
-
-    const updatedTodo = await prisma.todo.update({
-      where: { id: params.id },
-      data: updateData,
-      include: {
-        assignedTo: { select: { name: true, email: true } },
-        createdBy: { select: { name: true } },
-        meeting: { select: { id: true, meetingDate: true } },
-      },
-    })
-
-    // Audit log
-    await logTodoUpdated(user.id, params.id, {
-      title: todo.title,
-      changes: updateData,
-    })
-
-    return NextResponse.json(updatedTodo)
-  } catch (error) {
-    console.error('Error updating todo:', error)
-    return NextResponse.json({ error: 'Failed to update todo' }, { status: 500 })
+  const data: Record<string, string | Date | null> = {}
+  if (body.title !== undefined) data.title = body.title
+  if (body.description !== undefined) data.description = body.description
+  if (body.priority !== undefined) data.priority = body.priority
+  if (body.dueDate !== undefined) data.dueDate = body.dueDate
+  if (body.status !== undefined) {
+    data.status = body.status
+    if (body.status === 'DONE' && todo.status !== 'DONE') data.completedAt = new Date()
+    if (body.status !== 'DONE' && todo.status === 'DONE') data.completedAt = null
   }
-}
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await requireAuth()
+  const updatedTodo = await prisma.todo.update({
+    where: { id: params.id },
+    data,
+    include: {
+      assignedTo: { select: { name: true, email: true } },
+      createdBy: { select: { name: true } },
+      meeting: { select: { id: true, meetingDate: true } },
+    },
+  })
 
-    const todo = await prisma.todo.findUnique({
-      where: { id: params.id },
-    })
+  await logTodoUpdated(user.id, params.id, { title: todo.title, changes: data })
+  return NextResponse.json(updatedTodo)
+})
 
-    if (!todo) {
-      return NextResponse.json({ error: 'Todo not found' }, { status: 404 })
-    }
+export const DELETE = withApiAuth(async (_req: NextRequest, { user, params }) => {
+  const todo = await prisma.todo.findUnique({ where: { id: params.id } })
+  if (!todo) throw notFound('Todo')
+  if (!canDelete(user, todo)) throw forbidden('Only the task creator or an admin can delete it')
 
-    // Only creator or admin can delete
-    if (todo.createdById !== user.id && user.role !== 'SUPER_ADMIN') {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
-
-    await prisma.todo.delete({
-      where: { id: params.id },
-    })
-
-    // Audit log
-    await logTodoDeleted(user.id, params.id, {
-      title: todo.title,
-    })
-
-    return NextResponse.json({ success: true })
-  } catch (error) {
-    console.error('Error deleting todo:', error)
-    return NextResponse.json({ error: 'Failed to delete todo' }, { status: 500 })
-  }
-}
+  await prisma.todo.delete({ where: { id: params.id } })
+  await logTodoDeleted(user.id, params.id, { title: todo.title })
+  return NextResponse.json({ success: true })
+})

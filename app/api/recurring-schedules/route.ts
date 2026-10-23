@@ -1,290 +1,184 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireRole, getCurrentUser } from '@/lib/auth-helpers'
-import { prisma } from '@/lib/prisma'
 import { UserRole } from '@prisma/client'
+import { REPORTER_OR_ADMIN, badRequest, conflict, notFound, withApiAuth, parseBody } from '@/lib/api'
+import { prisma } from '@/lib/prisma'
 import { createAuditLog } from '@/lib/audit'
 import { DEFAULT_WORK_END, DEFAULT_WORK_START } from '@/lib/timezones'
-import { calculateFirstOccurrence, advanceToNextOccurrence, getNextOccurrenceDates } from '@/lib/recurring-dates'
+import { DEFAULT_TIMEZONE, MEETING_DURATION_MINUTES } from '@/lib/constants'
+import { advanceToNextOccurrence, getNextOccurrenceDates } from '@/lib/recurring-dates'
+import { isCalendarEnabled, isDateTimeFreeForBoth } from '@/lib/google-calendar'
+import { isDateUnavailableForEitherUser } from '@/lib/keka'
+import { sendMeetingProposalEmail } from '@/lib/email'
+import { notifyMeetingProposed } from '@/lib/notifications'
+import { createRecurringScheduleSchema } from '@/lib/validation/recurring'
 
 export const dynamic = 'force-dynamic'
 
-const FALLBACK_TZ = 'Asia/Kolkata'
-/** When creating a recurring schedule, check this many future occurrences; use the first free one (one-off holiday/leave shouldn't block). */
+/** When creating a schedule, check this many future occurrences; a one-off holiday/leave shouldn't block the slot. */
 const MAX_OCCURRENCES_TO_CHECK = 6
 
-// Get all recurring schedules for the current user
-export async function GET(request: NextRequest) {
+const partySelect = { select: { id: true, name: true, email: true } } as const
+
+/**
+ * GET /api/recurring-schedules — active schedules. REPORTER: own; ADMIN: all (with reporter).
+ */
+export const GET = withApiAuth(REPORTER_OR_ADMIN, async (_req: NextRequest, { user }) => {
+  const schedules = await prisma.recurringSchedule.findMany({
+    where: { isActive: true, ...(user.role === UserRole.SUPER_ADMIN ? {} : { reporterId: user.id }) },
+    include: {
+      employee: partySelect,
+      reporter: partySelect,
+      _count: { select: { meetings: true } },
+    },
+    orderBy: { createdAt: 'desc' },
+  })
+  return NextResponse.json(schedules)
+})
+
+type Profile = { timeZone: string | null; workDayStart: string | null; workDayEnd: string | null }
+
+/**
+ * Among the next few occurrences, pick the first that is free on both Google Calendars and not a Keka
+ * holiday/leave day. Falls back to the first occurrence when either calendar is not connected or the
+ * check itself fails; throws 409 when every candidate is busy.
+ */
+async function findFirstFreeOccurrence(
+  reporterId: string,
+  employeeId: string,
+  reporterProfile: Profile | null,
+  employeeProfile: Profile | null,
+  upcomingDates: Date[]
+): Promise<Date> {
+  const reporterTz = reporterProfile?.timeZone ?? DEFAULT_TIMEZONE
   try {
-    const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const [reporterConnected, employeeConnected] = await Promise.all([
+      isCalendarEnabled(reporterId),
+      isCalendarEnabled(employeeId),
+    ])
+    if (!reporterConnected || !employeeConnected) return upcomingDates[0]!
+
+    const availabilityOptions = {
+      reporterTimeZone: reporterTz,
+      reporterWorkStart: reporterProfile?.workDayStart ?? DEFAULT_WORK_START,
+      reporterWorkEnd: reporterProfile?.workDayEnd ?? DEFAULT_WORK_END,
+      employeeTimeZone: employeeProfile?.timeZone ?? DEFAULT_TIMEZONE,
+      employeeWorkStart: employeeProfile?.workDayStart ?? DEFAULT_WORK_START,
+      employeeWorkEnd: employeeProfile?.workDayEnd ?? DEFAULT_WORK_END,
     }
-
-    const schedules = await prisma.recurringSchedule.findMany({
-      where: {
-        reporterId: user.id,
-        isActive: true, // Filter out soft-deleted schedules
-      },
-      include: {
-        _count: { select: { meetings: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    })
-
-    // Get employee details for each schedule
-    const schedulesWithEmployees = await Promise.all(
-      schedules.map(async (schedule) => {
-        const employee = await prisma.user.findUnique({
-          where: { id: schedule.employeeId },
-          select: { id: true, name: true, email: true },
-        })
-        return { ...schedule, employee }
-      })
-    )
-
-    return NextResponse.json(schedulesWithEmployees)
-  } catch (error) {
-    console.error('Error fetching recurring schedules:', error)
-    return NextResponse.json({ error: 'Failed to fetch schedules' }, { status: 500 })
+    for (const date of upcomingDates) {
+      if (await isDateUnavailableForEitherUser(reporterId, employeeId, date)) continue
+      if (await isDateTimeFreeForBoth(reporterId, employeeId, date, MEETING_DURATION_MINUTES, availabilityOptions)) return date
+    }
+  } catch (err) {
+    console.error('Recurring schedule calendar check:', err)
+    return upcomingDates[0]!
   }
+
+  const formatted = upcomingDates[0]!.toLocaleDateString('en-US', {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: reporterTz,
+  })
+  throw conflict(
+    `Each of the next ${MAX_OCCURRENCES_TO_CHECK} occurrences has a calendar conflict (e.g. first: ${formatted}). Please choose a different day or time.`
+  )
 }
 
-// Create a new recurring schedule
-export async function POST(request: NextRequest) {
-  try {
-    await requireRole(['REPORTER', 'SUPER_ADMIN'])
-    const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+/**
+ * POST /api/recurring-schedules — create a schedule for the caller and propose its first meeting.
+ * Schedule create + first meeting + nextMeetingDate advance are atomic.
+ */
+export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user }) => {
+  const { employeeId, frequency, dayOfWeek, timeOfDay, meetingType, meetingLink } = await parseBody(req, createRecurringScheduleSchema)
 
-    const body = await request.json()
-    const { employeeId, frequency, dayOfWeek, timeOfDay, meetingType, meetingLink } = body
+  const profileSelect = { name: true, email: true, timeZone: true, workDayStart: true, workDayEnd: true } as const
+  const [reporterProfile, employee] = await Promise.all([
+    prisma.user.findUnique({ where: { id: user.id }, select: profileSelect }),
+    prisma.user.findUnique({ where: { id: employeeId }, select: profileSelect }),
+  ])
+  if (!employee) throw notFound('Employee')
 
-    // Validate
-    if (!employeeId || dayOfWeek === undefined || !timeOfDay) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 })
-    }
-    if (meetingType === 'ZOOM' && (!meetingLink || typeof meetingLink !== 'string' || !meetingLink.trim())) {
-      return NextResponse.json(
-        { error: 'Zoom meeting invite link is required when the meeting type is Over Zoom.' },
-        { status: 400 }
-      )
-    }
-
-    // Check if schedule already exists for this employee
-    const existingForEmployee = await prisma.recurringSchedule.findFirst({
-      where: {
-        reporterId: user.id,
-        employeeId,
-        isActive: true,
-      },
-    })
-
-    if (existingForEmployee) {
-      return NextResponse.json(
-        { error: 'A recurring schedule already exists for this employee' },
-        { status: 400 }
-      )
-    }
-
-    // Check if reporter already has a schedule at the same day and time (with any employee)
-    const existingAtSameTime = await prisma.recurringSchedule.findFirst({
-      where: {
-        reporterId: user.id,
-        dayOfWeek,
-        timeOfDay,
-        isActive: true,
-      },
-      include: {
-        employee: { select: { name: true } },
-      },
-    })
-
-    if (existingAtSameTime) {
-      const empName = existingAtSameTime.employee?.name || 'another employee'
-      return NextResponse.json(
-        { error: `You already have a recurring schedule at this day and time with ${empName}. Please choose a different time.` },
-        { status: 400 }
-      )
-    }
-
-    // Check if the employee already has a meeting/schedule at the same day and time (with any reporter)
-    const employeeBusyAtSameTime = await prisma.recurringSchedule.findFirst({
-      where: {
-        employeeId,
-        dayOfWeek,
-        timeOfDay,
-        isActive: true,
-      },
-      include: {
-        reporter: { select: { name: true } },
-      },
-    })
-
-    if (employeeBusyAtSameTime) {
-      const employee = await prisma.user.findUnique({ where: { id: employeeId }, select: { name: true } })
-      return NextResponse.json(
-        { error: `${employee?.name || 'This employee'} already has a recurring schedule at this day and time. Please choose a different time.` },
-        { status: 400 }
-      )
-    }
-
-    // Load reporter and employee timezone / work hours
-    const [reporterProfile, employeeProfile] = await Promise.all([
-      prisma.user.findUnique({
-        where: { id: user.id },
-        select: { timeZone: true, workDayStart: true, workDayEnd: true },
-      }),
-      prisma.user.findUnique({
-        where: { id: employeeId },
-        select: { timeZone: true, workDayStart: true, workDayEnd: true },
-      }),
-    ])
-
-    const reporterTz = reporterProfile?.timeZone ?? FALLBACK_TZ
-
-    // Find the first free occurrence among the next few (one-off holiday/leave shouldn't block the whole recurring slot)
-    const upcomingDates = getNextOccurrenceDates(
-      dayOfWeek,
-      timeOfDay,
-      frequency || 'BIWEEKLY',
-      reporterTz,
-      MAX_OCCURRENCES_TO_CHECK
+  // One active schedule per employee per reporter; no double-booking of the slot on either side
+  const [existingForEmployee, reporterBusy, employeeBusy] = await Promise.all([
+    prisma.recurringSchedule.findFirst({ where: { reporterId: user.id, employeeId, isActive: true }, select: { id: true } }),
+    prisma.recurringSchedule.findFirst({
+      where: { reporterId: user.id, dayOfWeek, timeOfDay, isActive: true },
+      select: { employee: { select: { name: true } } },
+    }),
+    prisma.recurringSchedule.findFirst({ where: { employeeId, dayOfWeek, timeOfDay, isActive: true }, select: { id: true } }),
+  ])
+  if (existingForEmployee) throw badRequest('A recurring schedule already exists for this employee')
+  if (reporterBusy) {
+    throw badRequest(
+      `You already have a recurring schedule at this day and time with ${reporterBusy.employee?.name || 'another employee'}. Please choose a different time.`
     )
-    let nextMeetingDate = upcomingDates[0]!
+  }
+  if (employeeBusy) {
+    throw badRequest(`${employee.name || 'This employee'} already has a recurring schedule at this day and time. Please choose a different time.`)
+  }
 
-    try {
-      const { isCalendarEnabled, isDateTimeFreeForBoth } = await import('@/lib/google-calendar')
-      const [reporterConnected, employeeConnected] = await Promise.all([
-        isCalendarEnabled(user.id),
-        isCalendarEnabled(employeeId),
-      ])
-      if (reporterConnected && employeeConnected) {
-        const { isDateUnavailableForEitherUser } = await import('@/lib/keka')
-        const availabilityOptions = {
-          reporterTimeZone: reporterTz,
-          reporterWorkStart: reporterProfile?.workDayStart ?? DEFAULT_WORK_START,
-          reporterWorkEnd: reporterProfile?.workDayEnd ?? DEFAULT_WORK_END,
-          employeeTimeZone: employeeProfile?.timeZone ?? FALLBACK_TZ,
-          employeeWorkStart: employeeProfile?.workDayStart ?? DEFAULT_WORK_START,
-          employeeWorkEnd: employeeProfile?.workDayEnd ?? DEFAULT_WORK_END,
-        }
-        let foundFree = false
-        for (const date of upcomingDates) {
-          const kekaUnavailable = await isDateUnavailableForEitherUser(user.id, employeeId, date)
-          if (kekaUnavailable) continue
-          const free = await isDateTimeFreeForBoth(user.id, employeeId, date, 30, availabilityOptions)
-          if (free) {
-            nextMeetingDate = date
-            foundFree = true
-            break
-          }
-        }
-        if (!foundFree) {
-          const formatted = nextMeetingDate.toLocaleDateString('en-US', {
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric',
-            hour: 'numeric',
-            minute: '2-digit',
-            timeZone: reporterTz,
-          })
-          return NextResponse.json(
-            { error: `Each of the next ${MAX_OCCURRENCES_TO_CHECK} occurrences has a calendar conflict (e.g. first: ${formatted}). Please choose a different day or time.` },
-            { status: 409 }
-          )
-        }
-      }
-    } catch (err) {
-      console.error('Recurring schedule calendar check:', err)
-    }
+  const reporterTz = reporterProfile?.timeZone ?? DEFAULT_TIMEZONE
+  const upcomingDates = getNextOccurrenceDates(dayOfWeek, timeOfDay, frequency, reporterTz, MAX_OCCURRENCES_TO_CHECK)
+  const firstMeetingDate = await findFirstFreeOccurrence(user.id, employeeId, reporterProfile, employee, upcomingDates)
+  const link = meetingType === 'ZOOM' ? meetingLink ?? null : null
 
-    // Create the recurring schedule
-    const schedule = await prisma.recurringSchedule.create({
+  const { schedule, meeting } = await prisma.$transaction(async (tx) => {
+    const created = await tx.recurringSchedule.create({
       data: {
         reporterId: user.id,
         employeeId,
-        frequency: frequency || 'BIWEEKLY',
+        frequency,
         dayOfWeek,
         timeOfDay,
-        nextMeetingDate,
-        meetingType: meetingType === 'ZOOM' ? 'ZOOM' : 'IN_PERSON',
-        meetingLink: meetingType === 'ZOOM' && meetingLink ? String(meetingLink).trim() || null : null,
+        nextMeetingDate: firstMeetingDate,
+        meetingType,
+        meetingLink: link,
       },
     })
 
-    // Create the first meeting as PROPOSED (requires employee acceptance)
-    const meeting = await prisma.meeting.create({
+    // First meeting is PROPOSED (needs the employee's acceptance)
+    const first = await tx.meeting.create({
       data: {
         employeeId,
         reporterId: user.id,
-        meetingDate: nextMeetingDate,
-        recurringScheduleId: schedule.id,
+        meetingDate: firstMeetingDate,
+        recurringScheduleId: created.id,
         status: 'PROPOSED',
         proposedById: user.id,
-        meetingType: schedule.meetingType,
-        meetingLink: schedule.meetingLink,
+        meetingType: created.meetingType,
+        meetingLink: created.meetingLink,
       },
     })
 
     // Advance nextMeetingDate so the cron doesn't duplicate the first meeting
-    const secondOccurrence = advanceToNextOccurrence(
-      dayOfWeek,
-      timeOfDay,
-      frequency || 'BIWEEKLY',
-      nextMeetingDate,
-      reporterTz
-    )
-    await prisma.recurringSchedule.update({
-      where: { id: schedule.id },
-      data: { nextMeetingDate: secondOccurrence },
+    const updated = await tx.recurringSchedule.update({
+      where: { id: created.id },
+      data: { nextMeetingDate: advanceToNextOccurrence(dayOfWeek, timeOfDay, frequency, firstMeetingDate, reporterTz) },
     })
 
-    // Send proposal email to the employee
-    try {
-      const employee = await prisma.user.findUnique({ where: { id: employeeId }, select: { email: true, name: true } })
-      if (employee) {
-        const { sendMeetingProposalEmail } = await import('@/lib/email')
-        await sendMeetingProposalEmail(
-          employee.email,
-          employee.name,
-          user.name,
-          nextMeetingDate,
-          meeting.id
-        )
-      }
-    } catch (error) {
-      console.error('Failed to send proposal email for recurring schedule:', error)
-    }
+    return { schedule: updated, meeting: first }
+  })
 
-    // In-app notification for the employee
-    try {
-      const { notifyMeetingProposed } = await import('@/lib/notifications')
-      await notifyMeetingProposed(
-        employeeId,
-        user.name || 'Your manager',
-        nextMeetingDate,
-        meeting.id
-      )
-    } catch (error) {
-      console.error('Failed to send proposal notification:', error)
-    }
+  await createAuditLog({
+    userId: user.id,
+    action: 'CREATE',
+    entityType: 'RecurringSchedule',
+    entityId: schedule.id,
+    details: { employeeId, employeeName: employee.name, frequency: schedule.frequency, dayOfWeek, timeOfDay },
+  })
 
-    const employee = await prisma.user.findUnique({ where: { id: employeeId }, select: { name: true } })
-    await createAuditLog({
-      userId: user.id,
-      action: 'CREATE',
-      entityType: 'RecurringSchedule',
-      entityId: schedule.id,
-      details: { employeeId, employeeName: employee?.name, frequency: schedule.frequency, dayOfWeek, timeOfDay },
-    })
+  await Promise.all([
+    sendMeetingProposalEmail(employee.email, employee.name, user.name, firstMeetingDate, meeting.id).catch((e) =>
+      console.error('Failed to send proposal email for recurring schedule:', e)
+    ),
+    notifyMeetingProposed(employeeId, user.name || 'Your manager', firstMeetingDate, meeting.id).catch((e) =>
+      console.error('Failed to send proposal notification:', e)
+    ),
+  ])
 
-    return NextResponse.json({ schedule, meeting })
-  } catch (error) {
-    console.error('Error creating recurring schedule:', error)
-    return NextResponse.json({ error: 'Failed to create schedule' }, { status: 500 })
-  }
-}
-
+  return NextResponse.json({ schedule, meeting }, { status: 201 })
+})

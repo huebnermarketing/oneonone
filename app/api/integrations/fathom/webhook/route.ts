@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
+import { ApiError, badRequest, withPublicRoute } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
+import { checkRateLimit } from '@/lib/rate-limit'
 import { verifyFathomWebhook } from '@/lib/fathom-webhook'
 import { notifyRecordingReady } from '@/lib/notifications'
 
@@ -73,118 +75,123 @@ function actionItemsToAutoTodos(items: FathomActionItem[] | undefined): unknown[
   }))
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    const secret = process.env.FATHOM_WEBHOOK_SECRET
-    if (!secret) {
-      console.warn('[Fathom] FATHOM_WEBHOOK_SECRET not set; webhook disabled')
-      return NextResponse.json({ error: 'Webhook not configured' }, { status: 503 })
-    }
+type MatchedMeeting = { id: string; employeeId: string; reporterId: string }
 
-    const rawBody = await request.text()
-    const headers = {
-      get: (name: string) => request.headers.get(name) ?? request.headers.get(name.toLowerCase()),
-    }
-    if (!verifyFathomWebhook(secret, headers, rawBody)) {
-      console.warn('[Fathom] Webhook signature verification failed')
-      return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-    }
-
-    let payload: FathomWebhookPayload
-    try {
-      payload = JSON.parse(rawBody) as FathomWebhookPayload
-    } catch {
-      return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
-    }
-
-    const zoomId =
-      payload.zoom_meeting_id ??
-      (typeof payload.meeting_id === 'string' && /^\d{9,11}$/.test(payload.meeting_id)
-        ? payload.meeting_id
-        : null)
-    const participantEmails = getParticipantEmails(payload)
-    const meetingStart = payload.start_time ? new Date(payload.start_time) : null
-
-    let meeting: { id: string; employeeId: string; reporterId: string } | null = null
-
-    if (zoomId) {
-      meeting = await prisma.meeting.findFirst({
-        where: { zoomMeetingId: zoomId },
-        select: { id: true, employeeId: true, reporterId: true },
-      })
-    }
-
-    if (!meeting && participantEmails.length >= 2 && meetingStart) {
-      const dayStart = new Date(meetingStart)
-      dayStart.setUTCHours(0, 0, 0, 0)
-      const dayEnd = new Date(dayStart)
-      dayEnd.setUTCDate(dayEnd.getUTCDate() + 1)
-      const candidates = await prisma.meeting.findMany({
-        where: {
-          meetingDate: { gte: dayStart, lt: dayEnd },
-          meetingType: 'ZOOM',
-          status: { in: ['SCHEDULED', 'COMPLETED'] },
-        },
-        include: {
-          employee: { select: { email: true } },
-          reporter: { select: { email: true } },
-        },
-      })
-      for (const c of candidates) {
-        const reporterEmail = c.reporter?.email?.toLowerCase()
-        const employeeEmail = c.employee?.email?.toLowerCase()
-        if (
-          reporterEmail &&
-          employeeEmail &&
-          participantEmails.includes(reporterEmail) &&
-          participantEmails.includes(employeeEmail)
-        ) {
-          meeting = { id: c.id, employeeId: c.employeeId, reporterId: c.reporterId }
-          break
-        }
-      }
-    }
-
-    if (!meeting) {
-      console.warn('[Fathom] No matching meeting found', { zoomId, participantEmails: participantEmails.length, meetingStart })
-      return NextResponse.json({ received: true, matched: false })
-    }
-
-    const transcriptText = transcriptToText(payload.transcript)
-    const summaryText = getSummaryText(payload.summary)
-    const autoTodos = actionItemsToAutoTodos(payload.action_items)
-
-    const autoTodosJson: Prisma.InputJsonValue = autoTodos.length > 0 ? (autoTodos as Prisma.InputJsonValue) : []
-    await prisma.meetingRecording.upsert({
-      where: { meetingId: meeting.id },
-      create: {
-        meetingId: meeting.id,
-        transcript: transcriptText || null,
-        summary: summaryText || null,
-        autoTodos: autoTodosJson,
-        status: 'COMPLETED',
-        processedAt: new Date(),
-        recordedAt: meetingStart,
-      },
-      update: {
-        transcript: transcriptText || undefined,
-        summary: summaryText || undefined,
-        autoTodos: autoTodosJson,
-        status: 'COMPLETED',
-        processedAt: new Date(),
-        ...(meetingStart && { recordedAt: meetingStart }),
-      },
+/** Match by Zoom meeting id first, then by same-day ZOOM meeting whose employee + reporter were both on the call. */
+async function findMatchingMeeting(
+  zoomId: string | null,
+  participantEmails: string[],
+  meetingStart: Date | null
+): Promise<MatchedMeeting | null> {
+  if (zoomId) {
+    const byZoom = await prisma.meeting.findFirst({
+      where: { zoomMeetingId: zoomId },
+      select: { id: true, employeeId: true, reporterId: true },
     })
-
-    try {
-      await notifyRecordingReady([meeting.employeeId, meeting.reporterId], meeting.id)
-    } catch (e) {
-      console.warn('[Fathom] Notify recording ready failed', e)
-    }
-
-    return NextResponse.json({ received: true, matched: true, meetingId: meeting.id })
-  } catch (error) {
-    console.error('[Fathom] Webhook error', error)
-    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 })
+    if (byZoom) return byZoom
   }
+
+  if (participantEmails.length < 2 || !meetingStart) return null
+
+  const dayStart = new Date(meetingStart)
+  dayStart.setUTCHours(0, 0, 0, 0)
+  const dayEnd = new Date(dayStart)
+  dayEnd.setUTCDate(dayEnd.getUTCDate() + 1)
+  const candidates = await prisma.meeting.findMany({
+    where: {
+      meetingDate: { gte: dayStart, lt: dayEnd },
+      meetingType: 'ZOOM',
+      status: { in: ['SCHEDULED', 'COMPLETED'] },
+    },
+    include: {
+      employee: { select: { email: true } },
+      reporter: { select: { email: true } },
+    },
+  })
+  for (const c of candidates) {
+    const reporterEmail = c.reporter?.email?.toLowerCase()
+    const employeeEmail = c.employee?.email?.toLowerCase()
+    if (
+      reporterEmail &&
+      employeeEmail &&
+      participantEmails.includes(reporterEmail) &&
+      participantEmails.includes(employeeEmail)
+    ) {
+      return { id: c.id, employeeId: c.employeeId, reporterId: c.reporterId }
+    }
+  }
+  return null
 }
+
+export const POST = withPublicRoute(async (request: NextRequest) => {
+  const { allowed } = checkRateLimit(request, 'api')
+  if (!allowed) throw new ApiError(429, 'Too many requests')
+
+  const secret = process.env.FATHOM_WEBHOOK_SECRET
+  if (!secret) {
+    console.warn('[Fathom] FATHOM_WEBHOOK_SECRET not set; webhook disabled')
+    throw new ApiError(503, 'Webhook not configured')
+  }
+
+  const rawBody = await request.text()
+  const headers = {
+    get: (name: string) => request.headers.get(name) ?? request.headers.get(name.toLowerCase()),
+  }
+  if (!verifyFathomWebhook(secret, headers, rawBody)) {
+    console.warn('[Fathom] Webhook signature verification failed')
+    throw new ApiError(401, 'Invalid signature')
+  }
+
+  let payload: FathomWebhookPayload
+  try {
+    payload = JSON.parse(rawBody) as FathomWebhookPayload
+  } catch {
+    throw badRequest('Invalid JSON')
+  }
+
+  const zoomId =
+    payload.zoom_meeting_id ??
+    (typeof payload.meeting_id === 'string' && /^\d{9,11}$/.test(payload.meeting_id) ? payload.meeting_id : null)
+  const participantEmails = getParticipantEmails(payload)
+  const meetingStart = payload.start_time ? new Date(payload.start_time) : null
+
+  const meeting = await findMatchingMeeting(zoomId, participantEmails, meetingStart)
+  if (!meeting) {
+    console.warn('[Fathom] No matching meeting found', { zoomId, participantEmails: participantEmails.length, meetingStart })
+    return NextResponse.json({ received: true, matched: false })
+  }
+
+  const transcriptText = transcriptToText(payload.transcript)
+  const summaryText = getSummaryText(payload.summary)
+  const autoTodos = actionItemsToAutoTodos(payload.action_items)
+  const autoTodosJson: Prisma.InputJsonValue = autoTodos.length > 0 ? (autoTodos as Prisma.InputJsonValue) : []
+
+  await prisma.meetingRecording.upsert({
+    where: { meetingId: meeting.id },
+    create: {
+      meetingId: meeting.id,
+      transcript: transcriptText || null,
+      summary: summaryText || null,
+      autoTodos: autoTodosJson,
+      status: 'COMPLETED',
+      processedAt: new Date(),
+      recordedAt: meetingStart,
+    },
+    update: {
+      transcript: transcriptText || undefined,
+      summary: summaryText || undefined,
+      autoTodos: autoTodosJson,
+      status: 'COMPLETED',
+      processedAt: new Date(),
+      ...(meetingStart && { recordedAt: meetingStart }),
+    },
+  })
+
+  try {
+    await notifyRecordingReady([meeting.employeeId, meeting.reporterId], meeting.id)
+  } catch (e) {
+    console.warn('[Fathom] Notify recording ready failed', e)
+  }
+
+  return NextResponse.json({ received: true, matched: true, meetingId: meeting.id })
+})

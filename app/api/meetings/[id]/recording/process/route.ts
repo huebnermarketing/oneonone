@@ -1,97 +1,77 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireRole, canAccessEmployeeData } from '@/lib/auth-helpers'
+import { ApiError, REPORTER_OR_ADMIN, badRequest, notFound, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
-import {
-  chunkKey,
-  finalRecordingKey,
-  downloadFromS3,
-  uploadToS3,
-  deleteFromS3,
-} from '@/lib/s3'
+import { chunkKey, finalRecordingKey, downloadFromS3, uploadToS3, deleteFromS3 } from '@/lib/s3'
 import { transcribeAudio, analyzeTranscript } from '@/lib/openai'
-import { UserRole } from '@prisma/client'
 import { getSettings } from '@/lib/settings'
 import { logRecordingProcessed } from '@/lib/audit'
+import { assertAccess, canManageMeeting } from '@/lib/meeting-access'
+import { checkRateLimit } from '@/lib/rate-limit'
+import { notifyRecordingReady } from '@/lib/notifications'
+import { processRecordingSchema } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
 
 export const maxDuration = 900
 
-// POST — Finalize recording: combine chunks, transcribe, analyze
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await requireRole([UserRole.REPORTER, UserRole.SUPER_ADMIN])
-    const body = await request.json()
-    const { totalChunks, duration, language } = body
+/**
+ * POST /api/meetings/[id]/recording/process — finalize a recording: combine chunks, transcribe, analyze.
+ * Returns immediately; the pipeline runs in the background and the row's `status` tracks progress.
+ */
+export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user, params }) => {
+  const { allowed } = checkRateLimit(req, 'recordings')
+  if (!allowed) throw new ApiError(429, 'Too many requests')
 
-    if (!totalChunks || totalChunks < 1) {
-      return NextResponse.json({ error: 'No chunks to process' }, { status: 400 })
-    }
+  const { totalChunks, duration, language } = await parseBody(req, processRecordingSchema)
 
-    // Check OpenAI key
-    const settings = await getSettings()
-    if (!settings.openaiApiKey) {
-      return NextResponse.json(
-        { error: 'OpenAI API key not configured. Set it in Admin → Settings.' },
-        { status: 400 }
-      )
-    }
+  const settings = await getSettings()
+  if (!settings.openaiApiKey) throw badRequest('OpenAI API key not configured. Set it in Admin → Settings.')
 
-    const meeting = await prisma.meeting.findUnique({
-      where: { id: params.id },
-      include: { employee: true, reporter: true },
-    })
-    if (!meeting) {
-      return NextResponse.json({ error: 'Meeting not found' }, { status: 404 })
-    }
+  const meeting = await prisma.meeting.findUnique({
+    where: { id: params.id },
+    select: {
+      id: true,
+      employeeId: true,
+      reporterId: true,
+      employee: { select: { name: true } },
+      reporter: { select: { name: true } },
+    },
+  })
+  if (!meeting) throw notFound('Meeting')
+  assertAccess(canManageMeeting(user, meeting), 'Only the reporter or an admin can process this recording')
 
-    if (
-      !canAccessEmployeeData(user.role, user.id, meeting.employeeId, meeting.employee.reportsToId)
-    ) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
+  const recording = await prisma.meetingRecording.findUnique({
+    where: { meetingId: meeting.id },
+    select: { id: true, audioKey: true },
+  })
+  if (!recording?.audioKey) throw badRequest('No recording session found. Start a recording first.')
 
-    const recording = await prisma.meetingRecording.findUnique({
-      where: { meetingId: params.id },
-    })
-    if (!recording || !recording.audioKey) {
-      return NextResponse.json(
-        { error: 'No recording session found. Start a recording first.' },
-        { status: 400 }
-      )
-    }
+  await prisma.meetingRecording.update({
+    where: { meetingId: meeting.id },
+    data: { duration, status: 'UPLOADED' },
+  })
 
-    // Update duration
-    await prisma.meetingRecording.update({
-      where: { meetingId: params.id },
-      data: { duration: duration || 0, status: 'UPLOADED' },
-    })
+  // Kick off background processing (not awaited)
+  processRecording(meeting.id, recording.audioKey, totalChunks, meeting.employee.name, meeting.reporter.name, language).catch(
+    (err) => console.error('[Recording] Background processing error:', err)
+  )
 
-    // Kick off background processing
-    processRecording(
-      params.id,
-      recording.audioKey,
-      totalChunks,
-      meeting.employee.name,
-      meeting.reporter.name,
-      language
-    ).catch((err) => console.error('[Recording] Background processing error:', err))
+  await logRecordingProcessed(user.id, meeting.id, { recordingId: recording.id, language: language ?? null, totalChunks })
 
-    // Audit log
-    await logRecordingProcessed(user.id, params.id, {
-      recordingId: recording.id,
-      language,
-      totalChunks,
-    })
+  return NextResponse.json({ message: 'Processing started', recordingId: recording.id })
+})
 
-    return NextResponse.json({ message: 'Processing started', recordingId: recording.id })
-  } catch (error) {
-    console.error('[Recording] Process route error:', error)
-    return NextResponse.json({ error: 'Failed to start processing' }, { status: 500 })
-  }
+/** Whisper returns tokens like "[BLANK_AUDIO]" or bare punctuation for silence; skip GPT analysis in that case. */
+function isSilentTranscript(text: string, durationSeconds: number): boolean {
+  const trimmed = text.trim()
+  return (
+    trimmed.length === 0 ||
+    trimmed === '.' ||
+    trimmed === '...' ||
+    /^\[.*\]$/.test(trimmed) ||
+    /^[\s.,!?\-–—…]*$/.test(trimmed) ||
+    (trimmed.length < 15 && durationSeconds < 30)
+  )
 }
 
 async function processRecording(
@@ -108,67 +88,44 @@ async function processRecording(
     )
 
     // Step 1: Download all chunks from S3 and combine
-    await prisma.meetingRecording.update({
-      where: { meetingId },
-      data: { status: 'TRANSCRIBING' },
-    })
+    await prisma.meetingRecording.update({ where: { meetingId }, data: { status: 'TRANSCRIBING' } })
 
     const buffers: Buffer[] = []
     for (let i = 0; i < totalChunks; i++) {
       const key = chunkKey(sessionKey, i)
       console.log(`[Recording] Downloading chunk ${i}/${totalChunks}: ${key}`)
-      const buf = await downloadFromS3(key)
-      buffers.push(buf)
+      buffers.push(await downloadFromS3(key))
     }
-
     const combined = Buffer.concat(buffers)
-    console.log(
-      `[Recording] Combined ${totalChunks} chunks → ${(combined.length / 1024 / 1024).toFixed(2)} MB`
-    )
+    console.log(`[Recording] Combined ${totalChunks} chunks → ${(combined.length / 1024 / 1024).toFixed(2)} MB`)
 
-    if (combined.length < 1000) {
-      throw new Error('Combined audio is too small or empty')
-    }
+    if (combined.length < 1000) throw new Error('Combined audio is too small or empty')
 
-    // Step 2: Upload final combined file to S3
+    // Step 2: Upload final combined file to S3 and point audioKey at it
     const finalKey = finalRecordingKey(sessionKey)
     await uploadToS3(combined, finalKey, 'audio/webm')
     console.log(`[Recording] Final file uploaded: ${finalKey}`)
-
-    // Update audioKey to point to the final file
     await prisma.meetingRecording.update({
       where: { meetingId },
       data: { audioKey: finalKey, fileSize: combined.length },
     })
 
     // Step 3: Clean up individual chunks (non-blocking)
-    cleanupChunks(sessionKey, totalChunks).catch((err) =>
-      console.warn('[Recording] Chunk cleanup failed:', err)
-    )
+    cleanupChunks(sessionKey, totalChunks).catch((err) => console.warn('[Recording] Chunk cleanup failed:', err))
 
     // Step 4: Transcribe with Whisper
-    console.log(`[Recording] Starting Whisper transcription...`)
+    console.log('[Recording] Starting Whisper transcription...')
     const transcription = await transcribeAudio(combined, 'recording.webm', language)
     console.log(
       `[Recording] Transcription done. Lang=${transcription.language}, dur=${transcription.duration}s, textLen=${transcription.text.length}`
     )
 
-    // Check if transcript has meaningful speech content
-    const trimmedText = transcription.text.trim()
-    const isSilentOrEmpty =
-      trimmedText.length === 0 ||
-      trimmedText === '.' ||
-      trimmedText === '...' ||
-      /^\[.*\]$/.test(trimmedText) || // e.g. "[no speech]", "[BLANK_AUDIO]", "[silence]"
-      /^[\s.,!?\-–—…]*$/.test(trimmedText) || // only punctuation
-      (trimmedText.length < 15 && transcription.duration < 30) // very short text from short recording
-
-    if (isSilentOrEmpty) {
-      console.log(`[Recording] No meaningful speech detected. Skipping analysis.`)
+    if (isSilentTranscript(transcription.text, transcription.duration)) {
+      console.log('[Recording] No meaningful speech detected. Skipping analysis.')
       await prisma.meetingRecording.update({
         where: { meetingId },
         data: {
-          transcript: trimmedText || '(No speech detected)',
+          transcript: transcription.text.trim() || '(No speech detected)',
           language: transcription.language,
           duration: Math.round(transcription.duration),
           summary: 'No speech was detected in this recording. The audio appears to be silent or contain only background noise.',
@@ -181,8 +138,7 @@ async function processRecording(
           processedAt: new Date(),
         },
       })
-
-      return // Skip GPT analysis entirely
+      return
     }
 
     await prisma.meetingRecording.update({
@@ -196,7 +152,7 @@ async function processRecording(
     })
 
     // Step 5: Analyze with GPT
-    console.log(`[Recording] Starting GPT analysis...`)
+    console.log('[Recording] Starting GPT analysis...')
     const analysis = await analyzeTranscript(transcription.text, employeeName, reporterName)
     console.log(`[Recording] Analysis complete. Quality=${analysis.qualityScore}`)
 
@@ -214,19 +170,13 @@ async function processRecording(
       },
     })
 
-    // Notify both employee and reporter that recording is ready
+    // Notify both parties that the recording is ready (best effort)
     try {
       const meeting = await prisma.meeting.findUnique({
         where: { id: meetingId },
         select: { employeeId: true, reporterId: true },
       })
-      if (meeting) {
-        const { notifyRecordingReady } = await import('@/lib/notifications')
-        await notifyRecordingReady(
-          [meeting.employeeId, meeting.reporterId],
-          meetingId
-        )
-      }
+      if (meeting) await notifyRecordingReady([meeting.employeeId, meeting.reporterId], meetingId)
     } catch (notifError) {
       console.error('[Recording] Failed to create notification:', notifError)
     }
@@ -235,10 +185,7 @@ async function processRecording(
   } catch (error) {
     console.error('[Recording] Processing error:', error)
     const errorMessage = error instanceof Error ? error.message : 'Unknown processing error'
-    await prisma.meetingRecording.update({
-      where: { meetingId },
-      data: { status: 'FAILED', errorMessage },
-    })
+    await prisma.meetingRecording.update({ where: { meetingId }, data: { status: 'FAILED', errorMessage } })
   }
 }
 

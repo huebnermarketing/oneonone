@@ -1,200 +1,96 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireRole } from '@/lib/auth-helpers'
+import { Prisma, UserRole } from '@prisma/client'
+import { REPORTER_OR_ADMIN, notFound, parseBody, parseQuery, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
-import { UserRole, Prisma, MeetingStatus } from '@prisma/client'
 import { logMeetingCreated } from '@/lib/audit'
 import { parseZoomMeetingId } from '@/lib/zoom'
+import { assertNoConflict } from '@/lib/meeting-conflicts'
+import { sendMeetingProposalEmail, sendProposalConfirmationEmail } from '@/lib/email'
+import { notifyMeetingProposed } from '@/lib/notifications'
+import { createMeetingSchema, listMeetingsQuery } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(request: NextRequest) {
-  try {
-    const user = await requireRole([UserRole.REPORTER, UserRole.SUPER_ADMIN, UserRole.EMPLOYEE])
+const meetingInclude = {
+  employee: { select: { id: true, name: true, email: true } },
+  reporter: { select: { id: true, name: true, email: true } },
+} as const
 
-    const { searchParams } = new URL(request.url)
-    const start = searchParams.get('start')
-    const end = searchParams.get('end')
+/**
+ * GET /api/meetings?start=&end=
+ * EMPLOYEE: meetings where I am the employee. REPORTER: where I am employee or reporter. ADMIN: all.
+ */
+export const GET = withApiAuth(async (req: NextRequest, { user }) => {
+  const { start, end } = parseQuery(req, listMeetingsQuery)
 
-    // Optional date-range filter
-    const dateFilter: Prisma.MeetingWhereInput = {}
-    if (start || end) {
-      dateFilter.meetingDate = {}
-      if (start) dateFilter.meetingDate.gte = new Date(start)
-      if (end) dateFilter.meetingDate.lte = new Date(end)
-    }
-
-    const include = {
-      employee: { select: { id: true, name: true, email: true } },
-      reporter: { select: { id: true, name: true, email: true } },
-    }
-
-    let meetings
-
-    if (user.role === UserRole.EMPLOYEE) {
-      meetings = await prisma.meeting.findMany({
-        where: { employeeId: user.id, ...dateFilter },
-        include,
-        orderBy: { meetingDate: 'desc' },
-      })
-    } else if (user.role === UserRole.REPORTER) {
-      meetings = await prisma.meeting.findMany({
-        where: {
-          OR: [{ employeeId: user.id }, { reporterId: user.id }],
-          ...dateFilter,
-        },
-        include,
-        orderBy: { meetingDate: 'desc' },
-      })
-    } else {
-      meetings = await prisma.meeting.findMany({
-        where: dateFilter,
-        include,
-        orderBy: { meetingDate: 'desc' },
-      })
-    }
-
-    return NextResponse.json(meetings)
-  } catch (error) {
-    const { handleApiError } = await import('@/lib/auth-helpers')
-    return handleApiError(error)
+  const where: Prisma.MeetingWhereInput = {}
+  if (start || end) {
+    where.meetingDate = {}
+    if (start) where.meetingDate.gte = start
+    if (end) where.meetingDate.lte = end
   }
-}
+  if (user.role === UserRole.EMPLOYEE) {
+    where.employeeId = user.id
+  } else if (user.role === UserRole.REPORTER) {
+    where.OR = [{ employeeId: user.id }, { reporterId: user.id }]
+  }
 
-export async function POST(request: NextRequest) {
-  try {
-    const user = await requireRole([UserRole.REPORTER, UserRole.SUPER_ADMIN])
-    const body = await request.json()
-    const { employeeId, meetingDate, meetingType, meetingLink } = body
+  const meetings = await prisma.meeting.findMany({
+    where,
+    include: meetingInclude,
+    orderBy: { meetingDate: 'desc' },
+  })
+  return NextResponse.json(meetings)
+})
 
-    if (meetingType === 'ZOOM' && (!meetingLink || typeof meetingLink !== 'string' || !meetingLink.trim())) {
-      return NextResponse.json(
-        { error: 'Zoom meeting invite link is required when scheduling over Zoom.' },
-        { status: 400 }
-      )
-    }
+/**
+ * POST /api/meetings — propose a 1:1. Reporter or admin.
+ * An admin proposing on behalf of a manager becomes the proposer, the employee's manager the reporter.
+ */
+export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user }) => {
+  const { employeeId, meetingDate, meetingType, meetingLink } = await parseBody(req, createMeetingSchema)
 
-    const employee = await prisma.user.findUnique({
-      where: { id: employeeId },
-    })
+  const employee = await prisma.user.findUnique({ where: { id: employeeId }, select: { id: true, reportsToId: true } })
+  if (!employee) throw notFound('Employee')
 
-    if (!employee) {
-      return NextResponse.json({ error: 'Employee not found' }, { status: 404 })
-    }
+  const reporterId = user.role === UserRole.SUPER_ADMIN && employee.reportsToId ? employee.reportsToId : user.id
 
-    const reporterId =
-      user.role === UserRole.SUPER_ADMIN && employee.reportsToId
-        ? employee.reportsToId
-        : user.id
+  await assertNoConflict(employeeId, reporterId, meetingDate)
 
-    // Check for time conflicts (30-minute meeting window)
-    const proposedTime = new Date(meetingDate)
-    const windowStart = new Date(proposedTime.getTime() - 29 * 60 * 1000)
-    const windowEnd = new Date(proposedTime.getTime() + 29 * 60 * 1000)
-    const activeStatuses: MeetingStatus[] = [MeetingStatus.PROPOSED, MeetingStatus.SCHEDULED]
-
-    const conflictingMeeting = await prisma.meeting.findFirst({
-      where: {
-        OR: [
-          { employeeId, status: { in: activeStatuses } },
-          { reporterId, status: { in: activeStatuses } },
-          { employeeId: reporterId, status: { in: activeStatuses } },
-          { reporterId: employeeId, status: { in: activeStatuses } },
-        ],
-        meetingDate: { gte: windowStart, lte: windowEnd },
-      },
-      include: {
-        employee: { select: { name: true } },
-        reporter: { select: { name: true } },
-      },
-    })
-
-    if (conflictingMeeting) {
-      const otherPerson =
-        conflictingMeeting.employeeId === employeeId
-          ? conflictingMeeting.reporter?.name || 'someone'
-          : conflictingMeeting.employee?.name || 'someone'
-      const conflictWith =
-        conflictingMeeting.employeeId === employeeId || conflictingMeeting.reporterId === employeeId
-          ? employee.name || 'This employee'
-          : 'You'
-      return NextResponse.json(
-        { error: `${conflictWith} already has a meeting with ${otherPerson} at this time. Please choose a different time slot.` },
-        { status: 409 }
-      )
-    }
-
-    const link = meetingType === 'ZOOM' && meetingLink ? String(meetingLink).trim() || null : null
-    const meeting = await prisma.meeting.create({
-      data: {
-        employeeId,
-        reporterId,
-        meetingDate: new Date(meetingDate),
-        status: 'PROPOSED',
-        proposedById: user.id,
-        meetingType: meetingType === 'ZOOM' ? 'ZOOM' : 'IN_PERSON',
-        meetingLink: link,
-        zoomMeetingId: link ? parseZoomMeetingId(link) : null,
-      },
-      include: {
-        employee: { select: { id: true, name: true, email: true } },
-        reporter: { select: { id: true, name: true, email: true } },
-      },
-    })
-
-    // Audit log
-    await logMeetingCreated(user.id, meeting.id, {
+  const link = meetingType === 'ZOOM' ? meetingLink ?? null : null
+  const meeting = await prisma.meeting.create({
+    data: {
       employeeId,
-      employeeName: meeting.employee.name,
-      reporterName: meeting.reporter.name,
+      reporterId,
       meetingDate,
-    })
+      status: 'PROPOSED',
+      proposedById: user.id,
+      meetingType,
+      meetingLink: link,
+      zoomMeetingId: link ? parseZoomMeetingId(link) : null,
+    },
+    include: meetingInclude,
+  })
 
-    // No calendar event at proposal stage – created only when accepted.
+  await logMeetingCreated(user.id, meeting.id, {
+    employeeId,
+    employeeName: meeting.employee.name,
+    reporterName: meeting.reporter.name,
+    meetingDate: meetingDate.toISOString(),
+  })
 
-    // Send proposal email to the employee
-    try {
-      const { sendMeetingProposalEmail } = await import('@/lib/email')
-      await sendMeetingProposalEmail(
-        meeting.employee.email,
-        meeting.employee.name,
-        meeting.reporter.name,
-        new Date(meetingDate),
-        meeting.id
-      )
-    } catch (error: unknown) {
-      console.error('Failed to send proposal email to employee:', error)
-    }
+  // No calendar event at proposal stage — created when accepted. Notifications are best effort.
+  await Promise.all([
+    sendMeetingProposalEmail(meeting.employee.email, meeting.employee.name, meeting.reporter.name, meetingDate, meeting.id).catch(
+      (e) => console.error('Failed to send proposal email to employee:', e)
+    ),
+    sendProposalConfirmationEmail(meeting.reporter.email, meeting.reporter.name, meeting.employee.name, meetingDate, meeting.id).catch(
+      (e) => console.error('Failed to send confirmation email to reporter:', e)
+    ),
+    notifyMeetingProposed(employeeId, meeting.reporter.name, meetingDate, meeting.id).catch((e) =>
+      console.error('Failed to create notification:', e)
+    ),
+  ])
 
-    // Send confirmation email to the reporter (proposer)
-    try {
-      const { sendProposalConfirmationEmail } = await import('@/lib/email')
-      await sendProposalConfirmationEmail(
-        meeting.reporter.email,
-        meeting.reporter.name,
-        meeting.employee.name,
-        new Date(meetingDate),
-        meeting.id
-      )
-    } catch (error: unknown) {
-      console.error('Failed to send confirmation email to reporter:', error)
-    }
-
-    // Create in-app notification for the employee
-    try {
-      const { notifyMeetingProposed } = await import('@/lib/notifications')
-      await notifyMeetingProposed(
-        employeeId,
-        meeting.reporter.name,
-        new Date(meetingDate),
-        meeting.id
-      )
-    } catch (error) {
-      console.error('Failed to create notification:', error)
-    }
-
-    return NextResponse.json(meeting)
-  } catch (error) {
-    console.error('Error creating meeting:', error)
-    return NextResponse.json({ error: 'Failed to create meeting' }, { status: 500 })
-  }
-}
+  return NextResponse.json(meeting, { status: 201 })
+})

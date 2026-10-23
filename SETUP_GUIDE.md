@@ -49,10 +49,14 @@ Follow these steps to get your AMI One-on-One system up and running.
 After setting up your database, run:
 
 ```bash
-npx prisma db push
+npx prisma generate
+npx prisma migrate dev      # applies prisma/migrations (creates all tables on a fresh DB)
+npm run db:seed             # optional: demo data — WIPES the database first
 ```
 
-This will create all the tables in your database.
+If the database was created earlier with `prisma db push`, run `npx prisma migrate resolve --applied 0_init` once, then `migrate dev`.
+
+Local login without Google credentials: `POST /api/auth/test-login` with `{"role":"SUPER_ADMIN"}` (see `docs/DEVELOPER_GUIDE.md`).
 
 ---
 
@@ -170,18 +174,18 @@ This will create all the tables in your database.
 
 ## Step 6: Create First Admin User
 
-After logging in for the first time, you'll need to manually set your role in the database:
+Every new Google sign-in is created as `EMPLOYEE`. To bootstrap admins, list their emails in `.env` **before** they sign in (or before their next sign-in — promotion happens on every login and never demotes):
 
-1. **Connect to your database**:
-   ```bash
-   npx prisma studio
-   ```
-   This opens a web interface to view/edit your database.
+```
+INITIAL_ADMIN_EMAILS="you@yourcompany.com,ops@yourcompany.com"
+```
 
-2. **Or use SQL**:
-   ```sql
-   UPDATE "User" SET role = 'SUPER_ADMIN' WHERE email = 'your-email@yourcompany.com';
-   ```
+Restart the dev server after changing `.env`. Once one SUPER_ADMIN exists, manage roles from **Admin → User Management** instead of the env var.
+
+Fallback (no restart possible): `npx prisma studio`, or
+```sql
+UPDATE "User" SET role = 'SUPER_ADMIN' WHERE email = 'your-email@yourcompany.com';
+```
 
 ---
 

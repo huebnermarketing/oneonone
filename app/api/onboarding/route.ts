@@ -1,67 +1,51 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth-helpers'
-import { prisma } from '@/lib/prisma'
 import { UserRole } from '@prisma/client'
+import { badRequest, parseBody, withApiAuth } from '@/lib/api'
+import { prisma } from '@/lib/prisma'
+import { createAuditLog } from '@/lib/audit'
+import { onboardingSchema } from '@/lib/validation/users'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(request: NextRequest) {
-  try {
-    const user = await getCurrentUser()
-    
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+/**
+ * POST /api/onboarding
+ * EMPLOYEE / REPORTER set their department and reporting manager on first login. Admins never onboard.
+ */
+export const POST = withApiAuth(async (req: NextRequest, { user }) => {
+  // Super admins don't need onboarding (400, matching the previous behaviour)
+  if (user.role === UserRole.SUPER_ADMIN) throw badRequest('Super admins do not need onboarding')
 
-    // Super admins don't need onboarding
-    if (user.role === UserRole.SUPER_ADMIN) {
-      return NextResponse.json({ error: 'Super admins do not need onboarding' }, { status: 400 })
-    }
+  const { departmentId, reportsToId } = await parseBody(req, onboardingSchema)
 
-    const body = await request.json()
-    const { departmentId, reportsToId } = body
-
-    if (!reportsToId) {
-      return NextResponse.json({ error: 'Reporting manager is required' }, { status: 400 })
-    }
-
-    // Verify the manager exists and is a Reporter or Super Admin
-    const manager = await prisma.user.findUnique({
-      where: { id: reportsToId },
-    })
-
-    if (!manager || (manager.role !== UserRole.REPORTER && manager.role !== UserRole.SUPER_ADMIN)) {
-      return NextResponse.json({ error: 'Invalid reporting manager' }, { status: 400 })
-    }
-
-    // Verify department exists if provided
-    if (departmentId) {
-      const department = await prisma.department.findUnique({
-        where: { id: departmentId },
-      })
-      if (!department) {
-        return NextResponse.json({ error: 'Invalid department' }, { status: 400 })
-      }
-    }
-
-    // Update user with department and reporting manager
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        departmentId: departmentId || null,
-        reportsToId: reportsToId,
-      },
-    })
-
-    return NextResponse.json({ 
-      success: true,
-      message: 'Onboarding completed successfully',
-    })
-  } catch (error) {
-    console.error('Error completing onboarding:', error)
-    return NextResponse.json(
-      { error: 'Failed to complete onboarding' },
-      { status: 500 }
-    )
+  // Manager must exist and be a Reporter or Super Admin
+  const manager = await prisma.user.findUnique({ where: { id: reportsToId }, select: { role: true } })
+  if (!manager || (manager.role !== UserRole.REPORTER && manager.role !== UserRole.SUPER_ADMIN)) {
+    throw badRequest('Invalid reporting manager')
   }
-}
+
+  if (departmentId) {
+    const department = await prisma.department.findUnique({ where: { id: departmentId }, select: { id: true } })
+    if (!department) throw badRequest('Invalid department')
+  }
+
+  await prisma.user.update({
+    where: { id: user.id },
+    data: {
+      departmentId: departmentId ?? null,
+      reportsToId,
+    },
+  })
+
+  await createAuditLog({
+    userId: user.id,
+    action: 'UPDATE',
+    entityType: 'User',
+    entityId: user.id,
+    details: { onboarding: true, departmentId: departmentId ?? null, reportsToId },
+  })
+
+  return NextResponse.json({
+    success: true,
+    message: 'Onboarding completed successfully',
+  })
+})

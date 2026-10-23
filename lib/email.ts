@@ -1,5 +1,6 @@
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses'
 import nodemailer from 'nodemailer'
+import { APP_NAME, DEFAULT_TIMEZONE } from './constants'
 
 // --- Transport: SMTP or AWS SES ---
 
@@ -131,10 +132,24 @@ export async function sendEmail({ to, subject, html, text }: EmailOptions): Prom
 // Shared email layout
 // ---------------------------------------------------------------------------
 
-const appName = 'AMI One-on-One'
-const baseUrl = () => process.env.NEXTAUTH_URL || 'https://app.example.com'
+const appName = APP_NAME
+const baseUrl = () => {
+  const url = process.env.NEXTAUTH_URL
+  if (!url) console.warn('[email] NEXTAUTH_URL is not set; links in emails will be relative')
+  return url || ''
+}
 /** Timezone for all email date/time (match app/calendar: IST) */
-const EMAIL_TIMEZONE = 'Asia/Kolkata'
+const EMAIL_TIMEZONE = DEFAULT_TIMEZONE
+
+/** Escape user-controlled text before interpolating it into HTML templates. */
+function esc(value: string | null | undefined): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
 
 function emailLayout({
   preheader,
@@ -224,6 +239,7 @@ function emailLayout({
 }
 
 function detailRow(label: string, value: string): string {
+  value = esc(value)
   return `<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:6px 0;">
     <tr>
       <td style="padding:10px 14px;background-color:#f8f8fa;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display',system-ui,sans-serif;">
@@ -256,8 +272,8 @@ export async function sendMeetingScheduledEmail(
     timeZone: EMAIL_TIMEZONE,
   }).format(meetingDate)
 
-  const empName = employeeName || 'Team Member'
-  const mgrName = reporterName || 'Your Manager'
+  const empName = esc(employeeName || 'Team Member')
+  const mgrName = esc(reporterName || 'Your Manager')
 
   const employeeHtml = emailLayout({
     preheader: `Your one-on-one with ${mgrName} is scheduled for ${formattedDate}`,
@@ -317,11 +333,11 @@ export async function sendTodoAssignedEmail(
       }).format(dueDate)
     : 'No due date'
 
-  const name = assigneeName || 'Team Member'
-  const creator = createdByName || 'Your Manager'
+  const name = esc(assigneeName || 'Team Member')
+  const creator = esc(createdByName || 'Your Manager')
 
   const html = emailLayout({
-    preheader: `${creator} assigned you a new task: ${todoTitle}`,
+    preheader: `${creator} assigned you a new task: ${esc(todoTitle)}`,
     heading: 'New Task Assigned',
     body: `
       <p style="margin:0 0 16px;">Hi ${name},</p>
@@ -356,10 +372,10 @@ export async function sendTodoDueReminderEmail(
     timeZone: EMAIL_TIMEZONE,
   }).format(dueDate)
 
-  const name = assigneeName || 'Team Member'
+  const name = esc(assigneeName || 'Team Member')
 
   const html = emailLayout({
-    preheader: `Reminder: "${todoTitle}" is due on ${formattedDueDate}`,
+    preheader: `Reminder: "${esc(todoTitle)}" is due on ${formattedDueDate}`,
     heading: 'Task Due Soon',
     body: `
       <p style="margin:0 0 16px;">Hi ${name},</p>
@@ -393,8 +409,8 @@ export async function sendFormSubmittedEmail(
     timeZone: EMAIL_TIMEZONE,
   }).format(meetingDate)
 
-  const mgrName = reporterName || 'Manager'
-  const empName = employeeName || 'Team Member'
+  const mgrName = esc(reporterName || 'Manager')
+  const empName = esc(employeeName || 'Team Member')
 
   const html = emailLayout({
     preheader: `${empName} submitted their one-on-one form for ${formattedDate}`,
@@ -440,8 +456,8 @@ export async function sendMeetingProposalEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const empName = employeeName || 'Team Member'
-  const mgrName = reporterName || 'Your Manager'
+  const empName = esc(employeeName || 'Team Member')
+  const mgrName = esc(reporterName || 'Your Manager')
   const formattedDate = formatDateFull(meetingDate)
 
   const html = emailLayout({
@@ -472,8 +488,8 @@ export async function sendMeetingAcceptedEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const pName = proposerName || 'Manager'
-  const aName = acceptorName || 'Team Member'
+  const pName = esc(proposerName || 'Manager')
+  const aName = esc(acceptorName || 'Team Member')
   const formattedDate = formatDateFull(meetingDate)
 
   const html = emailLayout({
@@ -504,8 +520,8 @@ export async function sendProposalConfirmationEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const mgrName = reporterName || 'Manager'
-  const empName = employeeName || 'Team Member'
+  const mgrName = esc(reporterName || 'Manager')
+  const empName = esc(employeeName || 'Team Member')
   const formattedDate = formatDateFull(meetingDate)
 
   const html = emailLayout({
@@ -536,8 +552,8 @@ export async function sendMeetingReminderEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const name = recipientName || 'Team Member'
-  const otherName = otherPartyName || 'your colleague'
+  const name = esc(recipientName || 'Team Member')
+  const otherName = esc(otherPartyName || 'your colleague')
   const formattedDate = formatDateFull(meetingDate)
 
   const html = emailLayout({
@@ -568,8 +584,8 @@ export async function sendFormReminderEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const empName = employeeName || 'Team Member'
-  const mgrName = reporterName || 'your manager'
+  const empName = esc(employeeName || 'Team Member')
+  const mgrName = esc(reporterName || 'your manager')
   const formattedDate = formatDateFull(meetingDate)
 
   const html = emailLayout({
@@ -600,8 +616,8 @@ export async function sendMeetingSuggestionEmail(
   newDate: Date,
   meetingId: string
 ) {
-  const rName = recipientName || 'Manager'
-  const sName = suggestorName || 'Team Member'
+  const rName = esc(recipientName || 'Manager')
+  const sName = esc(suggestorName || 'Team Member')
   const formattedDate = formatDateFull(newDate)
 
   const html = emailLayout({
@@ -633,8 +649,8 @@ export async function sendRecurringScheduleUpdatedEmail(
   timeOfDay: string,
   frequency: string
 ) {
-  const empName = employeeName || 'Team Member'
-  const mgrName = managerName || 'Your manager'
+  const empName = esc(employeeName || 'Team Member')
+  const mgrName = esc(managerName || 'Your manager')
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
   const dayName = dayNames[dayOfWeek] || 'Unknown'
   const [hh, mm] = timeOfDay.split(':').map(Number)
@@ -660,6 +676,39 @@ export async function sendRecurringScheduleUpdatedEmail(
   await sendEmail({
     to: employeeEmail,
     subject: `Schedule Updated – ${freqLabel} on ${dayName}s at ${formattedTime}`,
+    html,
+  })
+}
+
+/** Sent to the other party (or both, when an admin cancels) when a single meeting is cancelled. */
+export async function sendMeetingCancelledEmail(
+  recipientEmail: string,
+  recipientName: string | null,
+  cancelledByName: string | null,
+  meetingDate: Date,
+  reason?: string | null
+) {
+  const name = esc(recipientName || 'Team Member')
+  const byName = esc(cancelledByName || 'A colleague')
+  const formattedDate = formatDateFull(meetingDate)
+
+  const html = emailLayout({
+    preheader: `${byName} cancelled the one-on-one scheduled for ${formattedDate}`,
+    heading: 'Meeting Cancelled',
+    body: `
+      <p style="margin:0 0 16px;">Hi ${name},</p>
+      <p style="margin:0 0 20px;"><strong>${byName}</strong> has cancelled the one-on-one meeting below. No further action is needed; a new meeting can be proposed at any time.</p>
+      ${detailRow('Cancelled By', byName)}
+      ${detailRow('Original Date & Time', formattedDate)}
+      ${reason ? detailRow('Reason', reason) : ''}
+    `,
+    ctaText: 'Open Meetings',
+    ctaUrl: `${baseUrl()}/meetings`,
+  })
+
+  await sendEmail({
+    to: recipientEmail,
+    subject: `Meeting Cancelled – ${formattedDate}`,
     html,
   })
 }

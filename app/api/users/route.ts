@@ -1,64 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAdmin, handleApiError } from '@/lib/auth-helpers'
+import { ADMIN, badRequest, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
-import { UserRole } from '@prisma/client'
 import { logUserCreated } from '@/lib/audit'
+import { ALLOWED_EMAIL_DOMAIN, isAllowedEmail } from '@/lib/constants'
+import { createUserSchema } from '@/lib/validation/users'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(request: NextRequest) {
-  try {
-    await requireAdmin()
-    const users = await prisma.user.findMany({
-      include: {
-        department: true,
-        reportsTo: true,
-      },
-      orderBy: { createdAt: 'desc' },
-    })
-    return NextResponse.json(users)
-  } catch (error) {
-    return handleApiError(error)
+const userInclude = { department: true, reportsTo: true } as const
+
+// GET /api/users - all users (admin only)
+export const GET = withApiAuth(ADMIN, async () => {
+  const users = await prisma.user.findMany({
+    include: userInclude,
+    orderBy: { createdAt: 'desc' },
+  })
+  return NextResponse.json(users)
+})
+
+// POST /api/users - create a user (admin only). Duplicate email -> 409 via wrapper.
+export const POST = withApiAuth(ADMIN, async (req: NextRequest, { user: admin }) => {
+  const body = await parseBody(req, createUserSchema)
+
+  if (!isAllowedEmail(body.email)) {
+    throw badRequest(`Only ${ALLOWED_EMAIL_DOMAIN} email addresses are allowed`)
   }
-}
 
-const ALLOWED_EMAIL_DOMAIN = '@whitelabeliq.com'
+  const user = await prisma.user.create({
+    data: {
+      email: body.email,
+      name: body.name,
+      role: body.role,
+      departmentId: body.departmentId ?? null,
+      reportsToId: body.reportsToId ?? null,
+      country: body.country ?? null,
+      timeZone: body.timeZone ?? null,
+      workDayStart: body.workDayStart ?? null,
+      workDayEnd: body.workDayEnd ?? null,
+    },
+  })
 
-export async function POST(request: NextRequest) {
-  try {
-    const admin = await requireAdmin()
-    const body = await request.json()
-    const { email, name, role, departmentId, reportsToId, country, timeZone, workDayStart, workDayEnd } = body
+  await logUserCreated(admin.id, user.id, { email: user.email, name: user.name, role: user.role })
 
-    if (!email || !email.toLowerCase().endsWith(ALLOWED_EMAIL_DOMAIN)) {
-      return NextResponse.json(
-        { error: `Only ${ALLOWED_EMAIL_DOMAIN} email addresses are allowed` },
-        { status: 400 }
-      )
-    }
-
-    const user = await prisma.user.create({
-      data: {
-        email,
-        name,
-        role: role || UserRole.EMPLOYEE,
-        departmentId: departmentId || null,
-        reportsToId: reportsToId || null,
-        country: country || null,
-        timeZone: timeZone || null,
-        workDayStart: workDayStart || null,
-        workDayEnd: workDayEnd || null,
-      },
-    })
-
-    // Audit log
-    await logUserCreated(admin.id, user.id, { email, name, role: role || 'EMPLOYEE' })
-
-    return NextResponse.json(user)
-  } catch (error: unknown) {
-    if (error && typeof error === 'object' && 'code' in error && (error as { code: string }).code === 'P2002') {
-      return NextResponse.json({ error: 'User with this email already exists' }, { status: 400 })
-    }
-    return NextResponse.json({ error: 'Failed to create user' }, { status: 500 })
-  }
-}
+  return NextResponse.json(user, { status: 201 })
+})

@@ -1,42 +1,33 @@
 import { NextResponse } from 'next/server'
-import { requireAdmin } from '@/lib/auth-helpers'
+import { ADMIN, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { getLocalStorageStats, getLocalStorageDir, isS3Configured } from '@/lib/s3'
 
 export const dynamic = 'force-dynamic'
 
-// GET - Storage usage (admin only)
-export async function GET() {
-  try {
-    await requireAdmin()
+const toMB = (bytes: number) => Math.round((bytes / (1024 * 1024)) * 100) / 100
 
-    const s3Configured = await isS3Configured()
-    const { fileCount, totalBytes } = await getLocalStorageStats()
-    const storageDir = getLocalStorageDir()
+// GET /api/admin/storage - storage usage (admin only)
+export const GET = withApiAuth(ADMIN, async () => {
+  const [s3Configured, { fileCount, totalBytes }, agg] = await Promise.all([
+    isS3Configured(),
+    getLocalStorageStats(),
+    prisma.meetingRecording.aggregate({ _sum: { fileSize: true }, _count: true }),
+  ])
+  const totalRecordingsBytes = agg._sum.fileSize ?? 0
 
-    const agg = await prisma.meetingRecording.aggregate({
-      _sum: { fileSize: true },
-      _count: true,
-    })
-    const totalRecordingsBytes = agg._sum.fileSize ?? 0
-    const recordingsCount = agg._count
-
-    return NextResponse.json({
-      storageType: s3Configured ? 's3' : 'local',
-      localStorage: {
-        path: storageDir,
-        fileCount,
-        totalBytes,
-        totalMB: Math.round((totalBytes / (1024 * 1024)) * 100) / 100,
-      },
-      recordings: {
-        count: recordingsCount,
-        totalBytes: totalRecordingsBytes,
-        totalMB: Math.round((totalRecordingsBytes / (1024 * 1024)) * 100) / 100,
-      },
-    })
-  } catch (error) {
-    console.error('Error fetching storage stats:', error)
-    return NextResponse.json({ error: 'Failed to fetch storage stats' }, { status: 500 })
-  }
-}
+  return NextResponse.json({
+    storageType: s3Configured ? 's3' : 'local',
+    localStorage: {
+      path: getLocalStorageDir(),
+      fileCount,
+      totalBytes,
+      totalMB: toMB(totalBytes),
+    },
+    recordings: {
+      count: agg._count,
+      totalBytes: totalRecordingsBytes,
+      totalMB: toMB(totalRecordingsBytes),
+    },
+  })
+})

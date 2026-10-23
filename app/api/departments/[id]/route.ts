@@ -1,105 +1,46 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAdmin, handleApiError } from '@/lib/auth-helpers'
+import { ADMIN, notFound, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { logDepartmentUpdated, logDepartmentDeleted } from '@/lib/audit'
+import { departmentSchema } from '@/lib/validation/users'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    await requireAdmin()
-    
-    const department = await prisma.department.findUnique({
-      where: { id: params.id },
-      include: {
-        _count: {
-          select: { users: true },
-        },
-        users: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-            role: true,
-          },
-        },
-      },
-    })
+// GET /api/departments/[id] - department with its members (admin only)
+export const GET = withApiAuth(ADMIN, async (_req: NextRequest, { params }) => {
+  const department = await prisma.department.findUnique({
+    where: { id: params.id },
+    include: {
+      _count: { select: { users: true } },
+      users: { select: { id: true, name: true, email: true, role: true } },
+    },
+  })
+  if (!department) throw notFound('Department')
+  return NextResponse.json(department)
+})
 
-    if (!department) {
-      return NextResponse.json({ error: 'Department not found' }, { status: 404 })
-    }
+// PATCH /api/departments/[id] - rename (admin only). Missing -> 404, duplicate name -> 409 via wrapper.
+export const PATCH = withApiAuth(ADMIN, async (req: NextRequest, { user: admin, params }) => {
+  const { name } = await parseBody(req, departmentSchema)
 
-    return NextResponse.json(department)
-  } catch (error) {
-    return handleApiError(error)
-  }
-}
+  const department = await prisma.department.update({ where: { id: params.id }, data: { name } })
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const admin = await requireAdmin()
-    const body = await request.json()
-    const { name } = body
+  await logDepartmentUpdated(admin.id, params.id, { name })
 
-    if (!name?.trim()) {
-      return NextResponse.json({ error: 'Department name is required' }, { status: 400 })
-    }
+  return NextResponse.json(department)
+})
 
-    const department = await prisma.department.update({
-      where: { id: params.id },
-      data: { name: name.trim() },
-    })
+// DELETE /api/departments/[id] (admin only). Detaches members and deletes in one transaction.
+export const DELETE = withApiAuth(ADMIN, async (_req: NextRequest, { user: admin, params }) => {
+  const existing = await prisma.department.findUnique({ where: { id: params.id }, select: { id: true, name: true } })
+  if (!existing) throw notFound('Department')
 
-    // Audit log
-    await logDepartmentUpdated(admin.id, params.id, { name: name.trim() })
+  await prisma.$transaction(async (tx) => {
+    await tx.user.updateMany({ where: { departmentId: params.id }, data: { departmentId: null } })
+    await tx.department.delete({ where: { id: params.id } })
+  })
 
-    return NextResponse.json(department)
-  } catch (error: unknown) {
-    if (error && typeof error === 'object' && 'code' in error) {
-      if ((error as { code: string }).code === 'P2002') {
-        return NextResponse.json({ error: 'Department with this name already exists' }, { status: 400 })
-      }
-      if ((error as { code: string }).code === 'P2025') {
-        return NextResponse.json({ error: 'Department not found' }, { status: 404 })
-      }
-    }
-    return NextResponse.json({ error: 'Failed to update department' }, { status: 500 })
-  }
-}
+  await logDepartmentDeleted(admin.id, params.id, { name: existing.name })
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const admin = await requireAdmin()
-
-    // First, remove department from all users
-    await prisma.user.updateMany({
-      where: { departmentId: params.id },
-      data: { departmentId: null },
-    })
-
-    // Then delete the department
-    await prisma.department.delete({
-      where: { id: params.id },
-    })
-
-    // Audit log
-    await logDepartmentDeleted(admin.id, params.id)
-
-    return NextResponse.json({ success: true })
-  } catch (error: unknown) {
-    if (error && typeof error === 'object' && 'code' in error && (error as { code: string }).code === 'P2025') {
-      return NextResponse.json({ error: 'Department not found' }, { status: 404 })
-    }
-    return NextResponse.json({ error: 'Failed to delete department' }, { status: 500 })
-  }
-}
+  return NextResponse.json({ success: true })
+})

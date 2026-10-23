@@ -22,8 +22,9 @@ import {
   FileText,
   Building2
 } from 'lucide-react'
+import { PoliciesSection, type Policies } from './policies-section'
 
-interface Settings {
+interface Settings extends Policies {
   openaiApiKey: string
   openaiApiKeySet: boolean
   openaiModel: string
@@ -84,6 +85,7 @@ export function SettingsClient() {
   const [keepCurrentUser, setKeepCurrentUser] = useState(true)
   const [clearing, setClearing] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
+  const [clearConfirmText, setClearConfirmText] = useState('')
 
   useEffect(() => {
     fetchSettings()
@@ -130,7 +132,7 @@ export function SettingsClient() {
       const response = await fetch('/api/admin/clear-data', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ clearType, keepCurrentUser }),
+        body: JSON.stringify({ clearType, keepCurrentUser, confirm: clearConfirmText.trim() }),
       })
 
       const data = await response.json()
@@ -145,6 +147,7 @@ export function SettingsClient() {
         })
         fetchDataCounts()
         setShowClearConfirm(false)
+        setClearConfirmText('')
       } else {
         setMessage({ type: 'error', text: data.error || 'Failed to clear data' })
       }
@@ -703,6 +706,9 @@ export function SettingsClient() {
         </div>
       </div>
 
+      {/* Policies */}
+      <PoliciesSection initial={settings} />
+
       {/* Data Management */}
       <div className="rounded-2xl bg-white dark:bg-charcoal border border-red-500/20 overflow-hidden">
         <div className="p-5 border-b border-red-500/20 bg-red-500/5 flex items-center gap-3">
@@ -823,10 +829,22 @@ export function SettingsClient() {
                   </p>
                 </div>
               </div>
+              <div>
+                <label className="block text-sm text-medium-gray mb-1">
+                  Type <span className="font-mono font-semibold text-red-500">{clearType}</span> to confirm
+                </label>
+                <input
+                  type="text"
+                  value={clearConfirmText}
+                  onChange={(e) => setClearConfirmText(e.target.value)}
+                  autoComplete="off"
+                  className="w-full sm:w-64 px-3 py-2 rounded-xl border border-red-500/30 bg-white dark:bg-charcoal text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-red-500/30"
+                />
+              </div>
               <div className="flex gap-3">
                 <button
                   onClick={handleClearData}
-                  disabled={clearing}
+                  disabled={clearing || clearConfirmText.trim() !== clearType}
                   className="flex items-center gap-2 px-5 py-2.5 bg-red-500 text-white rounded-xl font-medium hover:bg-red-600 disabled:opacity-50 transition-colors"
                 >
                   {clearing ? (
@@ -842,7 +860,7 @@ export function SettingsClient() {
                   )}
                 </button>
                 <button
-                  onClick={() => setShowClearConfirm(false)}
+                  onClick={() => { setShowClearConfirm(false); setClearConfirmText('') }}
                   disabled={clearing}
                   className="px-5 py-2.5 text-medium-gray hover:text-dark-gray dark:hover:text-white font-medium transition-colors"
                 >
