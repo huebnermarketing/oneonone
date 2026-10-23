@@ -1,46 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth-helpers'
+import { notFound, parseBody, withApiAuth } from '@/lib/api'
 import { markNotificationAsRead, deleteNotification } from '@/lib/notifications'
+import { notificationUpdateSchema } from '@/lib/validation/misc'
 
 export const dynamic = 'force-dynamic'
 
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+/** PATCH /api/notifications/[id] — `{ isRead: true }` marks the notification read. 404 if it is not yours. */
+export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
+  const { isRead } = await parseBody(req, notificationUpdateSchema)
 
-    const body = await request.json()
-
-    if (body.isRead) {
-      await markNotificationAsRead(params.id, user.id)
-    }
-
-    return NextResponse.json({ success: true })
-  } catch (error) {
-    console.error('Error updating notification:', error)
-    return NextResponse.json({ error: 'Failed to update notification' }, { status: 500 })
+  if (isRead) {
+    const { count } = await markNotificationAsRead(params.id, user.id)
+    if (count === 0) throw notFound('Notification')
   }
-}
 
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+  return NextResponse.json({ success: true })
+})
 
-    await deleteNotification(params.id, user.id)
-    return NextResponse.json({ success: true })
-  } catch (error) {
-    console.error('Error deleting notification:', error)
-    return NextResponse.json({ error: 'Failed to delete notification' }, { status: 500 })
-  }
-}
+/** DELETE /api/notifications/[id] — scoped to the owner; idempotent (already-gone rows still return success). */
+export const DELETE = withApiAuth(async (_req: NextRequest, { user, params }) => {
+  await deleteNotification(params.id, user.id)
+  return NextResponse.json({ success: true })
+})

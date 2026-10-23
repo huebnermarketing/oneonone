@@ -1,129 +1,83 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAuth } from '@/lib/auth-helpers'
+import { badRequest, forbidden, notFound, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
+import { createAuditLog } from '@/lib/audit'
+import { assertAccess, canFillForm } from '@/lib/meeting-access'
+import { sendFormSubmittedEmail } from '@/lib/email'
+import { notifyFormSubmitted } from '@/lib/notifications'
+import { meetingFormSchema } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await requireAuth()
-    const body = await request.json()
-    const isDraft = body.draft === true
-    const isSubmit = !isDraft
+const REQUIRED_ON_SUBMIT = [
+  ['checkInPersonal', 'Personal best since we last met'],
+  ['checkInProfessional', 'Professional best since we last met'],
+  ['priorityGoalProfessional', 'Professional growth goals'],
+  ['progressReport', 'Report on progress'],
+] as const
 
-    const meeting = await prisma.meeting.findUnique({
-      where: { id: params.id },
-      include: { employee: true, reporter: { select: { name: true, email: true } } },
-    })
+const formInclude = {
+  employee: { select: { name: true } },
+  reporter: { select: { name: true, email: true } },
+} as const
 
-    if (!meeting) {
-      return NextResponse.json({ error: 'Meeting not found' }, { status: 404 })
-    }
+/**
+ * POST /api/meetings/[id]/form — the employee saves a draft (`draft: true`) or submits their check-in form.
+ * Submitting sets `formSubmittedAt` once; the reporter marks the meeting completed separately.
+ */
+export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
+  const { draft, ...fields } = await parseBody(req, meetingFormSchema)
 
-    if (meeting.employeeId !== user.id) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
+  const meeting = await prisma.meeting.findUnique({
+    where: { id: params.id },
+    select: { id: true, employeeId: true, reporterId: true, meetingDate: true, formSubmittedAt: true },
+  })
+  if (!meeting) throw notFound('Meeting')
+  assertAccess(canFillForm(user, meeting), 'Only the employee can fill in this form')
 
-    const meetingDate = new Date(meeting.meetingDate)
-    const isPastMeeting = meetingDate.getTime() < Date.now()
-
-    // After meeting time, no edits if already submitted
-    if (meeting.formSubmittedAt && isPastMeeting) {
-      return NextResponse.json(
-        { error: 'Form cannot be edited after the meeting time.' },
-        { status: 403 }
-      )
-    }
-
-    const data = {
-      checkInPersonal: typeof body.checkInPersonal === 'string' ? body.checkInPersonal || null : null,
-      checkInProfessional: typeof body.checkInProfessional === 'string' ? body.checkInProfessional || null : null,
-      priorityGoalProfessional: typeof body.priorityGoalProfessional === 'string' ? body.priorityGoalProfessional || null : null,
-      priorityGoalAgency: typeof body.priorityGoalAgency === 'string' ? body.priorityGoalAgency || null : null,
-      progressReport: typeof body.progressReport === 'string' ? body.progressReport || null : null,
-      goodNews: typeof body.goodNews === 'string' ? body.goodNews || null : null,
-      supportNeeded: typeof body.supportNeeded === 'string' ? body.supportNeeded || null : null,
-      priorityDiscussions: typeof body.priorityDiscussions === 'string' ? body.priorityDiscussions || null : null,
-      headsUp: typeof body.headsUp === 'string' ? body.headsUp || null : null,
-      anythingElse: typeof body.anythingElse === 'string' ? body.anythingElse || null : null,
-    }
-
-    if (isSubmit) {
-      const missing: string[] = []
-      if (!data.checkInPersonal?.trim()) missing.push('Personal best since we last met')
-      if (!data.checkInProfessional?.trim()) missing.push('Professional best since we last met')
-      if (!data.priorityGoalProfessional?.trim()) missing.push('Professional growth goals')
-      if (!data.progressReport?.trim()) missing.push('Report on progress')
-      if (missing.length > 0) {
-        return NextResponse.json(
-          { error: `Please fill in the required fields: ${missing.join(', ')}` },
-          { status: 400 }
-        )
-      }
-    }
-
-    if (isDraft) {
-      // Save draft: update fields only, do not set formSubmittedAt or status
-      const updatedMeeting = await prisma.meeting.update({
-        where: { id: params.id },
-        data,
-        include: {
-          employee: { select: { name: true } },
-          reporter: { select: { name: true, email: true } },
-        },
-      })
-      return NextResponse.json(updatedMeeting)
-    }
-
-    // Submit: update fields and set formSubmittedAt only. Reporter marks meeting completed after it happens.
-    const wasAlreadySubmitted = !!meeting.formSubmittedAt
-    const updatedMeeting = await prisma.meeting.update({
-      where: { id: params.id },
-      data: {
-        ...data,
-        formSubmittedAt: wasAlreadySubmitted ? meeting.formSubmittedAt : new Date(),
-        // Do not set status to COMPLETED; meeting owner marks it complete after the meeting
-      },
-      include: {
-        employee: { select: { name: true } },
-        reporter: { select: { name: true, email: true } },
-      },
-    })
-
-    if (!wasAlreadySubmitted) {
-      // Send email notification
-      try {
-        const { sendFormSubmittedEmail } = await import('@/lib/email')
-        await sendFormSubmittedEmail(
-          updatedMeeting.reporter.email,
-          updatedMeeting.reporter.name,
-          updatedMeeting.employee.name,
-          updatedMeeting.meetingDate,
-          updatedMeeting.id
-        )
-      } catch (error) {
-        console.error('Failed to send email notification:', error)
-      }
-
-      // Create in-app notification for the reporter
-      try {
-        const { notifyFormSubmitted } = await import('@/lib/notifications')
-        await notifyFormSubmitted(
-          meeting.reporterId,
-          updatedMeeting.employee.name,
-          updatedMeeting.id
-        )
-      } catch (error) {
-        console.error('Failed to create notification:', error)
-      }
-    }
-
-    return NextResponse.json(updatedMeeting)
-  } catch (error) {
-    console.error('Error updating meeting form:', error)
-    return NextResponse.json({ error: 'Failed to update meeting' }, { status: 500 })
+  // After the meeting time, a submitted form is locked
+  if (meeting.formSubmittedAt && meeting.meetingDate.getTime() < Date.now()) {
+    throw forbidden('Form cannot be edited after the meeting time.')
   }
-}
+
+  // Empty strings are stored as null
+  const data = Object.fromEntries(
+    Object.entries(fields).map(([key, value]) => [key, value ? value : null])
+  ) as { [K in keyof typeof fields]: string | null }
+
+  if (draft) {
+    const saved = await prisma.meeting.update({ where: { id: meeting.id }, data, include: formInclude })
+    return NextResponse.json(saved)
+  }
+
+  const missing = REQUIRED_ON_SUBMIT.filter(([key]) => !data[key]).map(([, label]) => label)
+  if (missing.length > 0) throw badRequest(`Please fill in the required fields: ${missing.join(', ')}`)
+
+  const wasAlreadySubmitted = !!meeting.formSubmittedAt
+  const updated = await prisma.meeting.update({
+    where: { id: meeting.id },
+    data: { ...data, formSubmittedAt: wasAlreadySubmitted ? meeting.formSubmittedAt : new Date() },
+    include: formInclude,
+  })
+
+  await createAuditLog({
+    userId: user.id,
+    action: 'UPDATE',
+    entityType: 'Meeting',
+    entityId: meeting.id,
+    details: { action: wasAlreadySubmitted ? 'form_resubmitted' : 'form_submitted' },
+  })
+
+  if (!wasAlreadySubmitted) {
+    await Promise.all([
+      sendFormSubmittedEmail(updated.reporter.email, updated.reporter.name, updated.employee.name, updated.meetingDate, updated.id).catch(
+        (e) => console.error('Failed to send email notification:', e)
+      ),
+      notifyFormSubmitted(meeting.reporterId, updated.employee.name, updated.id).catch((e) =>
+        console.error('Failed to create notification:', e)
+      ),
+    ])
+  }
+
+  return NextResponse.json(updated)
+})

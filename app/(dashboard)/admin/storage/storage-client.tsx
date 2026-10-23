@@ -51,7 +51,10 @@ export function StorageClient() {
           fetch('/api/admin/recordings'),
         ])
         if (statsRes.ok) setStats(await statsRes.json())
-        if (recordingsRes.ok) setRecordings(await recordingsRes.json())
+        if (recordingsRes.ok) {
+          const data = await recordingsRes.json()
+          setRecordings(data.recordings ?? [])
+        }
       } catch (e) {
         // Error handled by toast
       } finally {

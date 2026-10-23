@@ -73,8 +73,6 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
     name: user.name,
     phone: user.phone || '',
     title: user.title || '',
-    departmentId: user.departmentId || '',
-    reportsToId: user.reportsToId || '',
     country: user.country || '',
     timeZone: user.timeZone || '',
     workDayStart: user.workDayStart || DEFAULT_WORK_START,
@@ -133,8 +131,6 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
     formData.name !== user.name ||
     combinedPhone !== (user.phone || '') ||
     formData.title !== (user.title || '') ||
-    formData.departmentId !== (user.departmentId || '') ||
-    formData.reportsToId !== (user.reportsToId || '') ||
     formData.country !== (user.country || '') ||
     formData.timeZone !== (user.timeZone || '') ||
     formData.workDayStart !== (user.workDayStart || DEFAULT_WORK_START) ||
@@ -301,21 +297,8 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
                     Department
                   </div>
                 </label>
-                <div className="relative">
-                  <select
-                    value={formData.departmentId}
-                    onChange={(e) => setFormData({ ...formData, departmentId: e.target.value })}
-                    className="w-full px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow appearance-none pr-10"
-                    aria-label="Department"
-                  >
-                    <option value="">No department</option>
-                    {departments.map((dept) => (
-                      <option key={dept.id} value={dept.id}>
-                        {dept.name}
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-medium-gray pointer-events-none" />
+                <div className="w-full px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white/60 dark:bg-dark-gray/60 text-dark-gray dark:text-white">
+                  {departments.find((d) => d.id === user.departmentId)?.name || 'No department'}
                 </div>
               </div>
 
@@ -326,23 +309,16 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
                     Reporting Manager
                   </div>
                 </label>
-                <div className="relative">
-                  <select
-                    value={formData.reportsToId}
-                    onChange={(e) => setFormData({ ...formData, reportsToId: e.target.value })}
-                    className="w-full px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow appearance-none pr-10"
-                    aria-label="Reporting manager"
-                  >
-                    <option value="">No reporting manager</option>
-                    {managers.map((mgr) => (
-                      <option key={mgr.id} value={mgr.id}>
-                        {mgr.name} ({mgr.email})
-                      </option>
-                    ))}
-                  </select>
-                  <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-medium-gray pointer-events-none" />
+                <div className="w-full px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white/60 dark:bg-dark-gray/60 text-dark-gray dark:text-white">
+                  {(() => {
+                    const mgr = managers.find((m) => m.id === user.reportsToId)
+                    return mgr ? `${mgr.name} (${mgr.email})` : 'No reporting manager'
+                  })()}
                 </div>
               </div>
+              <p className="sm:col-span-2 text-xs text-medium-gray">
+                Department and reporting manager are managed by an admin. Contact them if this is wrong.
+              </p>
             </div>
 
             <div className="border-t border-off-white dark:border-medium-gray/20 pt-4 mt-4">

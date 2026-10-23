@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
-import { requireRole } from '@/lib/auth-helpers'
-import { getSettings } from '@/lib/settings'
 import OpenAI from 'openai'
-import { UserRole } from '@prisma/client'
+import { ADMIN, withApiAuth } from '@/lib/api'
+import { getSettings } from '@/lib/settings'
 
 export const dynamic = 'force-dynamic'
 
@@ -49,101 +48,78 @@ const modelPriority = [
   'gpt-3.5-turbo'
 ]
 
-export async function GET() {
-  try {
-    await requireRole([UserRole.SUPER_ADMIN])
-    
-    const settings = await getSettings()
-    
-    if (!settings.openaiApiKey) {
-      return NextResponse.json({ 
-        models: [],
-        message: 'OpenAI API key not configured' 
-      })
-    }
+type ModelInfo = { id: string; name: string; description: string; category: string; created: number }
 
-    const openai = new OpenAI({ apiKey: settings.openaiApiKey })
-    
-    try {
-      const response = await openai.models.list()
-      
-      // Filter to only chat/completion models
-      const chatModels = response.data
-        .filter(model => {
-          const id = model.id.toLowerCase()
-          return (
-            id.includes('gpt-4') ||
-            id.includes('gpt-3.5') ||
-            id.startsWith('o1') ||
-            id.startsWith('o3') ||
-            id.includes('chatgpt')
-          ) && !id.includes('instruct') && !id.includes('vision') && !id.includes('audio')
-        })
-        .map(model => {
-          const metadata = modelMetadata[model.id] || {
-            name: model.id,
-            description: 'OpenAI model',
-            category: 'other'
-          }
-          return {
-            id: model.id,
-            name: metadata.name,
-            description: metadata.description,
-            category: metadata.category,
-            created: model.created
-          }
-        })
-        .sort((a, b) => {
-          // Sort by priority first
-          const aPriority = modelPriority.indexOf(a.id)
-          const bPriority = modelPriority.indexOf(b.id)
-          
-          if (aPriority !== -1 && bPriority !== -1) {
-            return aPriority - bPriority
-          }
-          if (aPriority !== -1) return -1
-          if (bPriority !== -1) return 1
-          
-          // Then by category
-          const aCat = categoryOrder.indexOf(a.category)
-          const bCat = categoryOrder.indexOf(b.category)
-          if (aCat !== bCat) {
-            return (aCat === -1 ? 999 : aCat) - (bCat === -1 ? 999 : bCat)
-          }
-          
-          // Then by creation date (newest first)
-          return (b.created || 0) - (a.created || 0)
-        })
-
-      // Remove duplicates and limit
-      const uniqueModels = chatModels.reduce((acc: typeof chatModels, model) => {
-        // Skip dated versions if base version exists
-        const baseId = model.id.replace(/-\d{4}-\d{2}-\d{2}$/, '')
-        if (baseId !== model.id && acc.some(m => m.id === baseId)) {
-          return acc
-        }
-        if (!acc.some(m => m.id === model.id)) {
-          acc.push(model)
-        }
-        return acc
-      }, []).slice(0, 12) // Limit to 12 models for clean UI
-
-      return NextResponse.json({ 
-        models: uniqueModels,
-        total: chatModels.length
-      })
-    } catch (apiError: unknown) {
-      console.error('OpenAI API error:', apiError)
-      return NextResponse.json({ 
-        models: [],
-        error: apiError instanceof Error ? apiError.message : 'Failed to fetch models from OpenAI'
-      })
-    }
-  } catch (error) {
-    console.error('Error fetching models:', error)
-    return NextResponse.json(
-      { error: 'Failed to fetch models' },
-      { status: 500 }
-    )
-  }
+function sortModels(a: ModelInfo, b: ModelInfo): number {
+  // Priority list first
+  const aPriority = modelPriority.indexOf(a.id)
+  const bPriority = modelPriority.indexOf(b.id)
+  if (aPriority !== -1 && bPriority !== -1) return aPriority - bPriority
+  if (aPriority !== -1) return -1
+  if (bPriority !== -1) return 1
+  // Then by category
+  const aCat = categoryOrder.indexOf(a.category)
+  const bCat = categoryOrder.indexOf(b.category)
+  if (aCat !== bCat) return (aCat === -1 ? 999 : aCat) - (bCat === -1 ? 999 : bCat)
+  // Then by creation date (newest first)
+  return (b.created || 0) - (a.created || 0)
 }
+
+/** Filter the OpenAI model list down to chat/completion models with display metadata, sorted. */
+function toChatModels(models: OpenAI.Models.Model[]): ModelInfo[] {
+  return models
+    .filter((model) => {
+      const id = model.id.toLowerCase()
+      return (
+        (id.includes('gpt-4') ||
+          id.includes('gpt-3.5') ||
+          id.startsWith('o1') ||
+          id.startsWith('o3') ||
+          id.includes('chatgpt')) &&
+        !id.includes('instruct') &&
+        !id.includes('vision') &&
+        !id.includes('audio')
+      )
+    })
+    .map((model) => {
+      const metadata = modelMetadata[model.id] || { name: model.id, description: 'OpenAI model', category: 'other' }
+      return { id: model.id, ...metadata, created: model.created }
+    })
+    .sort(sortModels)
+}
+
+/** Drop dated versions when the base model is present, dedupe, and cap for a clean UI. */
+function dedupeModels(chatModels: ModelInfo[]): ModelInfo[] {
+  return chatModels
+    .reduce((acc: ModelInfo[], model) => {
+      const baseId = model.id.replace(/-\d{4}-\d{2}-\d{2}$/, '')
+      if (baseId !== model.id && acc.some((m) => m.id === baseId)) return acc
+      if (!acc.some((m) => m.id === model.id)) acc.push(model)
+      return acc
+    }, [])
+    .slice(0, 12)
+}
+
+// GET /api/settings/models - available OpenAI chat models (admin only).
+// Always 200 with { models } so the settings UI can render; OpenAI failures are reported inline as { models: [], error }.
+export const GET = withApiAuth(ADMIN, async () => {
+  const settings = await getSettings()
+
+  if (!settings.openaiApiKey) {
+    return NextResponse.json({ models: [], message: 'OpenAI API key not configured' })
+  }
+
+  const openai = new OpenAI({ apiKey: settings.openaiApiKey })
+
+  try {
+    const response = await openai.models.list()
+    const chatModels = toChatModels(response.data)
+    return NextResponse.json({ models: dedupeModels(chatModels), total: chatModels.length })
+  } catch (apiError: unknown) {
+    console.error('OpenAI API error:', apiError)
+    return NextResponse.json({
+      models: [],
+      error: apiError instanceof Error ? apiError.message : 'Failed to fetch models from OpenAI',
+    })
+  }
+})

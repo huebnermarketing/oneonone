@@ -1,208 +1,77 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth-helpers'
+import { ApiError, notFound, parseBody, parseQuery, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
-import { UserRole } from '@prisma/client'
-import { getSignedUploadUrl, getSignedDownloadUrl, deleteFromS3 } from '@/lib/s3'
+import { getSignedUploadUrl, getSignedDownloadUrl, deleteFromS3, isS3Configured } from '@/lib/s3'
+import { assertAccess, canViewMeeting } from '@/lib/meeting-access'
+import { createAuditLog } from '@/lib/audit'
+import { attachmentDeleteQuery, attachmentQuery, createAttachmentSchema } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
 
-// Get attachments for a meeting, or get a signed download URL for a specific attachment
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+const meetingSelect = { id: true, employeeId: true, reporterId: true } as const
 
-    const meeting = await prisma.meeting.findUnique({
-      where: { id: params.id },
-      select: {
-        id: true,
-        employeeId: true,
-        reporterId: true,
-        attachments: {
-          orderBy: { createdAt: 'desc' },
-        },
-      },
-    })
+/** GET — list attachments, or `?attachmentId=` for a signed download URL. Participants + admin. */
+export const GET = withApiAuth(async (req: NextRequest, { user, params }) => {
+  const { attachmentId } = parseQuery(req, attachmentQuery)
 
-    if (!meeting) {
-      return NextResponse.json({ error: 'Meeting not found' }, { status: 404 })
-    }
+  const meeting = await prisma.meeting.findUnique({
+    where: { id: params.id },
+    select: { ...meetingSelect, attachments: { orderBy: { createdAt: 'desc' } } },
+  })
+  if (!meeting) throw notFound('Meeting')
+  assertAccess(canViewMeeting(user, meeting))
 
-    // Authorization
-    const isParticipant = meeting.employeeId === user.id || meeting.reporterId === user.id
-    const isAdmin = user.role === UserRole.SUPER_ADMIN
-    if (!isParticipant && !isAdmin) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
-
-    // If attachmentId is provided, return a signed download URL
-    const attachmentId = request.nextUrl.searchParams.get('attachmentId')
-    if (attachmentId) {
-      const attachment = meeting.attachments.find(a => a.id === attachmentId)
-      if (!attachment) {
-        return NextResponse.json({ error: 'Attachment not found' }, { status: 404 })
-      }
-
-      try {
-        const downloadUrl = await getSignedDownloadUrl(attachment.s3Key)
-        return NextResponse.json({ downloadUrl, fileName: attachment.fileName })
-      } catch (error) {
-        console.error('Failed to generate download URL:', error)
-        return NextResponse.json({ error: 'File storage not configured or file not found' }, { status: 500 })
-      }
-    }
-
-    return NextResponse.json(meeting.attachments)
-  } catch (error) {
-    console.error('Error fetching attachments:', error)
-    return NextResponse.json({ error: 'Failed to fetch attachments' }, { status: 500 })
+  if (attachmentId) {
+    const attachment = meeting.attachments.find((a) => a.id === attachmentId)
+    if (!attachment) throw notFound('Attachment')
+    if (!(await isS3Configured())) throw new ApiError(503, 'File storage is not configured')
+    const downloadUrl = await getSignedDownloadUrl(attachment.s3Key)
+    return NextResponse.json({ downloadUrl, fileName: attachment.fileName })
   }
-}
 
-// Request a presigned URL for upload
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+  return NextResponse.json(meeting.attachments)
+})
 
-    const body = await request.json()
-    const { fileName, fileType, fileSize } = body
+/** POST — register an attachment and return a presigned PUT URL. Requires S3. */
+export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
+  const { fileName, fileType, fileSize } = await parseBody(req, createAttachmentSchema)
 
-    if (!fileName || !fileType || !fileSize) {
-      return NextResponse.json({ error: 'Missing file information' }, { status: 400 })
-    }
+  const meeting = await prisma.meeting.findUnique({ where: { id: params.id }, select: meetingSelect })
+  if (!meeting) throw notFound('Meeting')
+  assertAccess(canViewMeeting(user, meeting), 'Only meeting participants can upload attachments')
 
-    // Validate file size (max 10MB)
-    if (fileSize > 10 * 1024 * 1024) {
-      return NextResponse.json({ error: 'File size must be less than 10MB' }, { status: 400 })
-    }
-
-    const meeting = await prisma.meeting.findUnique({
-      where: { id: params.id },
-      select: {
-        id: true,
-        employeeId: true,
-        reporterId: true,
-      },
-    })
-
-    if (!meeting) {
-      return NextResponse.json({ error: 'Meeting not found' }, { status: 404 })
-    }
-
-    // Authorization - only participants can upload
-    const isParticipant = meeting.employeeId === user.id || meeting.reporterId === user.id
-    const isAdmin = user.role === UserRole.SUPER_ADMIN
-    if (!isParticipant && !isAdmin) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
-
-    // Generate S3 key
-    const timestamp = Date.now()
-    const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_')
-    const s3Key = `attachments/${params.id}/${timestamp}-${sanitizedFileName}`
-
-    let uploadUrl = ''
-    let key = s3Key
-
-    // Try to get presigned URL (may fail if S3 not configured)
-    try {
-      const result = await getSignedUploadUrl(s3Key, fileType)
-      uploadUrl = result.uploadUrl
-      key = result.key
-    } catch (error) {
-      console.warn('S3 not configured, skipping presigned URL generation:', error)
-      // Continue without S3 - just save metadata
-    }
-
-    // Create attachment record
-    const attachment = await prisma.attachment.create({
-      data: {
-        meetingId: params.id,
-        fileName,
-        fileType,
-        fileSize,
-        s3Key: key,
-        uploadedBy: user.id,
-      },
-    })
-
-    return NextResponse.json({
-      uploadUrl,
-      attachmentId: attachment.id,
-      skipUpload: !uploadUrl, // Tell client to skip S3 upload
-    })
-  } catch (error) {
-    console.error('Error creating attachment:', error)
-    return NextResponse.json({ error: 'Failed to create attachment' }, { status: 500 })
+  if (!(await isS3Configured())) {
+    throw new ApiError(503, 'File storage is not configured. Ask an admin to set up S3 in Settings.')
   }
-}
 
-// Delete an attachment
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+  const sanitizedFileName = fileName.replace(/[^a-zA-Z0-9.-]/g, '_')
+  const s3Key = `attachments/${params.id}/${Date.now()}-${sanitizedFileName}`
+  const { uploadUrl, key } = await getSignedUploadUrl(s3Key, fileType)
 
-    const searchParams = request.nextUrl.searchParams
-    const attachmentId = searchParams.get('attachmentId')
+  const attachment = await prisma.attachment.create({
+    data: { meetingId: params.id, fileName, fileType, fileSize, s3Key: key, uploadedBy: user.id },
+  })
+  await createAuditLog({ userId: user.id, action: 'CREATE', entityType: 'Attachment', entityId: attachment.id, details: { meetingId: params.id, fileName } })
 
-    if (!attachmentId) {
-      return NextResponse.json({ error: 'Attachment ID required' }, { status: 400 })
-    }
+  return NextResponse.json({ uploadUrl, attachmentId: attachment.id, skipUpload: false })
+})
 
-    const attachment = await prisma.attachment.findUnique({
-      where: { id: attachmentId },
-      include: {
-        meeting: {
-          select: { employeeId: true, reporterId: true },
-        },
-      },
-    })
+/** DELETE ?attachmentId= — participants + admin; the attachment must belong to this meeting. */
+export const DELETE = withApiAuth(async (req: NextRequest, { user, params }) => {
+  const { attachmentId } = parseQuery(req, attachmentDeleteQuery)
 
-    if (!attachment) {
-      return NextResponse.json({ error: 'Attachment not found' }, { status: 404 })
-    }
+  const attachment = await prisma.attachment.findFirst({
+    where: { id: attachmentId, meetingId: params.id },
+    include: { meeting: { select: meetingSelect } },
+  })
+  if (!attachment) throw notFound('Attachment')
+  assertAccess(canViewMeeting(user, attachment.meeting))
 
-    // Authorization - any meeting participant or admin can delete
-    const isParticipant =
-      attachment.meeting.employeeId === user.id ||
-      attachment.meeting.reporterId === user.id
-    const isAdmin = user.role === UserRole.SUPER_ADMIN
-    if (!isParticipant && !isAdmin) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
+  await deleteFromS3(attachment.s3Key).catch((error) =>
+    console.error('Failed to delete from S3 (continuing with DB cleanup):', error)
+  )
+  await prisma.attachment.delete({ where: { id: attachmentId } })
+  await createAuditLog({ userId: user.id, action: 'DELETE', entityType: 'Attachment', entityId: attachmentId, details: { meetingId: params.id, fileName: attachment.fileName } })
 
-    // Delete from S3 (non-blocking — proceed even if S3 delete fails)
-    try {
-      await deleteFromS3(attachment.s3Key)
-    } catch (error) {
-      console.error('Failed to delete from S3 (continuing with DB cleanup):', error)
-    }
-
-    // Delete record
-    await prisma.attachment.delete({
-      where: { id: attachmentId },
-    })
-
-    return NextResponse.json({ success: true })
-  } catch (error) {
-    console.error('Error deleting attachment:', error)
-    return NextResponse.json({ error: 'Failed to delete attachment' }, { status: 500 })
-  }
-}
+  return NextResponse.json({ success: true })
+})

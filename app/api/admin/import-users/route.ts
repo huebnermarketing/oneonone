@@ -1,152 +1,113 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAdmin, getCurrentUser } from '@/lib/auth-helpers'
-import { prisma } from '@/lib/prisma'
 import { UserRole } from '@prisma/client'
+import { ADMIN, badRequest, parseBody, withApiAuth } from '@/lib/api'
+import { prisma } from '@/lib/prisma'
 import { logBulkImport } from '@/lib/audit'
+import { ALLOWED_EMAIL_DOMAIN, isAllowedEmail } from '@/lib/constants'
+import { importUsersSchema } from '@/lib/validation/users'
+import { z } from 'zod'
 
 export const dynamic = 'force-dynamic'
 
-const ALLOWED_EMAIL_DOMAIN = '@whitelabeliq.com'
+type ImportRow = z.infer<typeof importUsersSchema>['users'][number]
 
-interface ImportUser {
-  name: string
-  email: string
-  role?: string
-  department?: string
-  reportsTo?: string // email of manager
-  title?: string
-  phone?: string
+function parseRole(raw: string | undefined): UserRole {
+  const upper = raw?.toUpperCase()
+  if (upper === 'REPORTER' || upper === 'TEAM_LEAD' || upper === 'MANAGER') return 'REPORTER'
+  if (upper === 'SUPER_ADMIN' || upper === 'ADMIN') return 'SUPER_ADMIN'
+  return 'EMPLOYEE'
 }
 
-export async function POST(request: NextRequest) {
-  try {
-    await requireAdmin()
-    const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+/** Per-row business validation (domain, duplicates, phone). Returns one message per invalid row. */
+function validateRows(rows: ImportRow[], existingEmails: Set<string>): string[] {
+  const errors: string[] = []
+  const seen = new Set<string>()
+  for (const row of rows) {
+    if (!isAllowedEmail(row.email)) {
+      errors.push(`Only ${ALLOWED_EMAIL_DOMAIN} emails allowed: ${row.email}`)
+      continue
     }
-
-    const body = await request.json()
-    const { users } = body as { users: ImportUser[] }
-
-    if (!users || !Array.isArray(users) || users.length === 0) {
-      return NextResponse.json({ error: 'No users provided' }, { status: 400 })
+    if (existingEmails.has(row.email)) {
+      errors.push(`User already exists: ${row.email}`)
+      continue
     }
-
-    const results = {
-      success: 0,
-      failed: 0,
-      errors: [] as string[],
+    if (seen.has(row.email)) {
+      errors.push(`Duplicate email in import: ${row.email}`)
+      continue
     }
+    seen.add(row.email)
+    if (row.phone && row.phone.replace(/\D/g, '').length < 10) {
+      errors.push(`Phone number must be at least 10 digits for: ${row.email}`)
+    }
+  }
+  return errors
+}
 
-    // Get all departments for lookup
-    const departments = await prisma.department.findMany()
-    const departmentMap = new Map(departments.map((d) => [d.name.toLowerCase(), d.id]))
+/**
+ * POST /api/admin/import-users { users: [...] } (admin only)
+ * All rows are validated first; if any row is invalid nothing is inserted (400 with the errors).
+ * Otherwise every row is created in one transaction. Rows are processed in order so a manager
+ * listed earlier in the file can be referenced by `reportsTo` on a later row. Unknown departments are created.
+ */
+export const POST = withApiAuth(ADMIN, async (req: NextRequest, { user }) => {
+  const { users } = await parseBody(req, importUsersSchema)
 
-    // Get all existing users for manager lookup
-    const existingUsers = await prisma.user.findMany({
-      select: { id: true, email: true },
-    })
-    const userMap = new Map(existingUsers.map((u) => [u.email.toLowerCase(), u.id]))
+  const [departments, existingUsers] = await Promise.all([
+    prisma.department.findMany({ select: { id: true, name: true } }),
+    prisma.user.findMany({ select: { id: true, email: true } }),
+  ])
+  const departmentMap = new Map(departments.map((d) => [d.name.toLowerCase(), d.id]))
+  const userMap = new Map(existingUsers.map((u) => [u.email.toLowerCase(), u.id]))
 
-    // Process users in order (managers should be imported before their reports)
-    for (const userData of users) {
-      try {
-        // Validate required fields
-        if (!userData.name || !userData.email) {
-          results.failed++
-          results.errors.push(`Missing name or email for user: ${JSON.stringify(userData)}`)
-          continue
-        }
+  const errors = validateRows(users, new Set(userMap.keys()))
+  if (errors.length > 0) {
+    throw badRequest(
+      `Import aborted: ${errors.length} of ${users.length} row(s) failed validation. ${errors.slice(0, 5).join('; ')}${
+        errors.length > 5 ? `; and ${errors.length - 5} more` : ''
+      }`,
+      errors
+    )
+  }
 
-        // Validate email domain
-        if (!userData.email.toLowerCase().endsWith(ALLOWED_EMAIL_DOMAIN)) {
-          results.failed++
-          results.errors.push(`Only ${ALLOWED_EMAIL_DOMAIN} emails allowed: ${userData.email}`)
-          continue
-        }
-
-        // Check for existing user
-        if (userMap.has(userData.email.toLowerCase())) {
-          results.failed++
-          results.errors.push(`User already exists: ${userData.email}`)
-          continue
-        }
-
-        // Parse role
-        let role: UserRole = 'EMPLOYEE'
-        if (userData.role) {
-          const roleUpper = userData.role.toUpperCase()
-          if (roleUpper === 'REPORTER' || roleUpper === 'TEAM_LEAD' || roleUpper === 'MANAGER') {
-            role = 'REPORTER'
-          } else if (roleUpper === 'SUPER_ADMIN' || roleUpper === 'ADMIN') {
-            role = 'SUPER_ADMIN'
-          }
-        }
-
-        // Find department
+  const created = await prisma.$transaction(
+    async (tx) => {
+      let count = 0
+      for (const row of users) {
         let departmentId: string | null = null
-        if (userData.department) {
-          departmentId = departmentMap.get(userData.department.toLowerCase()) || null
-          
-          // Create department if it doesn't exist
+        if (row.department) {
+          const key = row.department.toLowerCase()
+          departmentId = departmentMap.get(key) ?? null
           if (!departmentId) {
-            const newDept = await prisma.department.create({
-              data: { name: userData.department },
-            })
-            departmentId = newDept.id
-            departmentMap.set(userData.department.toLowerCase(), newDept.id)
+            const dept = await tx.department.create({ data: { name: row.department } })
+            departmentId = dept.id
+            departmentMap.set(key, dept.id)
           }
         }
 
-        // Find manager
-        let reportsToId: string | null = null
-        if (userData.reportsTo) {
-          reportsToId = userMap.get(userData.reportsTo.toLowerCase()) || null
-        }
+        const reportsToId = row.reportsTo ? userMap.get(row.reportsTo) ?? null : null
 
-        // Validate phone if provided
-        let phone: string | null = userData.phone?.trim() || null
-        if (phone) {
-          const phoneDigits = phone.replace(/\D/g, '')
-          if (phoneDigits.length < 10) {
-            results.failed++
-            results.errors.push(`Phone number must be at least 10 digits for: ${userData.email}`)
-            continue
-          }
-        }
-
-        // Create user
-        const newUser = await prisma.user.create({
+        const newUser = await tx.user.create({
           data: {
-            name: userData.name.trim(),
-            email: userData.email.toLowerCase().trim(),
-            role,
+            name: row.name,
+            email: row.email,
+            role: parseRole(row.role),
             departmentId,
             reportsToId,
-            title: userData.title?.trim() || null,
-            phone,
+            title: row.title || null,
+            phone: row.phone || null,
           },
         })
-
-        // Add to map for subsequent lookups
-        userMap.set(userData.email.toLowerCase(), newUser.id)
-        results.success++
-      } catch (error: unknown) {
-        results.failed++
-        results.errors.push(`Failed to import ${userData.email}: ${error instanceof Error ? error.message : 'Unknown error'}`)
+        userMap.set(row.email, newUser.id)
+        count++
       }
-    }
+      return count
+    },
+    { timeout: 60_000 }
+  )
 
-    // Log the import
-    await logBulkImport(user.id, 'User', results.success, {
-      failed: results.failed,
-      errors: results.errors.slice(0, 10), // Keep first 10 errors
-    })
+  const results = { success: created, failed: 0, errors: [] as string[] }
 
-    return NextResponse.json(results)
-  } catch (error) {
-    console.error('Error importing users:', error)
-    return NextResponse.json({ error: 'Failed to import users' }, { status: 500 })
-  }
-}
+  await logBulkImport(user.id, 'User', results.success, { failed: results.failed, errors: results.errors })
+
+  return NextResponse.json(results)
+})

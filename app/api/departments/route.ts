@@ -1,45 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAdmin, handleApiError } from '@/lib/auth-helpers'
+import { ADMIN, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { logDepartmentCreated } from '@/lib/audit'
+import { departmentSchema } from '@/lib/validation/users'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(request: NextRequest) {
-  try {
-    await requireAdmin()
-    const departments = await prisma.department.findMany({
-      include: {
-        _count: {
-          select: { users: true },
-        },
-      },
-      orderBy: { name: 'asc' },
-    })
-    return NextResponse.json(departments)
-  } catch (error) {
-    return handleApiError(error)
-  }
-}
+// GET /api/departments - all departments with member counts (admin only)
+export const GET = withApiAuth(ADMIN, async () => {
+  const departments = await prisma.department.findMany({
+    include: { _count: { select: { users: true } } },
+    orderBy: { name: 'asc' },
+  })
+  return NextResponse.json(departments)
+})
 
-export async function POST(request: NextRequest) {
-  try {
-    const admin = await requireAdmin()
-    const body = await request.json()
-    const { name } = body
+// POST /api/departments (admin only). Duplicate name -> 409 via wrapper.
+export const POST = withApiAuth(ADMIN, async (req: NextRequest, { user: admin }) => {
+  const { name } = await parseBody(req, departmentSchema)
 
-    const department = await prisma.department.create({
-      data: { name },
-    })
+  const department = await prisma.department.create({ data: { name } })
 
-    // Audit log
-    await logDepartmentCreated(admin.id, department.id, { name })
+  await logDepartmentCreated(admin.id, department.id, { name })
 
-    return NextResponse.json(department)
-  } catch (error: unknown) {
-    if (error && typeof error === 'object' && 'code' in error && (error as { code: string }).code === 'P2002') {
-      return NextResponse.json({ error: 'Department with this name already exists' }, { status: 400 })
-    }
-    return NextResponse.json({ error: 'Failed to create department' }, { status: 500 })
-  }
-}
+  return NextResponse.json(department, { status: 201 })
+})

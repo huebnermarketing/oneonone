@@ -1,85 +1,61 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
-import { UserRole } from '@prisma/client'
 import { randomBytes } from 'crypto'
+import { ApiError, parseBody, withPublicRoute } from '@/lib/api'
+import { prisma } from '@/lib/prisma'
+import { checkRateLimit } from '@/lib/rate-limit'
+import { testLoginSchema } from '@/lib/validation/misc'
 
 export const dynamic = 'force-dynamic'
 
-export async function POST(request: NextRequest) {
-  // Block in production unless explicitly enabled
-  if (
-    process.env.NODE_ENV === 'production' &&
-    process.env.ENABLE_TEST_LOGIN !== 'true'
-  ) {
-    return NextResponse.json({ error: 'Not available' }, { status: 404 })
+const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60 // 30 days
+
+/**
+ * POST /api/auth/test-login { role }
+ * Dev-only: finds/creates a @test.com user for the role and sets a real NextAuth session cookie.
+ * Disabled in production unless ENABLE_TEST_LOGIN=true.
+ */
+export const POST = withPublicRoute(async (req: NextRequest) => {
+  if (process.env.NODE_ENV === 'production' && process.env.ENABLE_TEST_LOGIN !== 'true') {
+    throw new ApiError(404, 'Not available')
   }
 
-  try {
-    const { role } = await request.json()
+  const { allowed } = checkRateLimit(req, 'auth')
+  if (!allowed) throw new ApiError(429, 'Too many requests')
 
-    if (!role || !['EMPLOYEE', 'REPORTER', 'SUPER_ADMIN'].includes(role)) {
-      return NextResponse.json({ error: 'Invalid role' }, { status: 400 })
-    }
+  const { role } = await parseBody(req, testLoginSchema)
+  const email = `test-${role.toLowerCase()}@test.com`
 
-    // Find or create a test user for this role
-    let user = await prisma.user.findFirst({
-      where: {
-        email: `test-${role.toLowerCase()}@test.com`,
-        role: role as UserRole,
-      },
+  let user = await prisma.user.findFirst({ where: { email, role } })
+  if (!user) {
+    user = await prisma.user.create({
+      data: { email, name: `Test ${role.replace('_', ' ')}`, role, isActive: true },
     })
-
-    if (!user) {
-      // Create test user if doesn't exist
-      user = await prisma.user.create({
-        data: {
-          email: `test-${role.toLowerCase()}@test.com`,
-          name: `Test ${role.replace('_', ' ')}`,
-          role: role as UserRole,
-          isActive: true,
-        },
-      })
-    }
-
-    // Create a session token compatible with NextAuth
-    const sessionToken = randomBytes(32).toString('base64url')
-
-    // Store session in database (NextAuth format)
-    await prisma.session.create({
-      data: {
-        sessionToken,
-        userId: user.id,
-        expires: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000), // 30 days
-      },
-    })
-
-    // Create response
-    const response = NextResponse.json({
-      success: true,
-      user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-      },
-    })
-
-    // Set NextAuth session cookie
-    const cookieName = process.env.NODE_ENV === 'production' 
-      ? '__Secure-next-auth.session-token' 
-      : 'next-auth.session-token'
-
-    response.cookies.set(cookieName, sessionToken, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 60 * 60, // 30 days
-      path: '/',
-    })
-
-    return response
-  } catch (error) {
-    console.error('Test login error:', error)
-    return NextResponse.json({ error: 'Failed to login' }, { status: 500 })
   }
-}
+
+  // Session token in NextAuth's database-session format
+  const sessionToken = randomBytes(32).toString('base64url')
+  await prisma.session.create({
+    data: {
+      sessionToken,
+      userId: user.id,
+      expires: new Date(Date.now() + SESSION_MAX_AGE_SECONDS * 1000),
+    },
+  })
+
+  const response = NextResponse.json({
+    success: true,
+    user: { id: user.id, email: user.email, name: user.name, role: user.role },
+  })
+
+  const cookieName =
+    process.env.NODE_ENV === 'production' ? '__Secure-next-auth.session-token' : 'next-auth.session-token'
+  response.cookies.set(cookieName, sessionToken, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    maxAge: SESSION_MAX_AGE_SECONDS,
+    path: '/',
+  })
+
+  return response
+})

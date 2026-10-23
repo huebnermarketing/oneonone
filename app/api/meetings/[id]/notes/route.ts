@@ -1,90 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getCurrentUser } from '@/lib/auth-helpers'
+import { notFound, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
-import { UserRole } from '@prisma/client'
+import { assertAccess, canManageMeeting, canViewNotes } from '@/lib/meeting-access'
+import { logMeetingUpdated } from '@/lib/audit'
+import { meetingNotesSchema } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
+const select = { id: true, notes: true, employeeId: true, reporterId: true } as const
 
-    const meeting = await prisma.meeting.findUnique({
-      where: { id: params.id },
-      select: {
-        id: true,
-        notes: true,
-        employeeId: true,
-        reporterId: true,
-      },
-    })
+/** GET — reporter/admin always; employee when the employeeCanViewNotes policy allows. */
+export const GET = withApiAuth(async (_req: NextRequest, { user, params }) => {
+  const meeting = await prisma.meeting.findUnique({ where: { id: params.id }, select })
+  if (!meeting) throw notFound('Meeting')
+  assertAccess(await canViewNotes(user, meeting))
+  return NextResponse.json({ notes: meeting.notes })
+})
 
-    if (!meeting) {
-      return NextResponse.json({ error: 'Meeting not found' }, { status: 404 })
-    }
+/** PATCH — reporter/admin only. */
+export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
+  const { notes } = await parseBody(req, meetingNotesSchema)
 
-    // Authorization
-    const isParticipant = meeting.employeeId === user.id || meeting.reporterId === user.id
-    const isAdmin = user.role === UserRole.SUPER_ADMIN
-    if (!isParticipant && !isAdmin) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
+  const meeting = await prisma.meeting.findUnique({ where: { id: params.id }, select })
+  if (!meeting) throw notFound('Meeting')
+  assertAccess(canManageMeeting(user, meeting), 'Only the reporter or an admin can edit notes')
 
-    return NextResponse.json({ notes: meeting.notes })
-  } catch (error) {
-    console.error('Error fetching meeting notes:', error)
-    return NextResponse.json({ error: 'Failed to fetch notes' }, { status: 500 })
-  }
-}
-
-export async function PATCH(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const user = await getCurrentUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const body = await request.json()
-    const { notes } = body
-
-    const meeting = await prisma.meeting.findUnique({
-      where: { id: params.id },
-      select: {
-        id: true,
-        employeeId: true,
-        reporterId: true,
-      },
-    })
-
-    if (!meeting) {
-      return NextResponse.json({ error: 'Meeting not found' }, { status: 404 })
-    }
-
-    // Only reporter or admin can edit notes
-    const isReporter = meeting.reporterId === user.id
-    const isAdmin = user.role === UserRole.SUPER_ADMIN
-    if (!isReporter && !isAdmin) {
-      return NextResponse.json({ error: 'Only the reporter can edit meeting notes' }, { status: 403 })
-    }
-
-    const updated = await prisma.meeting.update({
-      where: { id: params.id },
-      data: { notes },
-      select: { id: true, notes: true },
-    })
-
-    return NextResponse.json(updated)
-  } catch (error) {
-    console.error('Error updating meeting notes:', error)
-    return NextResponse.json({ error: 'Failed to update notes' }, { status: 500 })
-  }
-}
+  const updated = await prisma.meeting.update({
+    where: { id: params.id },
+    data: { notes },
+    select: { id: true, notes: true },
+  })
+  await logMeetingUpdated(user.id, params.id, { notes: 'updated' })
+  return NextResponse.json(updated)
+})

@@ -55,6 +55,8 @@ interface TranscriptViewerProps {
   }
   employeeId?: string
   reporterId?: string
+  /** false = read-only view (employee); hides delete and add-to-todo */
+  canManage?: boolean
 }
 
 const languageNames: Record<string, string> = {
@@ -65,7 +67,7 @@ const languageNames: Record<string, string> = {
   ta: 'Tamil',
 }
 
-export function TranscriptViewer({ recording, employeeId, reporterId }: TranscriptViewerProps) {
+export function TranscriptViewer({ recording, employeeId, reporterId, canManage = true }: TranscriptViewerProps) {
   const router = useRouter()
   const { toastError } = useToast()
   const confirm = useConfirm()
@@ -231,7 +233,7 @@ export function TranscriptViewer({ recording, employeeId, reporterId }: Transcri
             <Volume2 className="w-4 h-4" />
             {formatDuration(recording.duration)}
           </div>
-          <button
+          {canManage && <button
             onClick={handleDelete}
             disabled={isDeleting}
             className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50"
@@ -242,7 +244,7 @@ export function TranscriptViewer({ recording, employeeId, reporterId }: Transcri
             ) : (
               <Trash2 className="w-4 h-4" />
             )}
-          </button>
+          </button>}
         </div>
       </div>
 
@@ -366,7 +368,7 @@ export function TranscriptViewer({ recording, employeeId, reporterId }: Transcri
                             <Check className="w-4 h-4" />
                             Added
                           </span>
-                        ) : (
+                        ) : canManage ? (
                           <button
                             onClick={() => handleAddTodo(todo, i)}
                             disabled={addingTodo === i}
@@ -384,7 +386,7 @@ export function TranscriptViewer({ recording, employeeId, reporterId }: Transcri
                               </>
                             )}
                           </button>
-                        )}
+                        ) : null}
                       </div>
                     </div>
                   </div>

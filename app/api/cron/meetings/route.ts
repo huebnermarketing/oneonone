@@ -1,25 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { notifyMeetingProposed, notifyMeetingReminder, notifyFormReminder } from '@/lib/notifications'
-import { sendMeetingProposalEmail, sendMeetingReminderEmail, sendFormReminderEmail } from '@/lib/email'
+import { notifyMeetingProposed, notifyMeetingReminder, notifyFormReminder, notifyMeetingAccepted } from '@/lib/notifications'
+import { sendMeetingProposalEmail, sendMeetingReminderEmail, sendFormReminderEmail, sendMeetingAcceptedEmail } from '@/lib/email'
+import { createCalendarEvent, isCalendarEnabled } from '@/lib/google-calendar'
 import { advanceToNextOccurrence } from '@/lib/recurring-dates'
+import { getPolicies } from '@/lib/settings'
+import { checkRateLimit } from '@/lib/rate-limit'
+import { DEFAULT_TIMEZONE } from '@/lib/constants'
 
 export const dynamic = 'force-dynamic'
 
-const FALLBACK_TZ = 'Asia/Kolkata'
+const FALLBACK_TZ = DEFAULT_TIMEZONE
 const LOOK_AHEAD_MS = 7 * 24 * 60 * 60 * 1000 // generate meetings 7 days before they're due
 
 // This endpoint should be called by a cron job (e.g., every hour)
 // Set up a cron job to call: POST /api/cron/meetings with header: x-cron-secret: YOUR_SECRET
 export async function POST(request: NextRequest) {
-  // Verify cron secret — required in production
-  const cronSecret = request.headers.get('x-cron-secret')
-  if (!process.env.CRON_SECRET) {
-    if (process.env.NODE_ENV === 'production') {
-      console.error('CRON_SECRET env var is not set — cron endpoint is disabled in production')
-      return NextResponse.json({ error: 'Cron not configured' }, { status: 503 })
-    }
-  } else if (cronSecret !== process.env.CRON_SECRET) {
+  // Verify cron secret — always required (set CRON_SECRET in .env, including locally)
+  const expected = process.env.CRON_SECRET
+  if (!expected) {
+    console.error('CRON_SECRET env var is not set — cron endpoint is disabled')
+    return NextResponse.json({ error: 'Cron not configured' }, { status: 503 })
+  }
+  if (request.headers.get('x-cron-secret') !== expected) {
+    const rl = checkRateLimit(request, 'auth')
+    if (!rl.allowed) return NextResponse.json({ error: 'Too many requests' }, { status: 429 })
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
@@ -139,7 +144,6 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
         // Recurring series: 1-year event is created on accept; only create single event when no series exists
         if (!schedule.googleRecurringEventId) {
           try {
-            const { createCalendarEvent, isCalendarEnabled } = await import('@/lib/google-calendar')
             const calendarEnabled = await isCalendarEnabled(schedule.reporterId)
             if (calendarEnabled) {
               await createCalendarEvent(
@@ -159,7 +163,6 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
 
         // Notify employee about the scheduled meeting
         try {
-          const { sendMeetingAcceptedEmail } = await import('@/lib/email')
           await sendMeetingAcceptedEmail(
             schedule.employee.email,
             schedule.employee.name,
@@ -172,7 +175,6 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
         }
 
         try {
-          const { notifyMeetingAccepted } = await import('@/lib/notifications')
           await notifyMeetingAccepted(
             schedule.employeeId,
             schedule.reporter.name || 'Your manager',
@@ -218,19 +220,13 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
 
 async function sendMeetingReminders(results: { recurringMeetingsCreated: number; reminders24hSent: number; reminders1hSent: number; errors: string[] }) {
   const now = new Date()
-  const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000)
-  const in1h = new Date(now.getTime() + 60 * 60 * 1000)
+  // Windows come from Admin -> Settings -> Policies. The DB flags keep their historical names
+  // (reminder24hSent = first reminder, reminderSent = short-notice reminder).
+  const { enableEmailReminders, reminderHoursBefore, shortReminderHoursBefore } = await getPolicies()
+  const in24h = new Date(now.getTime() + reminderHoursBefore * 60 * 60 * 1000)
+  const in1h = new Date(now.getTime() + shortReminderHoursBefore * 60 * 60 * 1000)
 
-  // Get system settings for reminder preferences
-  const settings = await prisma.systemSettings.findUnique({
-    where: { id: 'system' },
-  })
-
-  if (settings && !settings.enableEmailReminders) {
-    return // Reminders disabled
-  }
-
-  // 24-hour reminders
+  // First reminder (email + in-app)
   const meetings24h = await prisma.meeting.findMany({
     where: {
       status: 'SCHEDULED',
@@ -254,17 +250,20 @@ async function sendMeetingReminders(results: { recurringMeetingsCreated: number;
         meeting.reporter.name || 'your manager',
         meeting.meetingDate,
         meeting.id,
-        24
+        reminderHoursBefore
       )
       await notifyMeetingReminder(
         meeting.reporterId,
         meeting.employee.name || 'your team member',
         meeting.meetingDate,
         meeting.id,
-        24
+        reminderHoursBefore
       )
 
-      // Send reminder emails to both parties
+      // Send reminder emails to both parties (unless disabled by policy)
+      if (!enableEmailReminders) {
+        // fallthrough to marking as sent
+      } else {
       try {
         await sendMeetingReminderEmail(
           meeting.employee.email,
@@ -287,6 +286,7 @@ async function sendMeetingReminders(results: { recurringMeetingsCreated: number;
       } catch (emailError) {
         console.error('Failed to send reminder email to reporter:', emailError)
       }
+      }
 
       // Mark as sent
       await prisma.meeting.update({
@@ -301,7 +301,8 @@ async function sendMeetingReminders(results: { recurringMeetingsCreated: number;
     }
   }
 
-  // 1-hour reminders
+  // Short-notice reminder (in-app only); 0 disables it
+  if (shortReminderHoursBefore <= 0) return
   const meetings1h = await prisma.meeting.findMany({
     where: {
       status: 'SCHEDULED',
@@ -325,14 +326,14 @@ async function sendMeetingReminders(results: { recurringMeetingsCreated: number;
         meeting.reporter.name || 'your manager',
         meeting.meetingDate,
         meeting.id,
-        1
+        shortReminderHoursBefore
       )
       await notifyMeetingReminder(
         meeting.reporterId,
         meeting.employee.name || 'your team member',
         meeting.meetingDate,
         meeting.id,
-        1
+        shortReminderHoursBefore
       )
 
       // Mark as sent
@@ -351,15 +352,8 @@ async function sendMeetingReminders(results: { recurringMeetingsCreated: number;
 
 async function sendFormReminders(results: { formRemindersSent: number; errors: string[] }) {
   const now = new Date()
-  const in24h = new Date(now.getTime() + 24 * 60 * 60 * 1000)
-
-  const settings = await prisma.systemSettings.findUnique({
-    where: { id: 'system' },
-  })
-
-  if (settings && !settings.enableEmailReminders) {
-    return
-  }
+  const { reminderHoursBefore, enableEmailReminders } = await getPolicies()
+  const in24h = new Date(now.getTime() + reminderHoursBefore * 60 * 60 * 1000)
 
   const meetings = await prisma.meeting.findMany({
     where: {
@@ -380,7 +374,7 @@ async function sendFormReminders(results: { formRemindersSent: number; errors: s
   for (const meeting of meetings) {
     try {
       // Send form reminder email to the employee
-      try {
+      if (enableEmailReminders) try {
         await sendFormReminderEmail(
           meeting.employee.email,
           meeting.employee.name,

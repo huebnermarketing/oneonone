@@ -1,4 +1,6 @@
-# API Reference (as implemented, commit `a26e431`)
+# API Reference
+
+> **Conventions (since `refactor/api-hardening`)**: every handler is wrapped in `withApiAuth(roles?)` / `withPublicRoute`; bodies and query strings are validated with zod (`lib/validation/*`) — invalid input returns `400 { error: 'Validation failed', details: [{path, message}] }`; unauthenticated → 401, wrong role/ownership → 403, unknown id → 404, duplicates/conflicts → 409, rate limit → 429. Create endpoints return 201. Response payload shapes below are unchanged unless noted in the **Changes** section at the end.
 
 All handlers live under `app/api/**/route.ts`, export `dynamic = 'force-dynamic'`, and return `{ error: string }` on failure unless noted. "Auth" is what the code enforces, not the intent. Roles: `EMPLOYEE`, `REPORTER`, `SUPER_ADMIN` (abbrev. ADMIN). "Participant" = meeting `employeeId` or `reporterId`.
 
@@ -123,3 +125,29 @@ All handlers live under `app/api/**/route.ts`, export `dynamic = 'force-dynamic'
 ## Validation status
 
 No route uses zod. Routes that accept unvalidated enums/dates/ids and will 500 on bad input: `meetings` POST/PATCH/suggest/notes, `todos` POST/PATCH, `users` POST/PATCH, `departments` POST, `recurring-schedules` POST/PATCH, `settings` PUT, `admin/backup|restore|audit-logs`, `dashboard/widgets` PATCH, `recording/process`, `notifications`/`recordings` pagination params (NaN). See `REFACTOR_BACKLOG.md` §2.
+
+
+## Changes in `refactor/api-hardening`
+
+| Endpoint | Change |
+|---|---|
+| `POST /api/meetings/[id]/cancel` | **New.** `{reason?}`. PROPOSED/SCHEDULED → CANCELLED; allowed per `cancelPolicy` (admin always). Deletes calendar event, notifies + emails other party. |
+| `PATCH /api/meetings/[id]` | `status` accepts only `COMPLETED` (→ `lib/meeting-state.completeMeeting`, SCHEDULED only). `CANCELLED` is rejected by the schema — use `/cancel`. |
+| `POST /api/meetings/[id]/suggest` | Now runs the same 30-min conflict check as create (409). |
+| `GET /api/meetings/[id]/recording`, `/recording/stream` | Employee of the meeting may read when `employeeCanViewRecording` is on. DELETE/presign/upload/process stay reporter/admin. |
+| `GET /api/meetings/[id]/notes` | Employee may read when `employeeCanViewNotes` is on (default on). |
+| `GET /api/todos` | REPORTER: assigned to / created by self or direct reports (was: all todos). |
+| `POST /api/todos` | `assignedToId` must be self, a direct report, or own manager; `meetingId` must be a meeting you can view. |
+| `PATCH /api/todos/[id]` | Accepts `title`/`description` (creator/admin only). |
+| `PATCH /api/profile` | `reportsToId` / `departmentId` are ignored (schema strips them). |
+| `GET/PUT /api/settings` | Policy fields added: `requireFormBeforeComplete`, `cancelPolicy`, `employeeCanViewRecording`, `employeeCanViewNotes`, `enableEmailReminders`, `reminderHoursBefore`, `shortReminderHoursBefore`. |
+| `POST /api/admin/clear-data` | Requires `confirm: <clearType>`; transactional; audited; also deletes recurring schedules, attachments, notifications when clearing meetings. |
+| `POST /api/admin/import-users` | All-or-nothing: any invalid row → 400 `{error, details}` and nothing inserted. |
+| `POST /api/admin/restore` | Invalid `role` values fall back to EMPLOYEE and are reported in `errors[]`. |
+| `GET /api/admin/recordings` | Paginated: `?limit&offset` → `{recordings, total, limit, offset}`. |
+| `GET /api/recurring-schedules` | SUPER_ADMIN sees all active schedules; REPORTER_OR_ADMIN only (EMPLOYEE → 403). |
+| `GET /api/meetings/availability*` | REPORTER may only query self / direct reports (403 otherwise). |
+| `GET /api/reports` | REPORTER scope (todos, totalEmployees) = own team. |
+| `POST /api/cron/meetings` | `CRON_SECRET` required in every environment; reminder windows from policies. |
+| `GET/PATCH/DELETE /api/dashboard/widgets` | **Removed** (dead feature). |
+| `PATCH /api/notifications/[id]` | 404 when the notification is not yours / does not exist. |

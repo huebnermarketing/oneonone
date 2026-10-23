@@ -1,114 +1,155 @@
+import { CancelPolicy } from '@prisma/client'
 import { prisma } from './prisma'
 import { encrypt, decrypt } from './encryption'
 
 export interface SystemSettings {
+  // AI
   openaiApiKey: string | null
   openaiModel: string
   whisperModel: string
+  // Storage
   awsRegion: string | null
   awsAccessKeyId: string | null
   awsSecretKey: string | null
   awsS3Bucket: string | null
   maxRecordingMins: number
-  /** When true, meeting cannot be marked Completed until the check-in form is submitted. */
+  // Policies (Admin -> Settings -> Policies)
+  /** Meeting cannot be marked Completed until the employee submitted the check-in form. */
   requireFormBeforeComplete: boolean
+  /** Who may cancel a single PROPOSED/SCHEDULED meeting. SUPER_ADMIN always can. */
+  cancelPolicy: CancelPolicy
+  /** Employee can open their own meeting's recording, transcript and AI analysis. */
+  employeeCanViewRecording: boolean
+  /** Employee can read the reporter's free-text meeting notes. */
+  employeeCanViewNotes: boolean
+  /** Master switch for reminder emails (in-app reminders are always created). */
+  enableEmailReminders: boolean
+  /** First reminder, hours before the meeting (email + in-app). */
+  reminderHoursBefore: number
+  /** Second, short-notice reminder (in-app only). 0 disables it. */
+  shortReminderHoursBefore: number
 }
 
-// Cache settings for 5 minutes to avoid frequent DB calls
+export type PolicySettings = Pick<
+  SystemSettings,
+  | 'requireFormBeforeComplete'
+  | 'cancelPolicy'
+  | 'employeeCanViewRecording'
+  | 'employeeCanViewNotes'
+  | 'enableEmailReminders'
+  | 'reminderHoursBefore'
+  | 'shortReminderHoursBefore'
+>
+
+export const DEFAULT_POLICIES: PolicySettings = {
+  requireFormBeforeComplete: true,
+  cancelPolicy: CancelPolicy.REPORTER_AND_ADMIN,
+  employeeCanViewRecording: false,
+  employeeCanViewNotes: true,
+  enableEmailReminders: true,
+  reminderHoursBefore: 24,
+  shortReminderHoursBefore: 1,
+}
+
+// In-process cache (5 minutes). Cleared on every updateSettings().
 let cachedSettings: SystemSettings | null = null
-let cacheTimestamp: number = 0
-const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
+let cacheTimestamp = 0
+const CACHE_TTL = 5 * 60 * 1000
+
+function envDefaults(): SystemSettings {
+  return {
+    openaiApiKey: process.env.OPENAI_API_KEY || null,
+    openaiModel: 'gpt-4o',
+    whisperModel: 'whisper-1',
+    awsRegion: process.env.AWS_REGION || null,
+    awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || null,
+    awsSecretKey: process.env.AWS_SECRET_ACCESS_KEY || null,
+    awsS3Bucket: process.env.AWS_S3_BUCKET || null,
+    maxRecordingMins: 25,
+    ...DEFAULT_POLICIES,
+  }
+}
+
+function safeDecrypt(value: string | null, fallback: string | null): string | null {
+  if (!value) return fallback
+  try {
+    return decrypt(value)
+  } catch (err) {
+    // Happens when NEXTAUTH_SECRET/ENCRYPTION_SECRET changed after the value was stored.
+    console.error('[settings] Failed to decrypt a stored secret — was the encryption secret rotated?', err)
+    return fallback
+  }
+}
 
 export async function getSettings(): Promise<SystemSettings> {
-  // Check cache
   if (cachedSettings && Date.now() - cacheTimestamp < CACHE_TTL) {
     return cachedSettings
   }
 
-  const settings = await prisma.systemSettings.findUnique({
-    where: { id: 'system' },
-  })
+  const row = await prisma.systemSettings.findUnique({ where: { id: 'system' } })
+  const defaults = envDefaults()
 
-  if (!settings) {
-    // Return defaults from environment variables
-    return {
-      openaiApiKey: process.env.OPENAI_API_KEY || null,
-      openaiModel: 'gpt-4o',
-      whisperModel: 'whisper-1',
-      awsRegion: process.env.AWS_REGION || null,
-      awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || null,
-      awsSecretKey: process.env.AWS_SECRET_ACCESS_KEY || null,
-      awsS3Bucket: process.env.AWS_S3_BUCKET || null,
-      maxRecordingMins: 25,
-      requireFormBeforeComplete: true,
-    }
-  }
+  // Precedence: DB value wins over env, per field.
+  const resolved: SystemSettings = row
+    ? {
+        openaiApiKey: safeDecrypt(row.openaiApiKey, defaults.openaiApiKey),
+        openaiModel: row.openaiModel,
+        whisperModel: row.whisperModel,
+        awsRegion: row.awsRegion || defaults.awsRegion,
+        awsAccessKeyId: row.awsAccessKeyId || defaults.awsAccessKeyId,
+        awsSecretKey: safeDecrypt(row.awsSecretKey, defaults.awsSecretKey),
+        awsS3Bucket: row.awsS3Bucket || defaults.awsS3Bucket,
+        maxRecordingMins: row.maxRecordingMins,
+        requireFormBeforeComplete: row.requireFormBeforeComplete,
+        cancelPolicy: row.cancelPolicy,
+        employeeCanViewRecording: row.employeeCanViewRecording,
+        employeeCanViewNotes: row.employeeCanViewNotes,
+        enableEmailReminders: row.enableEmailReminders,
+        reminderHoursBefore: row.reminderHoursBefore,
+        shortReminderHoursBefore: row.shortReminderHoursBefore,
+      }
+    : defaults
 
-  // Decrypt sensitive fields
-  const decryptedSettings: SystemSettings = {
-    openaiApiKey: settings.openaiApiKey ? decrypt(settings.openaiApiKey) : process.env.OPENAI_API_KEY || null,
-    openaiModel: settings.openaiModel,
-    whisperModel: settings.whisperModel,
-    awsRegion: settings.awsRegion || process.env.AWS_REGION || null,
-    awsAccessKeyId: settings.awsAccessKeyId || process.env.AWS_ACCESS_KEY_ID || null,
-    awsSecretKey: settings.awsSecretKey ? decrypt(settings.awsSecretKey) : process.env.AWS_SECRET_ACCESS_KEY || null,
-    awsS3Bucket: settings.awsS3Bucket || process.env.AWS_S3_BUCKET || null,
-    maxRecordingMins: settings.maxRecordingMins,
-    requireFormBeforeComplete: settings.requireFormBeforeComplete ?? true,
-  }
-
-  // Update cache
-  cachedSettings = decryptedSettings
+  cachedSettings = resolved
   cacheTimestamp = Date.now()
-
-  return decryptedSettings
+  return resolved
 }
 
-export async function updateSettings(updates: Partial<SystemSettings>): Promise<SystemSettings> {
-  // Encrypt sensitive fields if provided
-  const dataToUpdate: Record<string, string | number | boolean | null> = {}
+/** Convenience for the many call sites that only care about policies. */
+export async function getPolicies(): Promise<PolicySettings> {
+  const s = await getSettings()
+  return {
+    requireFormBeforeComplete: s.requireFormBeforeComplete,
+    cancelPolicy: s.cancelPolicy,
+    employeeCanViewRecording: s.employeeCanViewRecording,
+    employeeCanViewNotes: s.employeeCanViewNotes,
+    enableEmailReminders: s.enableEmailReminders,
+    reminderHoursBefore: s.reminderHoursBefore,
+    shortReminderHoursBefore: s.shortReminderHoursBefore,
+  }
+}
 
-  if (updates.openaiApiKey !== undefined) {
-    dataToUpdate.openaiApiKey = updates.openaiApiKey ? encrypt(updates.openaiApiKey) : null
-  }
-  if (updates.openaiModel !== undefined) {
-    dataToUpdate.openaiModel = updates.openaiModel
-  }
-  if (updates.whisperModel !== undefined) {
-    dataToUpdate.whisperModel = updates.whisperModel
-  }
-  if (updates.awsRegion !== undefined) {
-    dataToUpdate.awsRegion = updates.awsRegion
-  }
-  if (updates.awsAccessKeyId !== undefined) {
-    dataToUpdate.awsAccessKeyId = updates.awsAccessKeyId
-  }
-  if (updates.awsSecretKey !== undefined) {
-    dataToUpdate.awsSecretKey = updates.awsSecretKey ? encrypt(updates.awsSecretKey) : null
-  }
-  if (updates.awsS3Bucket !== undefined) {
-    dataToUpdate.awsS3Bucket = updates.awsS3Bucket
-  }
-  if (updates.maxRecordingMins !== undefined) {
-    dataToUpdate.maxRecordingMins = updates.maxRecordingMins
-  }
-  if (updates.requireFormBeforeComplete !== undefined) {
-    dataToUpdate.requireFormBeforeComplete = updates.requireFormBeforeComplete
+const SECRET_FIELDS = new Set<keyof SystemSettings>(['openaiApiKey', 'awsSecretKey'])
+
+export async function updateSettings(updates: Partial<SystemSettings>): Promise<SystemSettings> {
+  const data: Record<string, string | number | boolean | null> = {}
+
+  for (const [key, value] of Object.entries(updates) as [keyof SystemSettings, SystemSettings[keyof SystemSettings]][]) {
+    if (value === undefined) continue
+    if (SECRET_FIELDS.has(key)) {
+      data[key] = value ? encrypt(String(value)) : null
+    } else {
+      data[key] = value as string | number | boolean | null
+    }
   }
 
   await prisma.systemSettings.upsert({
     where: { id: 'system' },
-    create: {
-      id: 'system',
-      ...dataToUpdate,
-    },
-    update: dataToUpdate,
+    create: { id: 'system', ...data },
+    update: data,
   })
 
-  // Clear cache
-  cachedSettings = null
-  cacheTimestamp = 0
-
+  clearSettingsCache()
   return getSettings()
 }
 

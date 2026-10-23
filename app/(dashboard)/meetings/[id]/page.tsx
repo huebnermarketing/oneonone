@@ -1,6 +1,5 @@
 import { getCurrentUser } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
-import { canAccessEmployeeData } from '@/lib/auth-helpers'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { Calendar, User, FileText, CheckSquare, Clock, ArrowLeft, Mic, Video, MapPin, ExternalLink } from 'lucide-react'
@@ -14,6 +13,8 @@ import { TranscriptViewer } from './transcript-viewer'
 import { MeetingNotes } from './meeting-notes'
 import { FileAttachments } from './file-attachments'
 import { ProposalActions } from './proposal-actions'
+import { CancelMeetingButton } from './cancel-meeting-button'
+import { canCancel, canManageMeeting, canViewMeeting, canViewNotes, canViewRecording } from '@/lib/meeting-access'
 
 export default async function MeetingDetailPage({
   params,
@@ -47,18 +48,19 @@ export default async function MeetingDetailPage({
   // Type-safe access for meetingType/meetingLink (Prisma client may be generated from older schema on server)
   const meetingWithType = meeting as typeof meeting & { meetingType?: string; meetingLink?: string | null }
 
-  const canAccess = canAccessEmployeeData(
-    user.role,
-    user.id,
-    meeting.employeeId,
-    meeting.employee.reportsToId
-  )
+  // Participants (employee/reporter) and Super Admins only — a reporter who is the *employee*
+  // in this meeting is treated as the employee, not as a manager.
+  if (!canViewMeeting(user, meeting)) return notFound()
 
-  if (!canAccess) return notFound()
-
-  const isReporter = user.role === UserRole.REPORTER || user.role === UserRole.SUPER_ADMIN
-  const settings = isReporter ? await getSettings() : null
+  const isReporter = canManageMeeting(user, meeting)
   const isEmployee = user.id === meeting.employeeId
+  const settings = isReporter ? await getSettings() : null
+  const [canSeeRecording, canSeeNotes, mayCancel] = await Promise.all([
+    canViewRecording(user, meeting),
+    canViewNotes(user, meeting),
+    canCancel(user, meeting),
+  ])
+  const isCancellable = mayCancel && (meeting.status === 'PROPOSED' || meeting.status === 'SCHEDULED')
   const meetingDate = new Date(meeting.meetingDate)
   const isPast = meetingDate < new Date()
   const hasFormData = meeting.checkInPersonal || meeting.checkInProfessional
@@ -149,6 +151,9 @@ export default async function MeetingDetailPage({
               formSubmitted={formSubmitted}
               requireFormBeforeComplete={settings?.requireFormBeforeComplete ?? true}
             />
+          )}
+          {isCancellable && (
+            <CancelMeetingButton meetingId={meeting.id} otherPartyName={otherPartyName || 'the other participant'} />
           )}
           <span className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-full text-xs sm:text-sm font-medium ${
             meeting.status === 'COMPLETED'
@@ -257,26 +262,28 @@ export default async function MeetingDetailPage({
         </div>
       </div>
 
-      {/* Recording Section - Reporters & Super Admins, all statuses except CANCELLED */}
-      {isReporter && meeting.status !== 'CANCELLED' && (
+      {/* Recording Section - reporter/admin always; employee only when the policy allows (read-only) */}
+      {canSeeRecording && meeting.status !== 'CANCELLED' && (isReporter || meeting.recording?.status === 'COMPLETED') && (
         <div className="space-y-4">
           <h2 className="text-xl font-semibold text-dark-gray dark:text-white flex items-center gap-2">
             <Mic className="w-5 h-5" />
             Meeting Recording
           </h2>
-          {meetingWithType.meetingType === 'ZOOM' && meetingWithType.meetingLink && (
+          {isReporter && meetingWithType.meetingType === 'ZOOM' && meetingWithType.meetingLink && (
             <p className="text-sm text-medium-gray">
               For Zoom calls, add the Fathom recorder to the meeting; the transcript will sync here automatically after the call ends.
             </p>
           )}
-          <MeetingRecorder
-            meetingId={meeting.id}
-            hasExistingRecording={!!meeting.recording}
-            recordingStatus={meeting.recording?.status}
-            errorMessage={meeting.recording?.errorMessage}
-            meetingStatus={meeting.status}
-            maxRecordingMins={settings?.maxRecordingMins ?? 25}
-          />
+          {isReporter && (
+            <MeetingRecorder
+              meetingId={meeting.id}
+              hasExistingRecording={!!meeting.recording}
+              recordingStatus={meeting.recording?.status}
+              errorMessage={meeting.recording?.errorMessage}
+              meetingStatus={meeting.status}
+              maxRecordingMins={settings?.maxRecordingMins ?? 25}
+            />
+          )}
 
           {/* Transcript Viewer */}
           {meeting.recording && meeting.recording.status === 'COMPLETED' && (
@@ -297,17 +304,20 @@ export default async function MeetingDetailPage({
               }}
               employeeId={meeting.employeeId}
               reporterId={meeting.reporterId}
+              canManage={isReporter}
             />
           )}
         </div>
       )}
 
-      {/* Meeting Notes */}
-      <MeetingNotes
-        meetingId={meeting.id}
-        initialNotes={meeting.notes}
-        canEdit={isReporter}
-      />
+      {/* Meeting Notes - reporter/admin always; employee only when the policy allows */}
+      {canSeeNotes && (
+        <MeetingNotes
+          meetingId={meeting.id}
+          initialNotes={meeting.notes}
+          canEdit={isReporter}
+        />
+      )}
 
       {/* File Attachments */}
       <FileAttachments

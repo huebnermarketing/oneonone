@@ -1,108 +1,93 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAuth, handleApiError } from '@/lib/auth-helpers'
+import { forbidden, notFound, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
-import { TodoPriority, TodoStatus } from '@prisma/client'
 import { logTodoCreated } from '@/lib/audit'
+import { getTeamUserIds, canActOnUser } from '@/lib/team'
+import { canViewMeeting } from '@/lib/meeting-access'
+import { sendTodoAssignedEmail } from '@/lib/email'
+import { notifyTodoAssigned } from '@/lib/notifications'
+import { createTodoSchema } from '@/lib/validation/todos'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET(request: NextRequest) {
-  try {
-    const user = await requireAuth()
+const todoInclude = {
+  createdBy: { select: { name: true } },
+  assignedTo: { select: { name: true, email: true } },
+  meeting: { select: { id: true, meetingDate: true } },
+} as const
 
-    let todos
+/**
+ * GET /api/todos
+ * EMPLOYEE: todos assigned to or created by me.
+ * REPORTER: todos assigned to or created by me or my direct reports.
+ * SUPER_ADMIN: everything.
+ */
+export const GET = withApiAuth(async (_req: NextRequest, { user }) => {
+  const teamIds = await getTeamUserIds(user)
+  const todos = await prisma.todo.findMany({
+    where: teamIds ? { OR: [{ assignedToId: { in: teamIds } }, { createdById: { in: teamIds } }] } : undefined,
+    include: todoInclude,
+    orderBy: [{ status: 'asc' }, { dueDate: 'asc' }, { priority: 'desc' }],
+  })
+  return NextResponse.json(todos)
+})
 
-    if (user.role === 'EMPLOYEE') {
-      todos = await prisma.todo.findMany({
-        where: { assignedToId: user.id },
-        include: {
-          createdBy: { select: { name: true } },
-          assignedTo: { select: { name: true, email: true } },
-          meeting: { select: { id: true, meetingDate: true } },
-        },
-        orderBy: [{ status: 'asc' }, { dueDate: 'asc' }, { priority: 'desc' }],
-      })
-    } else {
-      todos = await prisma.todo.findMany({
-        include: {
-          createdBy: { select: { name: true } },
-          assignedTo: { select: { name: true, email: true } },
-          meeting: { select: { id: true, meetingDate: true } },
-        },
-        orderBy: [{ status: 'asc' }, { dueDate: 'asc' }, { priority: 'desc' }],
-      })
-    }
+/**
+ * POST /api/todos
+ * Assignee must be yourself, a direct report, or your own manager. A linked meeting must be one you can view.
+ */
+export const POST = withApiAuth(async (req: NextRequest, { user }) => {
+  const body = await parseBody(req, createTodoSchema)
 
-    return NextResponse.json(todos)
-  } catch (error) {
-    return handleApiError(error)
+  if (!(await canActOnUser(user, body.assignedToId))) {
+    throw forbidden('You can only assign tasks to yourself, your direct reports, or your manager')
   }
-}
 
-export async function POST(request: NextRequest) {
-  try {
-    const user = await requireAuth()
-    const body = await request.json()
-    const { title, description, assignedToId, meetingId, dueDate, priority } = body
-
-    const todo = await prisma.todo.create({
-      data: {
-        title,
-        description: description || null,
-        assignedToId: assignedToId || user.id,
-        createdById: user.id,
-        meetingId: meetingId || null,
-        dueDate: dueDate ? new Date(dueDate) : null,
-        priority: (priority as TodoPriority) || 'MEDIUM',
-        status: 'NOT_STARTED',
-      },
-      include: {
-        assignedTo: { select: { name: true, email: true } },
-        createdBy: { select: { name: true, email: true } },
-        meeting: { select: { id: true, meetingDate: true } },
-      },
+  if (body.meetingId) {
+    const meeting = await prisma.meeting.findUnique({
+      where: { id: body.meetingId },
+      select: { id: true, employeeId: true, reporterId: true },
     })
-
-    // Audit log
-    await logTodoCreated(user.id, todo.id, {
-      title: todo.title,
-      assignedTo: todo.assignedTo?.name,
-      priority: todo.priority,
-    })
-
-    // Send email + in-app notification if assigned to someone else
-    if (todo.assignedToId !== user.id && todo.assignedTo?.email) {
-      try {
-        const { sendTodoAssignedEmail } = await import('@/lib/email')
-        await sendTodoAssignedEmail(
-          todo.assignedTo.email,
-          todo.assignedTo.name,
-          todo.title,
-          todo.description,
-          todo.dueDate,
-          todo.createdBy!.name,
-          todo.id
-        )
-      } catch (error) {
-        console.error('Failed to send email notification:', error)
-      }
-
-      try {
-        const { notifyTodoAssigned } = await import('@/lib/notifications')
-        await notifyTodoAssigned(
-          todo.assignedToId,
-          todo.createdBy!.name,
-          todo.title,
-          todo.id
-        )
-      } catch (error) {
-        console.error('Failed to create notification:', error)
-      }
-    }
-
-    return NextResponse.json(todo)
-  } catch (error) {
-    console.error('Error creating todo:', error)
-    return NextResponse.json({ error: 'Failed to create todo' }, { status: 500 })
+    if (!meeting) throw notFound('Meeting')
+    if (!canViewMeeting(user, meeting)) throw forbidden('You cannot attach tasks to a meeting you are not part of')
   }
-}
+
+  const todo = await prisma.todo.create({
+    data: {
+      title: body.title,
+      description: body.description ?? null,
+      assignedToId: body.assignedToId,
+      createdById: user.id,
+      meetingId: body.meetingId ?? null,
+      dueDate: body.dueDate ?? null,
+      priority: body.priority,
+      status: 'NOT_STARTED',
+    },
+    include: { ...todoInclude, createdBy: { select: { name: true, email: true } } },
+  })
+
+  await logTodoCreated(user.id, todo.id, {
+    title: todo.title,
+    assignedTo: todo.assignedTo?.name,
+    priority: todo.priority,
+  })
+
+  if (todo.assignedToId !== user.id && todo.assignedTo?.email) {
+    await Promise.all([
+      sendTodoAssignedEmail(
+        todo.assignedTo.email,
+        todo.assignedTo.name,
+        todo.title,
+        todo.description,
+        todo.dueDate,
+        todo.createdBy.name,
+        todo.id
+      ).catch((e) => console.error('Failed to send todo email:', e)),
+      notifyTodoAssigned(todo.assignedToId, todo.createdBy.name, todo.title, todo.id).catch((e) =>
+        console.error('Failed to create todo notification:', e)
+      ),
+    ])
+  }
+
+  return NextResponse.json(todo, { status: 201 })
+})

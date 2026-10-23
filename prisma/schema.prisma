@@ -8,41 +8,40 @@ datasource db {
 }
 
 model User {
-  id                 String              @id @default(uuid())
-  email              String              @unique
-  name               String              @default("")
-  image              String?
-  emailVerified      DateTime?
-  avatar             String?
-  role               UserRole            @default(EMPLOYEE)
-  reportsToId        String?
-  departmentId       String?
-  isActive           Boolean             @default(true)
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
-  bio                String?
-  phone              String?
-  title              String?
-  country            String?
-  timeZone           String?
-  workDayStart       String?
-  workDayEnd         String?
+  id                           String              @id @default(uuid())
+  email                        String              @unique
+  name                         String              @default("")
+  image                        String?
+  emailVerified                DateTime?
+  avatar                       String?
+  role                         UserRole            @default(EMPLOYEE)
+  reportsToId                  String?
+  departmentId                 String?
+  isActive                     Boolean             @default(true)
+  createdAt                    DateTime            @default(now())
+  updatedAt                    DateTime            @updatedAt
+  bio                          String?
+  phone                        String?
+  title                        String?
+  country                      String?
+  timeZone                     String?
+  workDayStart                 String?
+  workDayEnd                   String?
   // Keka HR employee ID for leave/attendance integration
-  kekaEmployeeId     String?
-  accounts           Account[]
-  auditLogs          AuditLog[]
-  dashboardWidgets   DashboardWidget[]
-  meetingsAsEmployee Meeting[]           @relation("EmployeeMeetings")
-  meetingsAsReporter Meeting[]           @relation("ReporterMeetings")
-  notifications      Notification[]
-  recurringSchedules RecurringSchedule[] @relation("RecurringScheduleReporter")
+  kekaEmployeeId               String?
+  accounts                     Account[]
+  auditLogs                    AuditLog[]
+  meetingsAsEmployee           Meeting[]           @relation("EmployeeMeetings")
+  meetingsAsReporter           Meeting[]           @relation("ReporterMeetings")
+  notifications                Notification[]
+  recurringSchedules           RecurringSchedule[] @relation("RecurringScheduleReporter")
   recurringSchedulesAsEmployee RecurringSchedule[] @relation("RecurringScheduleEmployee")
-  sessions           Session[]
-  todosAssigned      Todo[]              @relation("AssignedTodos")
-  todosCreated       Todo[]              @relation("CreatedTodos")
-  department         Department?         @relation(fields: [departmentId], references: [id])
-  reportsTo          User?               @relation("ReportingHierarchy", fields: [reportsToId], references: [id])
-  directReports      User[]              @relation("ReportingHierarchy")
+  sessions                     Session[]
+  todosAssigned                Todo[]              @relation("AssignedTodos")
+  todosCreated                 Todo[]              @relation("CreatedTodos")
+  department                   Department?         @relation(fields: [departmentId], references: [id])
+  reportsTo                    User?               @relation("ReportingHierarchy", fields: [reportsToId], references: [id])
+  directReports                User[]              @relation("ReportingHierarchy")
 
   @@index([reportsToId])
   @@index([departmentId])
@@ -116,9 +115,9 @@ model Meeting {
   updatedAt                DateTime           @updatedAt
   notes                    String?
   recurringScheduleId      String?
-  meetingType               MeetingType       @default(IN_PERSON)
-  meetingLink               String?
-  zoomMeetingId             String?
+  meetingType              MeetingType        @default(IN_PERSON)
+  meetingLink              String?
+  zoomMeetingId            String?
   reminder24hSent          Boolean            @default(false)
   reminderSent             Boolean            @default(false)
   formReminderSent         Boolean            @default(false)
@@ -153,7 +152,7 @@ model Todo {
   updatedAt    DateTime     @updatedAt
   assignedTo   User         @relation("AssignedTodos", fields: [assignedToId], references: [id])
   createdBy    User         @relation("CreatedTodos", fields: [createdById], references: [id])
-  meeting      Meeting?     @relation(fields: [meetingId], references: [id])
+  meeting      Meeting?     @relation(fields: [meetingId], references: [id], onDelete: SetNull)
 
   @@index([assignedToId])
   @@index([createdById])
@@ -205,21 +204,30 @@ model MeetingRecording {
 }
 
 model SystemSettings {
-  id                        String   @id @default("system")
+  id                        String       @id @default("system")
   openaiApiKey              String?
-  openaiModel               String   @default("gpt-4o")
-  whisperModel              String   @default("whisper-1")
+  openaiModel               String       @default("gpt-4o")
+  whisperModel              String       @default("whisper-1")
   awsRegion                 String?
   awsAccessKeyId            String?
   awsSecretKey              String?
   awsS3Bucket               String?
-  maxRecordingMins          Int      @default(25)
-  createdAt                 DateTime @default(now())
-  updatedAt                 DateTime @updatedAt
-  enableEmailReminders      Boolean  @default(true)
-  reminderHoursBefore       Int      @default(24)
+  maxRecordingMins          Int          @default(25)
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
+  enableEmailReminders      Boolean      @default(true)
+  reminderHoursBefore       Int          @default(24)
+  // ---- Policies (Admin -> Settings -> Policies) ----
   // When true, meeting cannot be marked Completed until the check-in form is submitted
-  requireFormBeforeComplete Boolean  @default(true)
+  requireFormBeforeComplete Boolean      @default(true)
+  // Who may cancel a single PROPOSED/SCHEDULED meeting. SUPER_ADMIN always can.
+  cancelPolicy              CancelPolicy @default(REPORTER_AND_ADMIN)
+  // When true, the employee in a meeting can open its recording, transcript and AI analysis
+  employeeCanViewRecording  Boolean      @default(false)
+  // When true, the employee can open the meeting's free-text notes written by the reporter
+  employeeCanViewNotes      Boolean      @default(true)
+  // Hours before a meeting for the second (short-notice) reminder; the first is reminderHoursBefore
+  shortReminderHoursBefore  Int          @default(1)
 }
 
 model RecurringSchedule {
@@ -239,8 +247,8 @@ model RecurringSchedule {
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
   meetings               Meeting[]
-  reporter               User               @relation("RecurringScheduleReporter", fields: [reporterId], references: [id])
-  employee               User               @relation("RecurringScheduleEmployee", fields: [employeeId], references: [id])
+  reporter               User               @relation("RecurringScheduleReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  employee               User               @relation("RecurringScheduleEmployee", fields: [employeeId], references: [id], onDelete: Cascade)
 
   @@index([reporterId])
   @@index([employeeId])
@@ -279,21 +287,6 @@ model Attachment {
   @@index([meetingId])
 }
 
-model DashboardWidget {
-  id         String     @id @default(uuid())
-  userId     String
-  widgetType WidgetType
-  position   Int        @default(0)
-  isVisible  Boolean    @default(true)
-  config     Json?
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
-  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, widgetType])
-  @@index([userId])
-}
-
 model AuditLog {
   id         String      @id @default(uuid())
   userId     String
@@ -304,7 +297,7 @@ model AuditLog {
   ipAddress  String?
   userAgent  String?
   createdAt  DateTime    @default(now())
-  user       User        @relation(fields: [userId], references: [id])
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([action])
@@ -334,6 +327,12 @@ enum UserRole {
   EMPLOYEE
   REPORTER
   SUPER_ADMIN
+}
+
+enum CancelPolicy {
+  ADMIN_ONLY
+  REPORTER_AND_ADMIN
+  ANY_PARTICIPANT
 }
 
 enum MeetingType {
@@ -386,17 +385,6 @@ enum NotificationType {
   FORM_REMINDER
   RECORDING_READY
   SYSTEM
-}
-
-enum WidgetType {
-  UPCOMING_MEETINGS
-  PENDING_TODOS
-  RECENT_ACTIVITY
-  TEAM_OVERVIEW
-  QUICK_ACTIONS
-  MEETING_STATS
-  TODO_STATS
-  DEPARTMENT_SUMMARY
 }
 
 enum AuditAction {

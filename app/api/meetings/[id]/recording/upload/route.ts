@@ -1,94 +1,67 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireRole, canAccessEmployeeData } from '@/lib/auth-helpers'
+import { ApiError, REPORTER_OR_ADMIN, badRequest, notFound, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
+import { assertAccess, canManageMeeting } from '@/lib/meeting-access'
+import { checkRateLimit } from '@/lib/rate-limit'
 import { chunkKey, uploadToS3 } from '@/lib/s3'
-import { UserRole } from '@prisma/client'
 
 export const dynamic = 'force-dynamic'
 
 export const maxDuration = 300
 
-// POST — Upload a single audio chunk during recording
-export async function POST(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
+/** Read the multipart chunk. Oversized bodies surface as 413, anything else unparsable as 400. */
+async function readChunk(req: NextRequest): Promise<{ buffer: Buffer; sequence: number }> {
+  let formData: FormData
   try {
-    const user = await requireRole([UserRole.REPORTER, UserRole.SUPER_ADMIN])
-
-    const meeting = await prisma.meeting.findUnique({
-      where: { id: params.id },
-      include: { employee: true },
-    })
-    if (!meeting) {
-      return NextResponse.json({ error: 'Meeting not found' }, { status: 404 })
-    }
-
-    if (
-      !canAccessEmployeeData(user.role, user.id, meeting.employeeId, meeting.employee.reportsToId)
-    ) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
-    }
-
-    // Recording must already exist (started via /presign)
-    const recording = await prisma.meetingRecording.findUnique({
-      where: { meetingId: params.id },
-    })
-    if (!recording || !recording.audioKey) {
-      return NextResponse.json(
-        { error: 'No active recording session. Call start first.' },
-        { status: 400 }
-      )
-    }
-
-    // Parse form data
-    let formData: FormData
-    try {
-      formData = await request.formData()
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : ''
-      const tooLarge = /body|size|limit|413/i.test(msg)
-      return NextResponse.json(
-        { error: tooLarge ? 'Chunk too large' : 'Invalid request' },
-        { status: tooLarge ? 413 : 400 }
-      )
-    }
-
-    const file = formData.get('file') as File | null
-    const sequenceStr = formData.get('sequence') as string | null
-
-    if (!file || file.size === 0) {
-      return NextResponse.json({ error: 'No chunk data provided' }, { status: 400 })
-    }
-
-    const sequence = parseInt(sequenceStr || '0', 10)
-
-    // Read bytes
-    const buffer = Buffer.from(await file.arrayBuffer())
-
-    // Upload chunk to S3: {sessionKey}/chunk_0000.webm
-    const key = chunkKey(recording.audioKey, sequence)
-    await uploadToS3(buffer, key, 'audio/webm')
-
-    // Accumulate file size in DB
-    await prisma.meetingRecording.update({
-      where: { meetingId: params.id },
-      data: {
-        fileSize: (recording.fileSize || 0) + buffer.length,
-      },
-    })
-
-    console.log(
-      `[Recording] Chunk ${sequence} uploaded: ${(buffer.length / 1024).toFixed(1)} KB, key=${key}`
-    )
-
-    return NextResponse.json({ success: true, chunkKey: key, sequence })
-  } catch (error) {
-    console.error('[Recording] Chunk upload error:', error)
-    const detail = error instanceof Error ? error.message : 'Unknown error'
-    return NextResponse.json(
-      { error: 'Failed to upload chunk', detail: detail.slice(0, 300) },
-      { status: 500 }
-    )
+    formData = await req.formData()
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : ''
+    const tooLarge = /body|size|limit|413/i.test(msg)
+    throw tooLarge ? new ApiError(413, 'Chunk too large') : badRequest('Invalid request')
   }
+
+  const file = formData.get('file')
+  if (!(file instanceof File) || file.size === 0) throw badRequest('No chunk data provided')
+
+  const sequenceRaw = formData.get('sequence')
+  const sequence = typeof sequenceRaw === 'string' ? parseInt(sequenceRaw, 10) : 0
+  if (!Number.isInteger(sequence) || sequence < 0) throw badRequest('Invalid chunk sequence')
+
+  return { buffer: Buffer.from(await file.arrayBuffer()), sequence }
 }
+
+/** POST /api/meetings/[id]/recording/upload — upload one audio chunk of an active recording session. */
+export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user, params }) => {
+  // Chunks arrive every 30s for the whole recording, so the per-hour 'recordings' bucket (10/h)
+  // would cut a session off after 5 minutes; the per-minute 'api' bucket throttles abuse without that.
+  const { allowed } = checkRateLimit(req, 'api')
+  if (!allowed) throw new ApiError(429, 'Too many requests')
+
+  const meeting = await prisma.meeting.findUnique({
+    where: { id: params.id },
+    select: { id: true, employeeId: true, reporterId: true },
+  })
+  if (!meeting) throw notFound('Meeting')
+  assertAccess(canManageMeeting(user, meeting), 'Only the reporter or an admin can record this meeting')
+
+  // Recording session must already exist (started via /presign)
+  const recording = await prisma.meetingRecording.findUnique({
+    where: { meetingId: meeting.id },
+    select: { audioKey: true, fileSize: true },
+  })
+  if (!recording?.audioKey) throw badRequest('No active recording session. Call start first.')
+
+  const { buffer, sequence } = await readChunk(req)
+
+  // {sessionKey}/chunk_0000.webm
+  const key = chunkKey(recording.audioKey, sequence)
+  await uploadToS3(buffer, key, 'audio/webm')
+
+  await prisma.meetingRecording.update({
+    where: { meetingId: meeting.id },
+    data: { fileSize: { increment: buffer.length } },
+  })
+
+  console.log(`[Recording] Chunk ${sequence} uploaded: ${(buffer.length / 1024).toFixed(1)} KB, key=${key}`)
+  return NextResponse.json({ success: true, chunkKey: key, sequence })
+})

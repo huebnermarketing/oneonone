@@ -72,14 +72,21 @@ export function FileAttachments({ meetingId, initialAttachments, canUpload }: Fi
     const { uploadUrl, attachmentId, skipUpload } = await response.json()
 
     if (uploadUrl && !skipUpload) {
-      await new Promise<void>((resolve) => {
-        const xhr = new XMLHttpRequest()
-        xhr.open('PUT', uploadUrl, true)
-        xhr.setRequestHeader('Content-Type', file.type)
-        xhr.onload = () => resolve()
-        xhr.onerror = () => resolve()
-        xhr.send(file)
-      })
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const xhr = new XMLHttpRequest()
+          xhr.open('PUT', uploadUrl, true)
+          xhr.setRequestHeader('Content-Type', file.type)
+          xhr.onload = () =>
+            xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Storage upload failed (${xhr.status})`))
+          xhr.onerror = () => reject(new Error('Storage upload failed (network error)'))
+          xhr.send(file)
+        })
+      } catch (err) {
+        // Upload failed: remove the metadata row so no orphan attachment is listed
+        await fetch(`/api/meetings/${meetingId}/attachments?attachmentId=${attachmentId}`, { method: 'DELETE' }).catch(() => {})
+        throw err
+      }
     }
 
     return {

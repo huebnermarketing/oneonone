@@ -16,7 +16,7 @@ Baseline (after the `refactor/hygiene` branch): `npm run typecheck` clean, `next
 | DB / ORM | PostgreSQL + Prisma 5.19 | Migrations in `prisma/migrations/` (baseline `0_init`); `deploy.sh` runs `migrate deploy`. Databases created earlier with `db push` need a one-time `prisma migrate resolve --applied 0_init` |
 | Auth | NextAuth 4, Google provider only, `PrismaAdapter`, database sessions (30d) | Requests `calendar` scope at sign-in |
 | Styling | Tailwind 3.4, class-based dark mode, lucide-react icons | Brand tokens in `tailwind.config.ts` (`orange #F37022`, `charcoal`, `dark-gray`, `medium-gray`, `light-gray`, `off-white`) |
-| Forms | react-hook-form + zod (only 2 components), otherwise `useState` + `fetch` | zod is **not** used in any API route |
+| Forms / validation | react-hook-form + zod in 2 components, otherwise `useState` + `fetch` | Every API route validates body/query with zod schemas in `lib/validation/*.ts` |
 | AI | `openai` v6 — Whisper (`whisper-1`) + chat (`gpt-4o` default, `gpt-4o-mini` for search) | ffmpeg (`ffmpeg-static`) for compressing/segmenting audio >24 MB |
 | Storage | AWS S3 (recordings, attachments) | Local `uploads/` fallback exists in `lib/s3.ts` but is **not wired** — recording returns 503 without S3 |
 | Email | nodemailer SMTP (preferred) → AWS SES (fallback) | Env-only config; 11 HTML templates in `lib/email.ts` |
@@ -133,13 +133,13 @@ SystemSettings (singleton id='system')     BackupHistory
 | `Meeting` | `status` PROPOSED/SCHEDULED/COMPLETED/CANCELLED (default PROPOSED), `proposedById`, `meetingType` IN_PERSON/ZOOM, `meetingLink`, `zoomMeetingId`, 10 form text fields, `formSubmittedAt`, `notes`, reminder flags (`reminder24hSent`, `reminderSent`, `formReminderSent`), `recurringScheduleId` |
 | `RecurringSchedule` | `frequency` WEEKLY/BIWEEKLY/MONTHLY, `dayOfWeek` 0-6, `timeOfDay` HH:mm, `nextMeetingDate`, `googleRecurringEventId`, `isActive` (soft delete) |
 | `MeetingRecording` | `audioKey` (S3 prefix → `…/final.webm`), `transcript`, `summary`, `keyPoints`/`autoTodos`/`sentiment`/`qualityDetails` (Json), `qualityScore`, `status` UPLOADING→UPLOADED→TRANSCRIBING→ANALYZING→COMPLETED/FAILED |
-| `Todo` | `status` NOT_STARTED/IN_PROGRESS/DONE, `priority` HIGH/MEDIUM/LOW, `dueDate`, optional `meetingId` (**no onDelete cascade** → deleting a meeting with todos throws FK) |
-| `SystemSettings` | `openaiApiKey` + `awsSecretKey` encrypted (AES-256-GCM, key from `NEXTAUTH_SECRET`), `awsAccessKeyId` plaintext, `openaiModel`, `whisperModel`, `maxRecordingMins` (25), `requireFormBeforeComplete` (true), `enableEmailReminders`, `reminderHoursBefore` (unused) |
+| `Todo` | `status` NOT_STARTED/IN_PROGRESS/DONE, `priority` HIGH/MEDIUM/LOW, `dueDate`, optional `meetingId` (SET NULL when the meeting is deleted) |
+| `SystemSettings` | `openaiApiKey` + `awsSecretKey` encrypted (AES-256-GCM, key from `NEXTAUTH_SECRET`), `awsAccessKeyId` plaintext, `openaiModel`, `whisperModel`, `maxRecordingMins` (25). **Policies**: `requireFormBeforeComplete` (true), `cancelPolicy` (REPORTER_AND_ADMIN), `employeeCanViewRecording` (false), `employeeCanViewNotes` (true), `enableEmailReminders` (true), `reminderHoursBefore` (24), `shortReminderHoursBefore` (1) |
 | `Notification` | `type` enum (10 values); PROPOSED/ACCEPTED/SUGGESTED/COMPLETED all reuse `MEETING_SCHEDULED` |
-| `AuditLog` | `action` CREATE/UPDATE/DELETE/LOGIN/LOGOUT/EXPORT/IMPORT/CLEAR_DATA/SETTINGS_CHANGE; FK to User without cascade |
+| `AuditLog` | `action` CREATE/UPDATE/DELETE/LOGIN/LOGOUT/EXPORT/IMPORT/CLEAR_DATA/SETTINGS_CHANGE; cascades with User |
 | `CalendarEvent` | `googleEventId`, `googleCalendarLink`; created on **accept**, on the reporter's calendar |
 
-Cascade summary: `Account`, `Session`, `Notification`, `DashboardWidget`, `CalendarEvent`, `MeetingRecording`, `Attachment` cascade; `Todo`, `AuditLog`, `RecurringSchedule`, `Meeting` do not.
+Cascade summary: `Account`, `Session`, `Notification`, `AuditLog`, `RecurringSchedule`, `CalendarEvent`, `MeetingRecording`, `Attachment` cascade from their parent; `Todo.meeting` is SET NULL; `Meeting.employee/reporter` restrict (user DELETE route removes meetings explicitly). `DashboardWidget` was dropped.
 
 ---
 
@@ -148,8 +148,15 @@ Cascade summary: `Account`, `Session`, `Notification`, `DashboardWidget`, `Calen
 | Module | Responsibility | Read this when… |
 |---|---|---|
 | `auth.ts` | NextAuth options: Google provider, domain restriction (`GOOGLE_WORKSPACE_DOMAIN`), inactive-user blocking, session enrichment (`id, role, departmentId, reportsToId`), token persistence | Touching login or session shape |
-| `auth-helpers.ts` | `getCurrentUser()`, `requireAuth()` (redirects — page use only), `requireRole([...])` / `requireAdmin()` (throw), `handleApiError()`, `canAccessEmployeeData(role, me, employeeId, employeeReportsToId)` | Any new route/page |
-| `settings.ts` | `getSettings()` — DB `SystemSettings` row wins over env, per field; 5-min cache; `updateSettings()` encrypts secrets | OpenAI/S3 config |
+| `api.ts` | `withApiAuth(roles?, handler)`, `withPublicRoute`, `parseBody`/`parseQuery` (zod), `ApiError` + `notFound/forbidden/badRequest/conflict`, uniform error mapping (zod→400, P2002→409, P2025→404, Unauthorized→401) | Any new route |
+| `validation/*.ts` | zod schemas per resource (`meetings`, `recurring`, `todos`, `users`, `admin`, `misc`, `common`) | Changing a request shape |
+| `meeting-access.ts` | `canViewMeeting`, `canManageMeeting`, `canFillForm`, `canAccept`, `canSuggest`, `canCancel` (policy), `canViewRecording`/`canViewNotes` (policy), `assertAccess` | Any meeting route or page |
+| `meeting-state.ts` | State machine (`assertTransition`), `completeMeeting`, `cancelMeeting` (calendar delete + notify + email), `loadMeeting` | Status changes |
+| `meeting-conflicts.ts` | `assertNoConflict(employeeId, reporterId, date, excludeId?)` — 30-min overlap → 409 | Scheduling |
+| `team.ts` | `getTeamUserIds(user)` (null = admin), `canActOnUser(user, targetId)` — one-level hierarchy | Scoping lists, assigning todos |
+| `constants.ts` | `DEFAULT_TIMEZONE`, `MEETING_DURATION_MINUTES`, `ALLOWED_EMAIL_DOMAIN` (from `GOOGLE_WORKSPACE_DOMAIN`), `APP_NAME` | — |
+| `auth-helpers.ts` | `getCurrentUser()`, `requireAuth()` (redirects — **page use only**), `requireRole`/`requireAdmin` (throw), `canAccessEmployeeData` (legacy; pages still use it) | Pages |
+| `settings.ts` | `getSettings()` / `getPolicies()` — DB `SystemSettings` row wins over env, per field; 5-min cache (defaults cached too); `updateSettings()` encrypts secrets; `safeDecrypt` logs instead of throwing when the encryption secret changed | OpenAI/S3 config, policies |
 | `encryption.ts` | AES-256-GCM, `scryptSync(NEXTAUTH_SECRET \|\| ENCRYPTION_SECRET, 'salt', 32)` | Rotating secrets (rotation breaks stored keys) |
 | `openai.ts` | `transcribeAudio()` (temp file → ffmpeg compress 48/32/24k mono MP3 if >24 MB → segment 40-min pieces if still too big → Whisper verbose_json), `analyzeTranscript()` (JSON-mode GPT → summary/keyPoints/suggestedTodos/sentiment/qualityScore/qualityDetails/commonThemes), `searchTranscripts()`, `generateOrganizationInsights()` | Recording pipeline, insights |
 | `s3.ts` | Settings-driven S3 client, `uploadToS3`, signed GET/PUT URLs, `deleteS3Prefix`, key helpers `recordings/<meetingId>/<ts>/chunk_NNNN.webm` + `final.webm` | Storage |
@@ -162,7 +169,7 @@ Cascade summary: `Account`, `Session`, `Notification`, `DashboardWidget`, `Calen
 | `zoom.ts` | `parseZoomMeetingId(link)` only — no Zoom API | — |
 | `audit.ts` | `createAuditLog` + typed `log*` helpers; swallows errors | Any mutating route |
 | `timezones.ts`, `utils.ts` | Country/TZ options, default work hours (IN 11:00–21:00, US 04:30–16:00), `cn()`, date formatters (default IST), `isTodoOverdue` | Display |
-| `rate-limit.ts` | In-memory limiter — **no callers** | — |
+| `rate-limit.ts` | In-memory limiter; wired on test-login/cron (`auth`), recording upload + AI routes + webhook (`api`), recording process (`recordings`) | Abuse protection |
 | `prisma.ts` | Singleton client, query logging in dev | — |
 
 ---
@@ -173,7 +180,7 @@ Cascade summary: `Account`, `Session`, `Notification`, `DashboardWidget`, `Calen
 - Session: `database` strategy. `session` callback re-reads the user on every request and purges sessions of inactive users.
 - Roles: `EMPLOYEE` (own meetings/todos/profile), `REPORTER` (own + direct reports via `User.reportsToId`, one level only), `SUPER_ADMIN` (everything + `/admin/*`).
 - `canAccessEmployeeData` is the one reusable object-level check. Note it keys on the employee's **current** manager, while meeting routes key on `meeting.reporterId` — after a reporting change the two diverge.
-- `requireAuth()` is used inside 7 API routes; on an unauthenticated call it throws `NEXT_REDIRECT`, which the generic `catch` turns into a 500 instead of 401. Use `requireRole`/`getCurrentUser` + `handleApiError` in API routes.
+- Every API route is wrapped in `withApiAuth` (401/403 mapped uniformly). Todos are scoped to self + direct reports for reporters; `/api/profile` cannot change manager/department (admin + onboarding only).
 - Cookie name: `__Secure-next-auth.session-token` when `NODE_ENV=production` **and** `NEXTAUTH_URL` starts with https (`lib/auth.ts`); middleware and test-login only check `NODE_ENV`. Keep production on HTTPS.
 
 ---
@@ -192,9 +199,9 @@ REPORTER/ADMIN ─POST /api/meetings or /api/recurring-schedules─▶ PROPOSED 
    ADMIN ─DELETE─▶ hard delete (+ calendar event). Fails if todos reference it.
 ```
 
-There is **no per-meeting cancel**: `PATCH status:'CANCELLED'` returns 403 for everyone. `CANCELLED` is only produced by pausing/deleting a recurring schedule with `cancelFutureMeetings` (affects future SCHEDULED rows only). The calendar/notification code for cancel in `app/api/meetings/[id]/route.ts:109-127` is unreachable.
+Cancel: `POST /api/meetings/[id]/cancel {reason?}` on a PROPOSED/SCHEDULED meeting. Allowed for admins always, and otherwise per the `cancelPolicy` setting (`ADMIN_ONLY` | `REPORTER_AND_ADMIN` (default) | `ANY_PARTICIPANT`). Deletes the calendar event, notifies + emails the other party, audits. Pausing/deleting a recurring schedule with `cancelFutureMeetings` cancels future SCHEDULED occurrences.
 
-Conflict check (30-min overlap across both parties) exists only on `POST /api/meetings`, not on `/suggest` or recurring generation.
+Transitions are enforced in `lib/meeting-state.ts` (`assertTransition`): COMPLETED only from SCHEDULED. The 30-min conflict check (`lib/meeting-conflicts.ts`) runs on create and on suggest.
 
 ### Recurring schedules
 
@@ -208,7 +215,7 @@ Alternate ingress: Fathom webhook writes transcript/summary straight to `Meeting
 
 ### Cron (`POST /api/cron/meetings`, header `x-cron-secret`)
 
-1. Generate due recurring occurrences. 2. 24-h reminders (email + in-app) and 1-h reminders (in-app) for SCHEDULED meetings. 3. Form reminders to employees 24 h before. Without `CRON_SECRET`: 503 in production, **open** in development. Nothing in the repo schedules it — set up an external hourly caller.
+1. Generate due recurring occurrences. 2. First reminder (`reminderHoursBefore`, email + in-app) and short-notice reminder (`shortReminderHoursBefore`, in-app; 0 disables) for SCHEDULED meetings. 3. Form reminders to employees. Email copies obey `enableEmailReminders`. `CRON_SECRET` is required in every environment (503 if unset, 401 on mismatch). Nothing in the repo schedules it — set up an external hourly caller (see `DEPLOYMENT.md`).
 
 ### Onboarding
 
@@ -236,7 +243,7 @@ See `DEPLOYMENT.md`. Summary: `deploy.sh` on the EC2 host at `/var/www/oneonone`
 
 ## 10. Conventions to follow when adding code
 
-- New API route: `requireRole([...])` or `getCurrentUser()` → object-level check → validate body with zod (none exist yet; add `lib/validation/*.ts`) → Prisma → `createAuditLog` for mutations → `handleApiError` in `catch`. Return `{ error }` JSON on failure.
+- New API route: `withApiAuth([roles], handler)` → `parseBody`/`parseQuery` with a schema from `lib/validation/` → object-level check (`lib/meeting-access.ts` / `lib/team.ts`) → Prisma (multi-write in `$transaction`) → audit → side effects (email/notification/calendar) best-effort with `.catch` → `NextResponse.json`. Throw `ApiError`s; never hand-roll 4xx responses.
 - New page: server `page.tsx` does auth + Prisma, passes serialized props to `*-client.tsx`; add a `loading.tsx` using `components/ui/skeleton.tsx`.
 - Use `useToast()` / `useConfirm()` rather than inline banners or custom modals; use `components/ui/button.tsx` + `card.tsx` (currently used by one file — adopt them rather than hand-rolling `rounded-2xl bg-white dark:bg-charcoal …`).
 - Dates: store UTC; display via `lib/utils` formatters (currently default IST) — don't add more ad-hoc `toLocaleDateString` calls.

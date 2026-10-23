@@ -1,155 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { requireAuth } from '@/lib/auth-helpers'
+import { notFound, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
+import { createAuditLog } from '@/lib/audit'
+import { updateProfileSchema } from '@/lib/validation/users'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
-  try {
-    const currentUser = await requireAuth()
+const profileSelect = {
+  id: true,
+  name: true,
+  email: true,
+  avatar: true,
+  phone: true,
+  title: true,
+  bio: true,
+  role: true,
+  departmentId: true,
+  reportsToId: true,
+  country: true,
+  timeZone: true,
+  workDayStart: true,
+  workDayEnd: true,
+  department: { select: { id: true, name: true } },
+  reportsTo: { select: { id: true, name: true, email: true } },
+  createdAt: true,
+} as const
 
-    const user = await prisma.user.findUnique({
-      where: { id: currentUser.id },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        avatar: true,
-        phone: true,
-        title: true,
-        bio: true,
-        role: true,
-        departmentId: true,
-        reportsToId: true,
-        country: true,
-        timeZone: true,
-        workDayStart: true,
-        workDayEnd: true,
-        department: { select: { id: true, name: true } },
-        reportsTo: { select: { id: true, name: true, email: true } },
-        createdAt: true,
-      },
-    })
+export const GET = withApiAuth(async (_req: NextRequest, { user }) => {
+  const profile = await prisma.user.findUnique({ where: { id: user.id }, select: profileSelect })
+  if (!profile) throw notFound('User')
+  return NextResponse.json(profile)
+})
 
-    if (!user) {
-      return NextResponse.json({ error: 'User not found' }, { status: 404 })
-    }
+/**
+ * PATCH /api/profile — self-service fields only.
+ * Reporting manager and department are set during onboarding and afterwards only by an admin
+ * (they decide who can see this user's meetings and recordings).
+ */
+export const PATCH = withApiAuth(async (req: NextRequest, { user }) => {
+  const body = await parseBody(req, updateProfileSchema)
 
-    return NextResponse.json(user)
-  } catch (error) {
-    console.error('Error fetching profile:', error)
-    return NextResponse.json({ error: 'Failed to fetch profile' }, { status: 500 })
-  }
-}
+  const data: Record<string, string | null> = {}
+  if (body.name !== undefined) data.name = body.name
+  if (body.phone !== undefined) data.phone = body.phone || null
+  if (body.title !== undefined) data.title = body.title || null
+  if (body.bio !== undefined) data.bio = body.bio || null
+  if (body.country !== undefined) data.country = body.country || null
+  if (body.timeZone !== undefined) data.timeZone = body.timeZone || null
+  if (body.workDayStart !== undefined) data.workDayStart = body.workDayStart || null
+  if (body.workDayEnd !== undefined) data.workDayEnd = body.workDayEnd || null
 
-export async function PATCH(request: NextRequest) {
-  try {
-    const currentUser = await requireAuth()
+  const updated = await prisma.user.update({ where: { id: user.id }, data, select: profileSelect })
 
-    const body = await request.json()
-    const { name, phone, title, bio, departmentId, reportsToId, country, timeZone, workDayStart, workDayEnd } = body
+  await createAuditLog({ userId: user.id, action: 'UPDATE', entityType: 'User', entityId: user.id, details: { profile: data } })
 
-    // Validate name
-    if (name !== undefined && (!name || !name.trim())) {
-      return NextResponse.json({ error: 'Please enter your full name' }, { status: 400 })
-    }
-    if (name !== undefined && name.trim().length < 2) {
-      return NextResponse.json({ error: 'Full name must be at least 2 characters' }, { status: 400 })
-    }
-
-    // Validate phone: only digits, +, -, spaces allowed; at least 10 digits
-    if (phone !== undefined && phone) {
-      const trimmed = phone.trim()
-      if (!/^[0-9+\- ]+$/.test(trimmed)) {
-        return NextResponse.json({ error: 'Phone number must contain only numbers, +, - and spaces' }, { status: 400 })
-      }
-      const digits = trimmed.replace(/\D/g, '')
-      if (digits.length < 10) {
-        return NextResponse.json({ error: 'Phone number must be at least 10 digits' }, { status: 400 })
-      }
-    }
-
-    // Prevent self-reporting
-    if (reportsToId !== undefined && reportsToId === currentUser.id) {
-      return NextResponse.json({ error: 'You cannot report to yourself' }, { status: 400 })
-    }
-
-    // Validate reportsToId if provided
-    if (reportsToId !== undefined && reportsToId !== '' && reportsToId !== null) {
-      const manager = await prisma.user.findUnique({
-        where: { id: reportsToId },
-      })
-      if (!manager) {
-        return NextResponse.json({ error: 'Selected manager not found' }, { status: 400 })
-      }
-      // Prevent circular: if the selected manager reports to you
-      if (manager.reportsToId === currentUser.id) {
-        return NextResponse.json({ error: 'Cannot select a manager who reports to you' }, { status: 400 })
-      }
-    }
-
-    // Validate departmentId if provided
-    if (departmentId !== undefined && departmentId !== '' && departmentId !== null) {
-      const dept = await prisma.department.findUnique({
-        where: { id: departmentId },
-      })
-      if (!dept) {
-        return NextResponse.json({ error: 'Selected department not found' }, { status: 400 })
-      }
-    }
-
-    // Validate work hours (HH:mm 24h)
-    const timeRegex = /^([01]?[0-9]|2[0-3]):[0-5][0-9]$/
-    if (workDayStart !== undefined && workDayStart !== null && workDayStart !== '') {
-      if (!timeRegex.test(workDayStart.trim())) {
-        return NextResponse.json({ error: 'Work day start must be HH:mm (24h)' }, { status: 400 })
-      }
-    }
-    if (workDayEnd !== undefined && workDayEnd !== null && workDayEnd !== '') {
-      if (!timeRegex.test(workDayEnd.trim())) {
-        return NextResponse.json({ error: 'Work day end must be HH:mm (24h)' }, { status: 400 })
-      }
-    }
-
-    // Build update data
-    const updateData: Record<string, string | null> = {}
-    if (name !== undefined) updateData.name = name.trim()
-    if (phone !== undefined) updateData.phone = phone.trim() || null
-    if (title !== undefined) updateData.title = title.trim() || null
-    if (bio !== undefined) updateData.bio = bio.trim() || null
-    if (departmentId !== undefined) updateData.departmentId = departmentId || null
-    if (reportsToId !== undefined) updateData.reportsToId = reportsToId || null
-    if (country !== undefined) updateData.country = country?.trim() || null
-    if (timeZone !== undefined) updateData.timeZone = timeZone?.trim() || null
-    if (workDayStart !== undefined) updateData.workDayStart = workDayStart?.trim() || null
-    if (workDayEnd !== undefined) updateData.workDayEnd = workDayEnd?.trim() || null
-
-    const updatedUser = await prisma.user.update({
-      where: { id: currentUser.id },
-      data: updateData,
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        avatar: true,
-        phone: true,
-        title: true,
-        bio: true,
-        role: true,
-        departmentId: true,
-        reportsToId: true,
-        country: true,
-        timeZone: true,
-        workDayStart: true,
-        workDayEnd: true,
-        department: { select: { id: true, name: true } },
-        reportsTo: { select: { id: true, name: true, email: true } },
-      },
-    })
-
-    return NextResponse.json(updatedUser)
-  } catch (error) {
-    console.error('Error updating profile:', error)
-    return NextResponse.json({ error: 'Failed to update profile' }, { status: 500 })
-  }
-}
+  return NextResponse.json(updated)
+})
