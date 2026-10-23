@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [stage, main]
+  push:
+    branches: [stage, main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: typecheck · lint · unit tests · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Build-time only; no real services are contacted. Prisma needs a URL shape, NextAuth needs the Google vars present.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ci?schema=public
+      NEXTAUTH_SECRET: ci-only-secret-not-used-anywhere
+      NEXTAUTH_URL: http://localhost:3000
+      GOOGLE_CLIENT_ID: ci.apps.googleusercontent.com
+      GOOGLE_CLIENT_SECRET: ci-secret
+      GOOGLE_WORKSPACE_DOMAIN: example.com
+      CRON_SECRET: ci-cron
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=3072
+
+  migrations:
+    name: migrations apply on a fresh database
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/ci?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma migrate deploy
+      # Fails if schema.prisma drifted from the migration history (someone edited the schema without creating a migration)
+      - run: psql postgresql://postgres:postgres@localhost:5432/postgres -c 'CREATE DATABASE shadow'
+      - run: npx prisma migrate diff --from-migrations prisma/migrations --to-schema-datamodel prisma/schema.prisma --shadow-database-url "postgresql://postgres:postgres@localhost:5432/shadow" --exit-code

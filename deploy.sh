@@ -56,6 +56,13 @@ npx prisma generate
 echo "🗄️ Applying database migrations..."
 npx prisma migrate deploy || { echo "❌ prisma migrate deploy failed. If this DB predates migrations, run: npx prisma migrate resolve --applied 0_init"; exit 1; }
 
+# Quality gate: types + unit tests must pass before we build (skip with SKIP_CHECKS=1 in an emergency)
+if [ "${SKIP_CHECKS:-0}" != "1" ]; then
+  echo "🧪 Running typecheck + unit tests..."
+  npm run typecheck || { echo "❌ Typecheck failed. Not deploying."; exit 1; }
+  npm test || { echo "❌ Unit tests failed. Not deploying."; exit 1; }
+fi
+
 # Build the app (exit on failure)
 echo "🏗️ Building app (this may take a few minutes)..."
 NODE_OPTIONS="--max-old-space-size=3072" npm run build || { echo "❌ Build failed."; exit 1; }

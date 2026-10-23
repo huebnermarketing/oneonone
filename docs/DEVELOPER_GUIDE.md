@@ -4,7 +4,7 @@ Internal app for running bi-weekly 1:1s (AMI "Agency Advantage" format): propose
 
 This guide is the entry point for anyone picking up the codebase. Companion docs: `docs/API_REFERENCE.md` (every route), `docs/REFACTOR_BACKLOG.md` (known issues, prioritized), `docs/ENV_VARIABLES.md`, `docs/KEKA_INTEGRATION.md`, `docs/FATHOM_ZOOM_SETUP.md`, `docs/RECORDING_OPTIONS.md`.
 
-Baseline (after the `refactor/hygiene` branch): `npm run typecheck` clean, `next lint` clean, `next build` clean, 19 npm audit findings remaining — all need major upgrades (next 16, tailwind 4, nodemailer 10, googleapis 188, eslint-config-next 16) and are tracked in the backlog. No test suite.
+Baseline: `npm run check` (typecheck + lint + 106 unit tests) clean, `next build` clean, `npm run test:smoke` 42/42 against a seeded dev server. CI (`.github/workflows/ci.yml`) runs typecheck, lint, unit tests, build, and a migration-drift check on every PR to `stage`/`main`. 19 npm audit findings remain — all need major upgrades (next 16, tailwind 4, nodemailer 10, googleapis 188, eslint-config-next 16), tracked in the backlog.
 
 ---
 
@@ -79,7 +79,18 @@ Mic recording requires a secure context (`localhost` counts; LAN IPs do not).
 
 ### Useful scripts
 
-`npm run dev | build | start | lint`, `npm run db:generate | db:push | db:migrate | db:studio | db:seed`. Build uses `NODE_OPTIONS=--max-old-space-size=3072`.
+`npm run dev | build | start | lint | typecheck`, `npm test` (unit), `npm run test:smoke` (API e2e, needs dev server + seeded DB + `CRON_SECRET` in `.env`), `npm run check` (all static checks), `npm run db:generate | db:migrate | db:migrate:deploy | db:migrate:status | db:studio | db:seed`. Build uses `NODE_OPTIONS=--max-old-space-size=3072`.
+
+### Testing
+
+| Layer | Where | Runs |
+|---|---|---|
+| Unit (vitest) | `tests/unit/*.test.ts` — meeting state machine, access predicates, conflict check, team scoping, recurring-date math, encryption, Fathom signature, API wrapper/error mapping, every zod schema | `npm test`; no DB, `@/lib/prisma` is replaced by `tests/helpers/prisma-mock.ts` |
+| API smoke (bash) | `scripts/smoke-api.sh` — logs in as seeded users by inserting `Session` rows, exercises auth mapping, validation, scoping, cancel policy, recording visibility, cron, pages; restores fixtures afterwards | `npm run test:smoke` against `http://localhost:3000` (override `BASE_URL`) |
+| CI | `.github/workflows/ci.yml` | PRs/pushes to `stage` and `main` |
+| Deploy gate | `deploy.sh` runs typecheck + unit tests before building (`SKIP_CHECKS=1` to bypass in an emergency) | on the server |
+
+Conventions: one test file per `lib/` module; program `prismaMock.<model>.<method>.mockResolvedValue(...)` per test; pass mock implementations to `vi.fn(impl)` (the config restores mocks between tests); spy on `console.error` when a test exercises a logged failure path.
 
 ---
 

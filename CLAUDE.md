@@ -10,6 +10,9 @@ Read first: `docs/DEVELOPER_GUIDE.md` (architecture, flows, setup), `docs/API_RE
 npm run dev            # http://localhost:3000 (reads .env — Prisma CLI ignores .env.local)
 npm run typecheck      # tsc --noEmit — clean; keep it that way
 npm run lint           # clean
+npm test               # vitest unit tests (tests/unit, no DB — prisma is mocked). Add a test for every lib/ change.
+npm run test:smoke     # end-to-end API checks against a running dev server + seeded DB (scripts/smoke-api.sh). Never against prod.
+npm run check          # typecheck + lint + test — run before every PR. CI runs the same plus build + migration drift check.
 npm run db:migrate     # prisma migrate dev — use this for schema changes (creates prisma/migrations/*). Never db push.
 npm run db:seed        # WIPES the DB, seeds @test.com users. Never in production.
 npm run db:studio
@@ -23,6 +26,7 @@ Local login without Google: `POST /api/auth/test-login {"role":"SUPER_ADMIN"|"RE
 - `app/(dashboard)/<feature>/page.tsx` = server component (auth + Prisma) → props → `<feature>-client.tsx` (client, `fetch('/api/…')` + `router.refresh()`).
 - `app/api/**/route.ts` = 46 handlers. `lib/` = all server logic. `components/ui` = toast/confirm/date-picker/skeleton/button/card.
 - Use Prisma-generated types; there is no hand-written types module.
+- `tests/unit/*.test.ts` mirror `lib/*`; `tests/helpers/prisma-mock.ts` gives a programmable `prisma`, `tests/helpers/fixtures.ts` gives users/meetings. `tests/setup.ts` auto-mocks prisma, email and google-calendar. Mock implementations must be passed to `vi.fn(impl)` (restoreMocks is on).
 
 ## Rules for changes
 
