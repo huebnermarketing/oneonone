@@ -28,7 +28,8 @@ cp .env.example .env
 3. Set up the database:
 ```bash
 npx prisma generate
-npx prisma db push
+npx prisma migrate dev     # applies prisma/migrations
+npm run db:seed            # optional demo data (wipes DB)
 ```
 
 4. Run the development server:
@@ -37,6 +38,15 @@ npm run dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+
+## Documentation
+
+- `docs/DEVELOPER_GUIDE.md` — architecture, data model, flows, conventions (start here)
+- `docs/API_REFERENCE.md` — every API route with its auth rule
+- `docs/REFACTOR_BACKLOG.md` — known defects, prioritized
+- `SETUP_GUIDE.md` — Google OAuth / SES / first admin, step by step
+- `DEPLOYMENT.md` — PM2 + Nginx on EC2, migrations, cron
+- `docs/ENV_VARIABLES.md`, `docs/KEKA_INTEGRATION.md`, `docs/FATHOM_ZOOM_SETUP.md`, `docs/RECORDING_OPTIONS.md`
 
 ## Project Structure
 
@@ -54,8 +64,11 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 │   ├── prisma.ts         # Prisma client
 │   ├── auth.ts           # Auth utilities
 │   └── google-calendar.ts # Calendar API
-├── types/                 # TypeScript types
-└── styles/               # Global styles
+├── types/                 # next-auth session augmentation
 ├── prisma/
-│   └── schema.prisma     # Database schema
+│   ├── schema.prisma     # Database schema
+│   ├── migrations/       # Prisma migration history (applied with `migrate deploy`)
+│   └── seed.ts           # Demo data (dev only)
+├── deploy/                # Nginx/SSL/email/calendar setup for the EC2 host
+└── docs/                  # Developer docs
 ```

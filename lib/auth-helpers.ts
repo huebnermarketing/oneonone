@@ -53,7 +53,9 @@ export async function requireAuth() {
   return user
 }
 
-// For page routes - redirects on failure
+// For API routes - THROWS UnauthorizedError / ForbiddenError (pair with handleApiError in catch).
+// In a page component the thrown error renders the route's error boundary; prefer
+// getCurrentUser() + redirect()/notFound() there.
 export async function requireRole(allowedRoles: UserRole[]) {
   const user = await getCurrentUser()
   if (!user) {
@@ -65,7 +67,7 @@ export async function requireRole(allowedRoles: UserRole[]) {
   return user
 }
 
-// For page routes - redirects on failure
+// Same semantics as requireRole — throws, does not redirect.
 export async function requireAdmin() {
   return requireRole([UserRole.SUPER_ADMIN])
 }

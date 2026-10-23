@@ -38,17 +38,20 @@ else
   echo "✅ .env file exists, using existing configuration"
 fi
 
-# Install dependencies (if needed)
+# Install dependencies from the lockfile (reproducible; never mutates package-lock.json)
 echo "📦 Installing dependencies..."
-npm install
+npm ci || { echo "❌ npm ci failed."; exit 1; }
 
 # Generate Prisma client
 echo "🔧 Generating Prisma client..."
 npx prisma generate
 
-# Push database schema
-echo "🗄️ Pushing database schema..."
-npx prisma db push
+# Apply pending migrations (prisma/migrations). Never `db push` in production.
+# ONE-TIME on a database that was previously created with `db push`:
+#   npx prisma migrate resolve --applied 0_init
+# then re-run this script. See DEPLOYMENT.md "Migrating from db push".
+echo "🗄️ Applying database migrations..."
+npx prisma migrate deploy || { echo "❌ prisma migrate deploy failed. If this DB predates migrations, run: npx prisma migrate resolve --applied 0_init"; exit 1; }
 
 # Build the app (exit on failure)
 echo "🏗️ Building app (this may take a few minutes)..."

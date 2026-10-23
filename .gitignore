@@ -35,8 +35,5 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# prisma
-/prisma/migrations
-
 # local uploads (recordings stored locally when S3 not configured)
 /uploads

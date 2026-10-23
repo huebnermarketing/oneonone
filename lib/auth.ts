@@ -1,6 +1,7 @@
 import { NextAuthOptions } from 'next-auth'
 import GoogleProvider from 'next-auth/providers/google'
 import { PrismaAdapter } from '@next-auth/prisma-adapter'
+import { UserRole } from '@prisma/client'
 import { prisma } from './prisma'
 import { logLogin } from './audit'
 
@@ -13,10 +14,30 @@ if (!googleClientId || !googleClientSecret) {
   )
 }
 
+// Comma-separated list of emails that are promoted to SUPER_ADMIN on sign-in.
+// Replaces the "run an UPDATE in psql" bootstrap step. Only ever promotes, never demotes.
+const initialAdminEmails = new Set(
+  (process.env.INITIAL_ADMIN_EMAILS || '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+)
+
+async function promoteIfInitialAdmin(userId: string, email?: string | null) {
+  if (!email || !initialAdminEmails.has(email.toLowerCase())) return
+  const updated = await prisma.user.updateMany({
+    where: { id: userId, role: { not: UserRole.SUPER_ADMIN } },
+    data: { role: UserRole.SUPER_ADMIN },
+  })
+  if (updated.count > 0) {
+    console.info(`[NextAuth] Promoted ${email} to SUPER_ADMIN via INITIAL_ADMIN_EMAILS`)
+  }
+}
+
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
   events: {
-    // Ensure name is set when user is created via OAuth
+    // Runs once, right after the adapter inserts a new user
     createUser: async ({ user }) => {
       if (!user.name || user.name === '') {
         const name = user.email?.split('@')[0] || 'User'
@@ -25,10 +46,12 @@ export const authOptions: NextAuthOptions = {
           data: { name },
         })
       }
+      await promoteIfInitialAdmin(user.id, user.email)
     },
-    // Log sign-in to audit trail
+    // Runs on every sign-in (new and existing users)
     signIn: async ({ user }) => {
       if (user?.id) {
+        await promoteIfInitialAdmin(user.id, user.email)
         await logLogin(user.id)
       }
     },
