@@ -40,6 +40,10 @@ Local login without Google: `POST /api/auth/test-login {"role":"SUPER_ADMIN"|"RE
 
 `DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL=http://localhost:3000`, `NODE_ENV=development`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (placeholders OK — `lib/auth.ts` only checks presence), `GOOGLE_WORKSPACE_DOMAIN`, `INITIAL_ADMIN_EMAILS`. Optional: `OPENAI_API_KEY`, `AWS_*` (S3 required for recording), SMTP/SES, `FATHOM_WEBHOOK_SECRET`, `KEKA_*`. `CRON_SECRET` is now required for `/api/cron/meetings` in every environment.
 
+## Branch flow
+
+Branch from `stage` (`feature/<name>` or `refactor/<name>`), PR into `stage`. Tarang merges `stage → main` for releases. Never commit to `main` or `stage` directly.
+
 ## Deployment
 
 PM2 + Nginx on EC2 only (`DEPLOYMENT.md`, `deploy.sh`, `ecosystem.config.cjs`, `deploy/`). No Docker. `deploy.sh` runs `prisma migrate deploy`.

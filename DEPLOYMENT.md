@@ -14,19 +14,24 @@ Browser ──443──▶ Nginx (TLS, 50 MB uploads, 1800 s proxy timeout) ─�
 
 - Ubuntu 22.04+, Node 20 LTS or newer, `npm`, `pm2` (`npm i -g pm2`), Nginx, Certbot, `ffmpeg` (optional — `ffmpeg-static` is bundled, system ffmpeg is the fallback).
 - PostgreSQL reachable from the host (local Postgres or RDS). Database `ami_oneonone`, user with full rights on it.
-- App checked out at `/var/www/oneonone` on branch `main` (`deploy.sh` does `git pull origin main`).
+- App checked out at `/var/www/oneonone` (`deploy.sh` checks out and pulls `main`, or `stage` when `DEPLOY_BRANCH=stage`).
 - `.env` in the app root — see "Environment" below. `deploy.sh` writes a placeholder and exits if it is missing.
 - Security group: inbound 80 + 443. Port 3000 must **not** be public.
+
+## Branch flow
+
+`feature/*` or `refactor/*` → PR into **`stage`** (integration; deploy to the test server with `DEPLOY_BRANCH=stage`) → `stage` merged into **`main`** when a release is signed off → `bash deploy.sh` on production.
 
 ## Routine deploy
 
 ```bash
 ssh <host>
 cd /var/www/oneonone
-bash deploy.sh
+bash deploy.sh                      # production: pulls main
+DEPLOY_BRANCH=stage bash deploy.sh  # test server: pulls stage
 ```
 
-`deploy.sh` does, in order: `git pull origin main` → `npm ci` → `prisma generate` → `prisma migrate deploy` → `next build` (3 GB heap) → verify `.next/BUILD_ID` → `pm2 delete oneonone; pm2 start ecosystem.config.cjs; pm2 save`. Any step failing aborts before PM2 is touched, so a bad build never replaces a running one.
+`deploy.sh` does, in order: `git checkout $DEPLOY_BRANCH && git pull` → `npm ci` → `prisma generate` → `prisma migrate deploy` → `next build` (3 GB heap) → verify `.next/BUILD_ID` → `pm2 delete oneonone; pm2 start ecosystem.config.cjs; pm2 save`. Any step failing aborts before PM2 is touched, so a bad build never replaces a running one.
 
 Never run `npm run db:seed` on the server — it wipes every table.
 
