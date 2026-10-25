@@ -31,7 +31,7 @@ bash deploy.sh                      # production: pulls main
 DEPLOY_BRANCH=stage bash deploy.sh  # test server: pulls stage
 ```
 
-`deploy.sh` does, in order: `git checkout $DEPLOY_BRANCH && git pull` → `npm ci` → `prisma generate` → `prisma migrate deploy` → `next build` (3 GB heap) → verify `.next/BUILD_ID` → `pm2 delete oneonone; pm2 start ecosystem.config.cjs; pm2 save`. Any step failing aborts before PM2 is touched, so a bad build never replaces a running one.
+`deploy.sh` does, in order: `git checkout $DEPLOY_BRANCH && git pull` → `npm ci` → `prisma generate` → `prisma migrate deploy` → (`RUN_CHECKS=1` only: typecheck + unit tests) → `next build` (3 GB heap) → verify `.next/BUILD_ID` → `pm2 delete oneonone; pm2 start ecosystem.config.cjs; pm2 save`. Any step failing aborts before PM2 is touched, so a bad build never replaces a running one. Quality gates run in CI on every PR; on the server they are opt-in because `tsc` needs more heap than a small instance has.
 
 Never run `npm run db:seed` on the server — it wipes every table.
 
