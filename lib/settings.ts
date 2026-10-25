@@ -1,6 +1,6 @@
 import { CancelPolicy } from '@prisma/client'
 import { prisma } from './prisma'
-import { encrypt, decrypt } from './encryption'
+import { encrypt, decrypt, isEncrypted, isLegacyCiphertext } from './encryption'
 
 export interface SystemSettings {
   // AI
@@ -70,13 +70,24 @@ function envDefaults(): SystemSettings {
   }
 }
 
-function safeDecrypt(value: string | null, fallback: string | null): string | null {
+let warnedLegacy = false
+
+/**
+ * Decrypt a stored secret. Plaintext values (stored before the field was encrypted) are passed through
+ * so nothing is lost; legacy ciphertext triggers a one-time reminder to run `npm run secrets:reencrypt`.
+ */
+function safeDecrypt(field: string, value: string | null, fallback: string | null): string | null {
   if (!value) return fallback
+  if (!isEncrypted(value)) return value
+  if (isLegacyCiphertext(value) && !warnedLegacy) {
+    warnedLegacy = true
+    console.warn(`[settings] ${field} uses the legacy encryption format. Run: npm run secrets:reencrypt`)
+  }
   try {
     return decrypt(value)
   } catch (err) {
-    // Happens when NEXTAUTH_SECRET/ENCRYPTION_SECRET changed after the value was stored.
-    console.error('[settings] Failed to decrypt a stored secret — was the encryption secret rotated?', err)
+    // The encryption secret changed after the value was stored and ENCRYPTION_SECRET_PREVIOUS is not set.
+    console.error(`[settings] Cannot decrypt ${field} — set ENCRYPTION_SECRET_PREVIOUS to the old secret and run npm run secrets:reencrypt`, err)
     return fallback
   }
 }
@@ -92,12 +103,12 @@ export async function getSettings(): Promise<SystemSettings> {
   // Precedence: DB value wins over env, per field.
   const resolved: SystemSettings = row
     ? {
-        openaiApiKey: safeDecrypt(row.openaiApiKey, defaults.openaiApiKey),
+        openaiApiKey: safeDecrypt('openaiApiKey', row.openaiApiKey, defaults.openaiApiKey),
         openaiModel: row.openaiModel,
         whisperModel: row.whisperModel,
         awsRegion: row.awsRegion || defaults.awsRegion,
-        awsAccessKeyId: row.awsAccessKeyId || defaults.awsAccessKeyId,
-        awsSecretKey: safeDecrypt(row.awsSecretKey, defaults.awsSecretKey),
+        awsAccessKeyId: safeDecrypt('awsAccessKeyId', row.awsAccessKeyId, defaults.awsAccessKeyId),
+        awsSecretKey: safeDecrypt('awsSecretKey', row.awsSecretKey, defaults.awsSecretKey),
         awsS3Bucket: row.awsS3Bucket || defaults.awsS3Bucket,
         maxRecordingMins: row.maxRecordingMins,
         requireFormBeforeComplete: row.requireFormBeforeComplete,
@@ -129,7 +140,7 @@ export async function getPolicies(): Promise<PolicySettings> {
   }
 }
 
-const SECRET_FIELDS = new Set<keyof SystemSettings>(['openaiApiKey', 'awsSecretKey'])
+export const SECRET_FIELDS = new Set<keyof SystemSettings>(['openaiApiKey', 'awsAccessKeyId', 'awsSecretKey'])
 
 export async function updateSettings(updates: Partial<SystemSettings>): Promise<SystemSettings> {
   const data: Record<string, string | number | boolean | null> = {}

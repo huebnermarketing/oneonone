@@ -9,8 +9,11 @@ echo "🚀 Starting deployment..."
 cd /var/www/oneonone || exit
 
 # Pull latest code (exit if pull fails so we don't build old code)
-echo "📥 Pulling latest code..."
-git pull origin main || { echo "❌ git pull failed. Stash or discard local changes (e.g. git checkout -- package-lock.json) and try again."; exit 1; }
+# Branch flow: feature/* -> stage (test server) -> main (production). Override with DEPLOY_BRANCH=stage bash deploy.sh
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
+echo "📥 Pulling latest code from origin/$DEPLOY_BRANCH..."
+git checkout "$DEPLOY_BRANCH" 2>/dev/null || { echo "❌ Branch $DEPLOY_BRANCH not found locally. Run: git fetch origin && git checkout $DEPLOY_BRANCH"; exit 1; }
+git pull origin "$DEPLOY_BRANCH" || { echo "❌ git pull failed. Stash or discard local changes (e.g. git checkout -- package-lock.json) and try again."; exit 1; }
 
 # Check if .env exists, if not create from template
 if [ ! -f .env ]; then
@@ -52,6 +55,13 @@ npx prisma generate
 # then re-run this script. See DEPLOYMENT.md "Migrating from db push".
 echo "🗄️ Applying database migrations..."
 npx prisma migrate deploy || { echo "❌ prisma migrate deploy failed. If this DB predates migrations, run: npx prisma migrate resolve --applied 0_init"; exit 1; }
+
+# Quality gate: types + unit tests must pass before we build (skip with SKIP_CHECKS=1 in an emergency)
+if [ "${SKIP_CHECKS:-0}" != "1" ]; then
+  echo "🧪 Running typecheck + unit tests..."
+  npm run typecheck || { echo "❌ Typecheck failed. Not deploying."; exit 1; }
+  npm test || { echo "❌ Unit tests failed. Not deploying."; exit 1; }
+fi
 
 # Build the app (exit on failure)
 echo "🏗️ Building app (this may take a few minutes)..."

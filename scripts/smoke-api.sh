@@ -1,0 +1,121 @@
+#!/bin/bash
+# End-to-end API smoke tests. Runs against a live dev server + a database seeded with `npm run db:seed`.
+#
+#   npm run test:smoke                              # defaults: http://localhost:3000, $DATABASE_URL from .env
+#   BASE_URL=http://localhost:3123 npm run test:smoke
+#
+# Requires: curl, psql, python3, openssl. Needs CRON_SECRET in the server env (reads it from .env).
+# Creates temporary sessions/todos for seeded @test.com users and removes them afterwards.
+# NEVER run against production — it mutates data.
+set -u
+B="${BASE_URL:-http://localhost:3000}"
+if [ -z "${DATABASE_URL:-}" ] && [ -f .env ]; then DATABASE_URL=$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | tr -d '"'); fi
+CRON="${CRON_SECRET:-$(grep -E '^CRON_SECRET=' .env 2>/dev/null | cut -d= -f2- | tr -d '"')}"
+# psql does not understand Prisma's ?schema=... query parameter
+PSQL_URL=$(echo "${DATABASE_URL:?set DATABASE_URL}" | sed -E 's/([?&])schema=[^&]*&?/\1/; s/[?&]$//')
+PSQL="psql $PSQL_URL -tA"
+pass=0; fail=0
+check() { # name expected actual
+  if [ "$2" = "$3" ]; then pass=$((pass+1)); echo "  ok   $1 -> $3"; else fail=$((fail+1)); echo "  FAIL $1 -> got $3, expected $2"; fi
+}
+code() { curl -s -o /tmp/body -w '%{http_code}' "$@"; }
+body() { cat /tmp/body; }
+
+# sessions: create NextAuth session rows directly for seeded users
+mksess() { # email -> cookie file
+  local uid=$($PSQL -c "select id from \"User\" where email='$1'")
+  local tok=$(openssl rand -base64 32 | tr '+/' '-_' | tr -d '=')
+  $PSQL -c "insert into \"Session\"(id,\"sessionToken\",\"userId\",expires) values (gen_random_uuid()::text,'$tok','$uid',now()+interval '1 day')" >/dev/null
+  echo "next-auth.session-token=$tok"
+}
+ADMIN=$(mksess nishant@test.com)
+REP=$(mksess test-reporter@test.com)
+ALEX=$(mksess alex@test.com)          # employee reporting to test-reporter
+HITEN=$(mksess hiten@test.com)        # a different reporter
+
+echo "## auth mapping"
+check "unauth /api/todos is 401" 401 $(code $B/api/todos)
+check "unauth /api/meetings is 401" 401 $(code $B/api/meetings)
+check "employee /api/users is 403" 403 $(code -b "$ALEX" $B/api/users)
+check "widgets route gone" 404 $(code -b "$ADMIN" $B/api/dashboard/widgets)
+
+echo "## validation"
+check "POST todos bad body 400" 400 $(code -b "$ALEX" -X POST $B/api/todos -H 'content-type: application/json' -d '{"title":""}')
+grep -q '"details"' /tmp/body && echo "  ok   details present" || { echo "  FAIL no details"; fail=$((fail+1)); }
+check "POST todos invalid json 400" 400 $(code -b "$ALEX" -X POST $B/api/todos -H 'content-type: application/json' -d '{bad')
+check "GET notifications limit=abc 400" 400 $(code -b "$ALEX" "$B/api/notifications?limit=abc")
+
+echo "## todo scoping"
+TOTAL=$($PSQL -c 'select count(*) from "Todo"')
+ADM_N=$(curl -s -b "$ADMIN" $B/api/todos | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')
+REP_N=$(curl -s -b "$REP" $B/api/todos | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')
+HIT_N=$(curl -s -b "$HITEN" $B/api/todos | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')
+check "admin sees all todos" "$TOTAL" "$ADM_N"
+[ "$REP_N" -lt "$TOTAL" ] && echo "  ok   reporter sees subset ($REP_N < $TOTAL)" || { echo "  FAIL reporter sees all"; fail=$((fail+1)); }
+[ "$HIT_N" -lt "$TOTAL" ] && echo "  ok   other reporter sees subset ($HIT_N < $TOTAL)" || { echo "  FAIL"; fail=$((fail+1)); }
+OTHER_EMP=$($PSQL -c "select id from \"User\" where email='ritesh@test.com'")
+check "reporter cannot assign todo outside team" 403 $(code -b "$REP" -X POST $B/api/todos -H 'content-type: application/json' -d "{\"title\":\"x\",\"assignedToId\":\"$OTHER_EMP\"}")
+ALEX_ID=$($PSQL -c "select id from \"User\" where email='alex@test.com'")
+check "reporter assigns todo to direct report" 201 $(code -b "$REP" -X POST $B/api/todos -H 'content-type: application/json' -d "{\"title\":\"smoke todo\",\"assignedToId\":\"$ALEX_ID\"}")
+TODO_ID=$(python3 -c 'import json;print(json.load(open("/tmp/body"))["id"])')
+
+echo "## profile lockdown"
+REP_ID=$($PSQL -c "select id from \"User\" where email='test-reporter@test.com'")
+check "profile PATCH ok" 200 $(code -b "$ALEX" -X PATCH $B/api/profile -H 'content-type: application/json' -d "{\"title\":\"Smoke\",\"reportsToId\":\"$OTHER_EMP\"}")
+check "reportsToId unchanged" "$REP_ID" "$($PSQL -c "select \"reportsToId\" from \"User\" where email='alex@test.com'")"
+
+echo "## policies"
+check "settings GET has cancelPolicy" 200 $(code -b "$ADMIN" $B/api/settings)
+grep -q '"cancelPolicy":"REPORTER_AND_ADMIN"' /tmp/body && echo "  ok   default cancelPolicy" || { echo "  FAIL cancelPolicy missing"; fail=$((fail+1)); }
+check "settings PUT bad reminder 400" 400 $(code -b "$ADMIN" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"reminderHoursBefore":0}')
+check "settings PUT employee 403" 403 $(code -b "$ALEX" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"employeeCanViewRecording":true}')
+
+echo "## cancel flow"
+# any future SCHEDULED meeting run by test-reporter; its employee gets a session
+MID=$($PSQL -c "select id from \"Meeting\" where \"reporterId\"='$REP_ID' and status='SCHEDULED' and \"meetingDate\">now() limit 1")
+[ -n "$MID" ] || { echo "  FAIL no future SCHEDULED meeting for test-reporter — reseed with npm run db:seed"; fail=$((fail+1)); }
+MEMP=$(mksess "$($PSQL -c "select email from \"User\" where id=(select \"employeeId\" from \"Meeting\" where id='$MID')")")
+MEMP_ID=$($PSQL -c "select \"employeeId\" from \"Meeting\" where id='$MID'")
+check "employee cannot cancel (REPORTER_AND_ADMIN)" 403 $(code -b "$MEMP" -X POST $B/api/meetings/$MID/cancel -H 'content-type: application/json' -d '{}')
+check "other reporter cannot cancel" 403 $(code -b "$HITEN" -X POST $B/api/meetings/$MID/cancel -H 'content-type: application/json' -d '{}')
+check "PATCH status CANCELLED rejected by schema" 400 $(code -b "$REP" -X PATCH $B/api/meetings/$MID -H 'content-type: application/json' -d '{"status":"CANCELLED"}')
+check "reporter cancels" 200 $(code -b "$REP" -X POST $B/api/meetings/$MID/cancel -H 'content-type: application/json' -d '{"reason":"smoke"}')
+check "status is CANCELLED" CANCELLED "$($PSQL -c "select status from \"Meeting\" where id='$MID'")"
+check "cancel again 400" 400 $(code -b "$REP" -X POST $B/api/meetings/$MID/cancel -H 'content-type: application/json' -d '{}')
+check "employee got notification" 1 "$($PSQL -c "select count(*) from \"Notification\" where \"userId\"='$MEMP_ID' and type='MEETING_CANCELLED' and link='/meetings/$MID'")"
+check "audit row written" 1 "$($PSQL -c "select count(*) from \"AuditLog\" where \"entityId\"='$MID' and action='UPDATE' and details->>'status'='CANCELLED'")"
+# policy switch
+MID2=$($PSQL -c "select id from \"Meeting\" where status='SCHEDULED' and \"meetingDate\">now() and id<>'$MID' limit 1")
+EMP2=$(mksess "$($PSQL -c "select email from \"User\" where id=(select \"employeeId\" from \"Meeting\" where id='$MID2')")")
+check "admin sets ANY_PARTICIPANT" 200 $(code -b "$ADMIN" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"cancelPolicy":"ANY_PARTICIPANT"}')
+check "employee can now cancel" 200 $(code -b "$EMP2" -X POST $B/api/meetings/$MID2/cancel -H 'content-type: application/json' -d '{}')
+PMID=$($PSQL -c "select id from \"Meeting\" where status='SCHEDULED' and \"meetingDate\">now() limit 1")
+$PSQL -c "update \"Meeting\" set status='PROPOSED' where id='$PMID'" >/dev/null
+check "complete a PROPOSED meeting rejected" 400 $(code -b "$ADMIN" -X PATCH $B/api/meetings/$PMID -H 'content-type: application/json' -d '{"status":"COMPLETED"}')
+$PSQL -c "update \"Meeting\" set status='SCHEDULED' where id='$PMID'" >/dev/null
+
+echo "## recording visibility"
+RMID=$($PSQL -c "select m.id from \"Meeting\" m join \"MeetingRecording\" r on r.\"meetingId\"=m.id limit 1")
+REMP=$($PSQL -c "select \"employeeId\" from \"Meeting\" where id='$RMID'")
+REMAIL=$($PSQL -c "select email from \"User\" where id='$REMP'")
+EMPC=$(mksess $REMAIL)
+check "employee recording 403 by default" 403 $(code -b "$EMPC" $B/api/meetings/$RMID/recording)
+check "admin enables employeeCanViewRecording" 200 $(code -b "$ADMIN" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"employeeCanViewRecording":true}')
+check "employee recording 200 after policy" 200 $(code -b "$EMPC" $B/api/meetings/$RMID/recording)
+check "employee cannot delete recording" 403 $(code -b "$EMPC" -X DELETE $B/api/meetings/$RMID/recording)
+check "employee meeting page renders" 200 $(code -b "$EMPC" $B/meetings/$RMID)
+grep -q "Meeting Recording" /tmp/body && echo "  ok   recording section visible to employee" || { echo "  FAIL section hidden"; fail=$((fail+1)); }
+
+echo "## cron"
+check "cron no secret 401" 401 $(code -X POST $B/api/cron/meetings)
+check "cron with secret 200" 200 $(code -X POST $B/api/cron/meetings -H "x-cron-secret: $CRON")
+
+echo "## pages"
+for p in /dashboard /meetings /todos /employees /admin /admin/settings /insights /profile; do check "admin page $p" 200 $(code -b "$ADMIN" $B$p); done
+check "employee /admin -> error boundary (200)" 200 $(code -b "$ALEX" $B/admin)
+
+# cleanup: restore cancelled fixtures, remove temp rows, reset policies
+$PSQL -c "update \"Meeting\" set status='SCHEDULED' where id in ('$MID','$MID2'); delete from \"Notification\" where link in ('/meetings/$MID','/meetings/$MID2') and type='MEETING_CANCELLED'; update \"User\" set title=null where id='$ALEX_ID'; delete from \"Todo\" where id='$TODO_ID'; delete from \"Session\" where expires < now()+interval '2 days';" >/dev/null
+curl -s -o /dev/null -b "$ADMIN" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"cancelPolicy":"REPORTER_AND_ADMIN","employeeCanViewRecording":false}'
+echo; echo "PASS=$pass FAIL=$fail"
+[ "$fail" -eq 0 ]

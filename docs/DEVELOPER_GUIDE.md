@@ -4,7 +4,7 @@ Internal app for running bi-weekly 1:1s (AMI "Agency Advantage" format): propose
 
 This guide is the entry point for anyone picking up the codebase. Companion docs: `docs/API_REFERENCE.md` (every route), `docs/REFACTOR_BACKLOG.md` (known issues, prioritized), `docs/ENV_VARIABLES.md`, `docs/KEKA_INTEGRATION.md`, `docs/FATHOM_ZOOM_SETUP.md`, `docs/RECORDING_OPTIONS.md`.
 
-Baseline (after the `refactor/hygiene` branch): `npm run typecheck` clean, `next lint` clean, `next build` clean, 19 npm audit findings remaining — all need major upgrades (next 16, tailwind 4, nodemailer 10, googleapis 188, eslint-config-next 16) and are tracked in the backlog. No test suite.
+Baseline: `npm run check` (typecheck + lint + 106 unit tests) clean, `next build` clean, `npm run test:smoke` 42/42 against a seeded dev server. CI (`.github/workflows/ci.yml`) runs typecheck, lint, unit tests, build, and a migration-drift check on every PR to `stage`/`main`. 19 npm audit findings remain — all need major upgrades (next 16, tailwind 4, nodemailer 10, googleapis 188, eslint-config-next 16), tracked in the backlog.
 
 ---
 
@@ -79,7 +79,18 @@ Mic recording requires a secure context (`localhost` counts; LAN IPs do not).
 
 ### Useful scripts
 
-`npm run dev | build | start | lint`, `npm run db:generate | db:push | db:migrate | db:studio | db:seed`. Build uses `NODE_OPTIONS=--max-old-space-size=3072`.
+`npm run dev | build | start | lint | typecheck`, `npm test` (unit), `npm run test:smoke` (API e2e, needs dev server + seeded DB + `CRON_SECRET` in `.env`), `npm run check` (all static checks), `npm run db:generate | db:migrate | db:migrate:deploy | db:migrate:status | db:studio | db:seed`. Build uses `NODE_OPTIONS=--max-old-space-size=3072`.
+
+### Testing
+
+| Layer | Where | Runs |
+|---|---|---|
+| Unit (vitest) | `tests/unit/*.test.ts` — meeting state machine, access predicates, conflict check, team scoping, recurring-date math, encryption, Fathom signature, API wrapper/error mapping, every zod schema | `npm test`; no DB, `@/lib/prisma` is replaced by `tests/helpers/prisma-mock.ts` |
+| API smoke (bash) | `scripts/smoke-api.sh` — logs in as seeded users by inserting `Session` rows, exercises auth mapping, validation, scoping, cancel policy, recording visibility, cron, pages; restores fixtures afterwards | `npm run test:smoke` against `http://localhost:3000` (override `BASE_URL`) |
+| CI | `.github/workflows/ci.yml` | PRs/pushes to `stage` and `main` |
+| Deploy gate | `deploy.sh` runs typecheck + unit tests before building (`SKIP_CHECKS=1` to bypass in an emergency) | on the server |
+
+Conventions: one test file per `lib/` module; program `prismaMock.<model>.<method>.mockResolvedValue(...)` per test; pass mock implementations to `vi.fn(impl)` (the config restores mocks between tests); spy on `console.error` when a test exercises a logged failure path.
 
 ---
 
@@ -134,7 +145,7 @@ SystemSettings (singleton id='system')     BackupHistory
 | `RecurringSchedule` | `frequency` WEEKLY/BIWEEKLY/MONTHLY, `dayOfWeek` 0-6, `timeOfDay` HH:mm, `nextMeetingDate`, `googleRecurringEventId`, `isActive` (soft delete) |
 | `MeetingRecording` | `audioKey` (S3 prefix → `…/final.webm`), `transcript`, `summary`, `keyPoints`/`autoTodos`/`sentiment`/`qualityDetails` (Json), `qualityScore`, `status` UPLOADING→UPLOADED→TRANSCRIBING→ANALYZING→COMPLETED/FAILED |
 | `Todo` | `status` NOT_STARTED/IN_PROGRESS/DONE, `priority` HIGH/MEDIUM/LOW, `dueDate`, optional `meetingId` (SET NULL when the meeting is deleted) |
-| `SystemSettings` | `openaiApiKey` + `awsSecretKey` encrypted (AES-256-GCM, key from `NEXTAUTH_SECRET`), `awsAccessKeyId` plaintext, `openaiModel`, `whisperModel`, `maxRecordingMins` (25). **Policies**: `requireFormBeforeComplete` (true), `cancelPolicy` (REPORTER_AND_ADMIN), `employeeCanViewRecording` (false), `employeeCanViewNotes` (true), `enableEmailReminders` (true), `reminderHoursBefore` (24), `shortReminderHoursBefore` (1) |
+| `SystemSettings` | `openaiApiKey`, `awsAccessKeyId`, `awsSecretKey` encrypted (AES-256-GCM v2, key from `ENCRYPTION_SECRET`), `openaiModel`, `whisperModel`, `maxRecordingMins` (25). **Policies**: `requireFormBeforeComplete` (true), `cancelPolicy` (REPORTER_AND_ADMIN), `employeeCanViewRecording` (false), `employeeCanViewNotes` (true), `enableEmailReminders` (true), `reminderHoursBefore` (24), `shortReminderHoursBefore` (1) |
 | `Notification` | `type` enum (10 values); PROPOSED/ACCEPTED/SUGGESTED/COMPLETED all reuse `MEETING_SCHEDULED` |
 | `AuditLog` | `action` CREATE/UPDATE/DELETE/LOGIN/LOGOUT/EXPORT/IMPORT/CLEAR_DATA/SETTINGS_CHANGE; cascades with User |
 | `CalendarEvent` | `googleEventId`, `googleCalendarLink`; created on **accept**, on the reporter's calendar |
@@ -157,7 +168,7 @@ Cascade summary: `Account`, `Session`, `Notification`, `AuditLog`, `RecurringSch
 | `constants.ts` | `DEFAULT_TIMEZONE`, `MEETING_DURATION_MINUTES`, `ALLOWED_EMAIL_DOMAIN` (from `GOOGLE_WORKSPACE_DOMAIN`), `APP_NAME` | — |
 | `auth-helpers.ts` | `getCurrentUser()`, `requireAuth()` (redirects — **page use only**), `requireRole`/`requireAdmin` (throw), `canAccessEmployeeData` (legacy; pages still use it) | Pages |
 | `settings.ts` | `getSettings()` / `getPolicies()` — DB `SystemSettings` row wins over env, per field; 5-min cache (defaults cached too); `updateSettings()` encrypts secrets; `safeDecrypt` logs instead of throwing when the encryption secret changed | OpenAI/S3 config, policies |
-| `encryption.ts` | AES-256-GCM, `scryptSync(NEXTAUTH_SECRET \|\| ENCRYPTION_SECRET, 'salt', 32)` | Rotating secrets (rotation breaks stored keys) |
+| `encryption.ts` | AES-256-GCM; v2 key = HKDF(`ENCRYPTION_SECRET`), legacy scrypt format still readable; `isEncrypted`/`isLegacyCiphertext`; `ENCRYPTION_SECRET_PREVIOUS` for rotation; `scripts/reencrypt-secrets.ts` | Secrets, rotation |
 | `openai.ts` | `transcribeAudio()` (temp file → ffmpeg compress 48/32/24k mono MP3 if >24 MB → segment 40-min pieces if still too big → Whisper verbose_json), `analyzeTranscript()` (JSON-mode GPT → summary/keyPoints/suggestedTodos/sentiment/qualityScore/qualityDetails/commonThemes), `searchTranscripts()`, `generateOrganizationInsights()` | Recording pipeline, insights |
 | `s3.ts` | Settings-driven S3 client, `uploadToS3`, signed GET/PUT URLs, `deleteS3Prefix`, key helpers `recordings/<meetingId>/<ts>/chunk_NNNN.webm` + `final.webm` | Storage |
 | `google-calendar.ts` | Per-user OAuth2 client with auto token refresh → `Account`; `createCalendarEvent` (30-min, Meet link, attendees both), `createRecurringCalendarEvent` (1-year RRULE), `updateCalendarEvent`, `deleteCalendarEvent`, `getMutualFreeSlots` (free/busy ∩ both users' work hours in their TZs) | Scheduling / availability |
@@ -226,8 +237,8 @@ Alternate ingress: Fathom webhook writes transcript/summary straight to `Meeting
 ## 8. Environment variables
 
 Required: `DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `NODE_ENV`.
-Strongly recommended: `GOOGLE_WORKSPACE_DOMAIN` (unset = any Google account can sign in), `INITIAL_ADMIN_EMAILS` (comma-separated; promoted to SUPER_ADMIN on sign-in, never demoted — replaces the manual SQL step), `CRON_SECRET`.
-Optional: `OPENAI_API_KEY`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET` (all overridable in Admin → Settings), `SMTP_HOST/PORT/USER/PASSWORD`, `EMAIL_FROM`, `AWS_SES_FROM_EMAIL`, `ENCRYPTION_SECRET` (only used if `NEXTAUTH_SECRET` is unset — the reverse of what `docs/ENV_VARIABLES.md` says), `FATHOM_WEBHOOK_SECRET`, `KEKA_ENVIRONMENT/COMPANY/CLIENT_ID/CLIENT_SECRET/API_KEY/HOLIDAY_CALENDAR_ID_US/_IN`, `ENABLE_TEST_LOGIN`.
+Strongly recommended: `INITIAL_ADMIN_EMAILS` (comma-separated; promoted to SUPER_ADMIN on sign-in, never demoted — replaces the manual SQL step), `CRON_SECRET`.
+Required in production: `GOOGLE_WORKSPACE_DOMAIN` (boot fails without it), `ENCRYPTION_SECRET` (falls back to `NEXTAUTH_SECRET` with a warning; `ENCRYPTION_SECRET_PREVIOUS` during rotation — see `docs/ENV_VARIABLES.md`). Optional: `OPENAI_API_KEY`, `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET` (all overridable in Admin → Settings), `SMTP_HOST/PORT/USER/PASSWORD`, `EMAIL_FROM`, `AWS_SES_FROM_EMAIL`, `FATHOM_WEBHOOK_SECRET`, `KEKA_ENVIRONMENT/COMPANY/CLIENT_ID/CLIENT_SECRET/API_KEY/HOLIDAY_CALENDAR_ID_US/_IN`, `ENABLE_TEST_LOGIN`.
 
 `env.example` lists every variable with comments.
 
