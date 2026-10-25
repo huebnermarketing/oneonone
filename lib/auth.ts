@@ -14,6 +14,13 @@ if (!googleClientId || !googleClientSecret) {
   )
 }
 
+// In production an unrestricted Google sign-in would let any Google account in. Refuse to boot.
+if (process.env.NODE_ENV === 'production' && !process.env.GOOGLE_WORKSPACE_DOMAIN) {
+  throw new Error(
+    'GOOGLE_WORKSPACE_DOMAIN is not set. In production, sign-in must be restricted to your Workspace domain. See docs/ENV_VARIABLES.md.'
+  )
+}
+
 // Comma-separated list of emails that are promoted to SUPER_ADMIN on sign-in.
 // Replaces the "run an UPDATE in psql" bootstrap step. Only ever promotes, never demotes.
 const initialAdminEmails = new Set(

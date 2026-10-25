@@ -84,13 +84,30 @@ Required if you use a cron job to generate recurring meetings and send reminders
 
 ---
 
-## Optional: Encryption (settings / sensitive DB values)
+## Encryption (API keys saved in Admin → Settings)
 
-If you store API keys in Admin → Settings, the app encrypts them. Defaults to `NEXTAUTH_SECRET` if not set:
+Secrets entered in Admin → Settings (`openaiApiKey`, `awsAccessKeyId`, `awsSecretKey`) are stored AES-256-GCM encrypted. The key is derived (HKDF-SHA256) from:
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `ENCRYPTION_SECRET` | Key for encrypting settings (optional; falls back to `NEXTAUTH_SECRET`) | long random string |
+| Variable | Description |
+|----------|-------------|
+| `ENCRYPTION_SECRET` | **Set this in every environment.** `openssl rand -base64 32`. Dedicated to encryption, so rotating `NEXTAUTH_SECRET` (sessions) never touches stored keys. |
+| `ENCRYPTION_SECRET_PREVIOUS` | Only during a rotation: the old `ENCRYPTION_SECRET`. The app can still read old values while `npm run secrets:reencrypt` rewrites them. Remove afterwards. |
+
+If `ENCRYPTION_SECRET` is unset the app falls back to `NEXTAUTH_SECRET` and logs a warning at startup.
+
+**Adopting `ENCRYPTION_SECRET` on an existing install (one time):**
+
+```bash
+echo "ENCRYPTION_SECRET=\"$(openssl rand -base64 32)\"" >> .env
+pm2 restart oneonone --update-env          # or restart the dev server
+npm run secrets:reencrypt -- --check       # shows what will change, exit 1 if anything needs rewriting
+npm run secrets:reencrypt                  # rewrites legacy-format values and encrypts any plaintext access key
+pm2 restart oneonone                       # clears the in-process settings cache
+```
+
+**Rotating the secret later:** set `ENCRYPTION_SECRET` to the new value and `ENCRYPTION_SECRET_PREVIOUS` to the old one, restart, run `npm run secrets:reencrypt`, then remove `ENCRYPTION_SECRET_PREVIOUS` and restart again.
+
+If a value can no longer be decrypted (secret lost), the app logs `Cannot decrypt <field>` and falls back to the env var for that field; re-enter the key in Admin → Settings.
 
 ---
 

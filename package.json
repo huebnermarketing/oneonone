@@ -22,7 +22,8 @@
     "db:migrate:status": "prisma migrate status",
     "typecheck": "tsc --noEmit",
     "db:studio": "prisma studio",
-    "db:seed": "npx tsx prisma/seed.ts"
+    "db:seed": "npx tsx prisma/seed.ts",
+    "secrets:reencrypt": "npx tsx scripts/reencrypt-secrets.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.981.0",
