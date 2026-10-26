@@ -19,7 +19,7 @@ import { RecordingJob, RecordingStage, RecordingJobKind, RecordingStatus } from 
 import { prisma } from './prisma'
 import { chunkKey, finalRecordingKey, downloadFromS3, uploadToS3, deleteFromS3 } from './s3'
 import { transcribeAudio, analyzeTranscript } from './openai'
-import { notifyRecordingReady } from './notifications'
+import * as notify from './notify'
 
 export const MAX_ATTEMPTS = 3
 /** A job whose heartbeat is older than this is considered dead (process restarted mid-run). */
@@ -272,9 +272,7 @@ export async function runJob(jobId: string): Promise<void> {
 
       // Only the first successful run notifies; a reprocess is an admin action, not news to the participants
       if (job.kind === 'PROCESS') {
-        await notifyRecordingReady([rec.meeting.employeeId, rec.meeting.reporterId], meetingId).catch((err) =>
-          console.error('[Pipeline] notification failed:', err)
-        )
+        await notify.recordingReady({ meetingId, userIds: [rec.meeting.employeeId, rec.meeting.reporterId] })
       }
     }
 

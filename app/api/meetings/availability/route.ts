@@ -1,18 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { MeetingStatus } from '@prisma/client'
-import { fromZonedTime, toZonedTime } from 'date-fns-tz'
 import { REPORTER_OR_ADMIN, forbidden, notFound, parseQuery, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { canActOnUser } from '@/lib/team'
-import { getMutualFreeSlots, isCalendarEnabled } from '@/lib/google-calendar'
+import { isCalendarEnabled } from '@/lib/google-calendar'
 import { isDateUnavailableForEitherUser } from '@/lib/keka'
-import { DEFAULT_WORK_END, DEFAULT_WORK_START, formatWorkHoursLabel } from '@/lib/timezones'
-import { DEFAULT_TIMEZONE, MEETING_DURATION_MINUTES } from '@/lib/constants'
+import { freeSlotsForDay, pairProfiles, workingHoursLabel } from '@/lib/availability'
 import { availabilityQuery } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
-
-const SLOT_MS = MEETING_DURATION_MINUTES * 60 * 1000
 
 /**
  * GET /api/meetings/availability?employeeId=&date=YYYY-MM-DD
@@ -75,57 +70,13 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
     })
   }
 
-  const reporterTz = reporter?.timeZone ?? DEFAULT_TIMEZONE
-  const reporterStart = reporter?.workDayStart ?? DEFAULT_WORK_START
-  const reporterEnd = reporter?.workDayEnd ?? DEFAULT_WORK_END
-  const employeeTz = employee.timeZone ?? DEFAULT_TIMEZONE
-  const employeeStart = employee.workDayStart ?? DEFAULT_WORK_START
-  const employeeEnd = employee.workDayEnd ?? DEFAULT_WORK_END
-
-  const calendarSlots = await getMutualFreeSlots(user.id, employeeId, parsedDate, MEETING_DURATION_MINUTES, {
-    reporterTimeZone: reporterTz,
-    reporterWorkStart: reporterStart,
-    reporterWorkEnd: reporterEnd,
-    employeeTimeZone: employeeTz,
-    employeeWorkStart: employeeStart,
-    employeeWorkEnd: employeeEnd,
-  })
-
-  // Filter out slots that conflict with existing DB meetings (PROPOSED / SCHEDULED), using
-  // day boundaries in the reporter's timezone rather than UTC midnight-to-midnight.
-  const zoned = toZonedTime(parsedDate, reporterTz)
-  const y = zoned.getFullYear(), mo = zoned.getMonth(), d = zoned.getDate()
-  const dayStart = fromZonedTime(new Date(y, mo, d, 0, 0, 0, 0), reporterTz)
-  const dayEnd = fromZonedTime(new Date(y, mo, d + 1, 0, 0, 0, 0), reporterTz)
-
-  const existingMeetings = await prisma.meeting.findMany({
-    where: {
-      status: { in: [MeetingStatus.PROPOSED, MeetingStatus.SCHEDULED] },
-      meetingDate: { gte: dayStart, lt: dayEnd },
-      OR: [{ employeeId }, { reporterId: user.id }, { employeeId: user.id }, { reporterId: employeeId }],
-    },
-    select: { meetingDate: true },
-  })
-
-  const busyRanges = existingMeetings.map((m) => {
-    const start = m.meetingDate.getTime()
-    return { start, end: start + SLOT_MS }
-  })
-  const slots = calendarSlots.filter((slot) => {
-    const slotStart = new Date(slot.start).getTime()
-    const slotEnd = new Date(slot.end).getTime()
-    return !busyRanges.some((busy) => slotStart < busy.end && slotEnd > busy.start)
-  })
-
-  const workingHoursLabel =
-    reporterTz !== employeeTz || reporterStart !== employeeStart || reporterEnd !== employeeEnd
-      ? formatWorkHoursLabel({ start: reporterStart, end: reporterEnd }, reporterTz, { start: employeeStart, end: employeeEnd }, employeeTz)
-      : `Free on both calendars (${reporterStart} – ${reporterEnd} your time)`
+  const profiles = pairProfiles(reporter, employee)
+  const slots = await freeSlotsForDay(user.id, employeeId, parsedDate, profiles)
 
   return NextResponse.json({
     slots,
     calendarUnavailable: false,
-    workingHoursLabel,
-    reporterTimeZone: reporterTz,
+    workingHoursLabel: workingHoursLabel(profiles),
+    reporterTimeZone: profiles.reporter.timeZone,
   })
 })

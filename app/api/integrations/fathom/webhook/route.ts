@@ -4,7 +4,7 @@ import { ApiError, badRequest, withPublicRoute } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { verifyFathomWebhook } from '@/lib/fathom-webhook'
-import { notifyRecordingReady } from '@/lib/notifications'
+import * as notify from '@/lib/notify'
 
 export const dynamic = 'force-dynamic'
 
@@ -187,11 +187,7 @@ export const POST = withPublicRoute(async (request: NextRequest) => {
     },
   })
 
-  try {
-    await notifyRecordingReady([meeting.employeeId, meeting.reporterId], meeting.id)
-  } catch (e) {
-    console.warn('[Fathom] Notify recording ready failed', e)
-  }
+  await notify.recordingReady({ meetingId: meeting.id, userIds: [meeting.employeeId, meeting.reporterId] })
 
   return NextResponse.json({ received: true, matched: true, meetingId: meeting.id })
 })

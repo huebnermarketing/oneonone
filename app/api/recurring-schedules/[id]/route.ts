@@ -5,14 +5,11 @@ import { prisma } from '@/lib/prisma'
 import { createAuditLog } from '@/lib/audit'
 import { calculateFirstOccurrence } from '@/lib/recurring-dates'
 import { deleteCalendarEvent } from '@/lib/google-calendar'
-import { sendRecurringScheduleUpdatedEmail } from '@/lib/email'
-import { createNotification, notifyMeetingCancelled } from '@/lib/notifications'
+import * as notify from '@/lib/notify'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import { deleteRecurringQuery, updateRecurringScheduleSchema } from '@/lib/validation/recurring'
 
 export const dynamic = 'force-dynamic'
-
-const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
 const scheduleWithParties = Prisma.validator<Prisma.RecurringScheduleDefaultArgs>()({
   include: {
@@ -59,9 +56,7 @@ async function afterFutureMeetingsCancelled(schedule: ScheduleWithParties, meeti
             console.error('Failed to delete calendar event for meeting', m.id, e)
           )
         : Promise.resolve(),
-      notifyMeetingCancelled(m.employeeId, actorName, m.meetingDate, m.id).catch((e) =>
-        console.error('Failed to notify cancellation for meeting', m.id, e)
-      ),
+      notify.meetingCancelled({ meetingId: m.id, date: m.meetingDate, recipients: [{ id: m.employeeId }], actorName, email: false }),
     ])
   )
 }
@@ -150,20 +145,15 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
   if (cancelling) await afterFutureMeetingsCancelled(existing, futureMeetings, actorName)
 
   if (scheduleChanged) {
-    const [hh, mm] = newTime.split(':').map(Number)
-    const displayTime = `${hh % 12 || 12}:${String(mm).padStart(2, '0')} ${hh >= 12 ? 'PM' : 'AM'}`
-    await Promise.all([
-      sendRecurringScheduleUpdatedEmail(existing.employee.email, existing.employee.name, user.name, newDay, newTime, newFreq, reporterTz).catch((e) =>
-        console.error('Failed to send schedule update email:', e)
-      ),
-      createNotification({
-        userId: existing.employeeId,
-        type: 'MEETING_SCHEDULED',
-        title: 'Recurring Schedule Updated',
-        message: `${actorName} updated your recurring meeting to ${DAY_NAMES[newDay]}s at ${displayTime}.`,
-        link: '/meetings',
-      }).catch((e) => console.error('Failed to send schedule update notification:', e)),
-    ])
+    await notify.recurringScheduleUpdated({
+      scheduleId: existing.id,
+      employee: existing.employee,
+      actorName,
+      dayOfWeek: newDay,
+      timeOfDay: newTime,
+      frequency: newFreq,
+      reporterTimeZone: reporterTz,
+    })
   }
 
   return NextResponse.json({ ...schedule, cancelledMeetingCount: futureMeetings.length })

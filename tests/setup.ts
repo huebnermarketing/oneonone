@@ -13,11 +13,14 @@ process.env.GOOGLE_WORKSPACE_DOMAIN ||= 'example.com'
 process.env.NODE_ENV ||= 'test'
 
 vi.mock('@/lib/prisma', () => ({ prisma: prismaMock }))
-vi.mock('@/lib/email', () => ({
-  sendMeetingCancelledEmail: vi.fn(async () => undefined),
-  sendMeetingAcceptedEmail: vi.fn(async () => undefined),
-  sendTodoAssignedEmail: vi.fn(async () => undefined),
-}))
+vi.mock('@/lib/email', () => {
+  const senders = [
+    'sendMeetingScheduledEmail', 'sendTodoAssignedEmail', 'sendTodoDueReminderEmail', 'sendFormSubmittedEmail',
+    'sendMeetingProposalEmail', 'sendMeetingAcceptedEmail', 'sendProposalConfirmationEmail', 'sendMeetingReminderEmail',
+    'sendFormReminderEmail', 'sendMeetingSuggestionEmail', 'sendRecurringScheduleUpdatedEmail', 'sendMeetingCancelledEmail',
+  ]
+  return Object.fromEntries(senders.map((name) => [name, vi.fn(async () => undefined)]))
+})
 vi.mock('@/lib/google-calendar', () => ({
   deleteCalendarEvent: vi.fn(async () => undefined),
   createCalendarEvent: vi.fn(async () => undefined),

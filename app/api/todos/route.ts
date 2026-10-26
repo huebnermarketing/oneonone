@@ -4,8 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { logTodoCreated } from '@/lib/audit'
 import { getTeamUserIds, canActOnUser } from '@/lib/team'
 import { canViewMeeting } from '@/lib/meeting-access'
-import { sendTodoAssignedEmail } from '@/lib/email'
-import { notifyTodoAssigned } from '@/lib/notifications'
+import * as notify from '@/lib/notify'
 import { createTodoSchema } from '@/lib/validation/todos'
 
 export const dynamic = 'force-dynamic'
@@ -73,20 +72,7 @@ export const POST = withApiAuth(async (req: NextRequest, { user }) => {
   })
 
   if (todo.assignedToId !== user.id && todo.assignedTo?.email) {
-    await Promise.all([
-      sendTodoAssignedEmail(
-        todo.assignedTo.email,
-        todo.assignedTo.name,
-        todo.title,
-        todo.description,
-        todo.dueDate,
-        todo.createdBy.name,
-        todo.id
-      ).catch((e) => console.error('Failed to send todo email:', e)),
-      notifyTodoAssigned(todo.assignedToId, todo.createdBy.name, todo.title, todo.id).catch((e) =>
-        console.error('Failed to create todo notification:', e)
-      ),
-    ])
+    await notify.todoAssigned({ todo, assignee: { ...todo.assignedTo, id: todo.assignedToId }, creatorName: todo.createdBy.name })
   }
 
   return NextResponse.json(todo, { status: 201 })
