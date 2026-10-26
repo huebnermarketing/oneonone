@@ -222,17 +222,13 @@ export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, 
   // Step 2a: One-time form
   if (scheduleType === 'one-time') {
     return (
-      <div className="max-w-2xl">
-        <button
-          type="button"
-          onClick={() => setScheduleType(null)}
-          className="flex items-center gap-2 text-medium-gray hover:text-dark-gray dark:hover:text-white mb-6 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" aria-hidden="true" />
-          <span>Back</span>
-        </button>
-        <NewMeetingForm employees={employees} currentUserId={currentUserId} workDayStart={workDayStart} workDayEnd={workDayEnd} />
-      </div>
+      <NewMeetingForm
+        employees={employees}
+        currentUserId={currentUserId}
+        workDayStart={workDayStart}
+        workDayEnd={workDayEnd}
+        onBack={() => setScheduleType(null)}
+      />
     )
   }
 

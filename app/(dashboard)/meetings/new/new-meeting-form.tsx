@@ -5,7 +5,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
 import { useState, useMemo, useEffect, useCallback, useId } from 'react'
 import { useRouter } from 'next/navigation'
-import { Calendar, Clock, User, ArrowLeft, Check, Loader2, AlertCircle, Video, MapPin } from 'lucide-react'
+import { Calendar, User, ArrowLeft, Check, Loader2, AlertCircle, Video, MapPin } from 'lucide-react'
 import { DatePicker } from '@/components/ui/date-picker'
 import { useToast } from '@/components/ui/toast'
 import { useFormat } from '@/components/providers/timezone-provider'
@@ -22,6 +22,8 @@ const formSchema = z.object({
 type FormData = z.infer<typeof formSchema>
 
 interface NewMeetingFormProps {
+  /** When set, the single back link returns to the schedule-type chooser instead of the previous page */
+  onBack?: () => void
   employees: Array<{ id: string; name: string; email: string }>
   currentUserId: string
   /** Viewer's work hours ("HH:mm", their profile zone) — bound the fallback grid when calendars are not connected. */
@@ -29,7 +31,7 @@ interface NewMeetingFormProps {
   workDayEnd?: string | null
 }
 
-export function NewMeetingForm({ employees, workDayStart, workDayEnd }: NewMeetingFormProps) {
+export function NewMeetingForm({ employees, workDayStart, workDayEnd, onBack }: NewMeetingFormProps) {
   const router = useRouter()
   const { toastError, toastSuccess } = useToast()
   const f = useFormat()
@@ -199,20 +201,20 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd }: NewMeeti
   const selectTime = (iso: string) => setValue('meetingTime', iso, { shouldValidate: true })
 
   return (
-    <div className="max-w-4xl">
+    <div className="max-w-6xl">
       <button
         type="button"
-        onClick={() => router.back()}
+        onClick={() => (onBack ? onBack() : router.back())}
         className="flex items-center gap-2 text-medium-gray hover:text-dark-gray dark:hover:text-white mb-6 transition-colors"
       >
         <ArrowLeft className="w-4 h-4" aria-hidden="true" />
-        <span>Back to meetings</span>
+        <span>{onBack ? 'Back' : 'Back to meetings'}</span>
       </button>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
-        <div className="grid gap-6 lg:grid-cols-[1fr,1fr] items-start">
-          {/* Left: Team Member with search + scrollable list */}
-          <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden flex flex-col max-h-[520px]">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)] items-start">
+          {/* Left: Team Member with search + scrollable list (sticks while the right column scrolls) */}
+          <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden flex flex-col max-h-[380px] lg:max-h-[640px] lg:sticky lg:top-6">
             <div className="px-6 py-4 border-b border-off-white dark:border-medium-gray/20 flex items-center gap-3 shrink-0">
               <div className="w-10 h-10 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0" aria-hidden="true">
                 <User className="w-5 h-5 text-blue-500" />
@@ -261,18 +263,19 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd }: NewMeeti
               </div>
             )}
 
-            {/* Date picker card */}
-            <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-visible flex flex-col">
+            {/* Date & time */}
+            <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-visible">
               <div className="px-6 py-4 border-b border-off-white dark:border-medium-gray/20 flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center" aria-hidden="true">
+                <div className="w-10 h-10 rounded-full bg-green-500/10 flex items-center justify-center shrink-0" aria-hidden="true">
                   <Calendar className="w-5 h-5 text-green-500" />
                 </div>
-                <div>
-                  <h2 className="font-semibold text-dark-gray dark:text-white">Pick a date</h2>
-                  <p className="text-sm text-medium-gray">Available time slots will appear below</p>
+                <div className="min-w-0">
+                  <h2 className="font-semibold text-dark-gray dark:text-white">Date &amp; time</h2>
+                  <p className="text-sm text-medium-gray">{!watchedEmployee ? 'Select a team member first' : calendarUnavailable ? 'Your working hours' : (workingHoursLabel ?? 'Slots free on both calendars')}</p>
                 </div>
               </div>
-              <div className="p-6">
+              <div className="p-6 space-y-5">
+                <div className="max-w-xs">
                 <DatePicker
                   label="Date"
                   value={watchedDate || ''}
@@ -283,24 +286,10 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd }: NewMeeti
                 {errors.meetingDate && (
                   <p className="mt-2 text-sm text-red-500" role="alert">{errors.meetingDate.message}</p>
                 )}
-              </div>
-            </div>
-
-            {/* Time slots card (visible after date + employee selected) */}
-            {watchedEmployee && watchedDate && (
-              <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">
-                <div className="px-6 py-4 border-b border-off-white dark:border-medium-gray/20 flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-purple-500/10 flex items-center justify-center" aria-hidden="true">
-                    <Clock className="w-5 h-5 text-purple-500" />
-                  </div>
-                  <div>
-                    <h2 id={slotsHeadingId} className="font-semibold text-dark-gray dark:text-white">Available time slots</h2>
-                    <p className="text-sm text-medium-gray">
-                      {workingHoursLabel ?? 'Free on both calendars'}
-                    </p>
-                  </div>
                 </div>
-                <div className="p-4">
+                {watchedEmployee && watchedDate && (
+                  <div>
+                    <h3 id={slotsHeadingId} className="text-sm font-medium text-dark-gray dark:text-white mb-3">Available time slots</h3>
                   {slotsLoading ? (
                     <div className="flex items-center justify-center gap-2 py-8 text-medium-gray" role="status">
                       <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />
@@ -309,21 +298,18 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd }: NewMeeti
                       </span>
                     </div>
                   ) : calendarUnavailable ? (
-                    <div className="flex items-start gap-3 py-4 px-2">
-                      <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" aria-hidden="true" />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-medium text-dark-gray dark:text-white mb-1">Calendar not connected</p>
-                        <p className="text-sm text-medium-gray">{calendarMessage}</p>
-                        <p className="text-sm text-medium-gray mt-2">You can still propose any time. The employee will be able to accept or suggest a different time.</p>
-                        <SlotGrid
-                          slots={fallbackSlots}
-                          value={watchedTime || null}
-                          onChange={selectTime}
-                          isPast={slotIsPast}
-                          aria-labelledby={slotsHeadingId}
-                          className="mt-4"
-                        />
-                      </div>
+                    <div>
+                      <p className="flex items-start gap-2 text-sm text-medium-gray mb-3">
+                        <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" aria-hidden="true" />
+                        <span>Calendar busy times aren&apos;t available, so all slots in your working hours are shown. They can accept or suggest another time.</span>
+                      </p>
+                      <SlotGrid
+                        slots={fallbackSlots}
+                        value={watchedTime || null}
+                        onChange={selectTime}
+                        isPast={slotIsPast}
+                        aria-labelledby={slotsHeadingId}
+                      />
                     </div>
                   ) : slotsFetched && slots.length === 0 ? (
                     <div className="text-center py-8">
@@ -345,9 +331,10 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd }: NewMeeti
                   {errors.meetingTime && (
                     <p className="mt-3 text-sm text-red-500" role="alert">{errors.meetingTime.message}</p>
                   )}
-                </div>
+                  </div>
+                )}
               </div>
-            )}
+            </div>
 
             {/* Meeting type: In person or Zoom */}
             <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">

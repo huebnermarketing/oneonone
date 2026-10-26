@@ -26,7 +26,7 @@ export function SlotGrid({ slots, value, onChange, isPast, emptyMessage, disable
   if (slots.length === 0) return emptyMessage ? <>{emptyMessage}</> : null
 
   return (
-    <div role="group" aria-labelledby={labelledBy} aria-label={labelledBy ? undefined : 'Available time slots'} className={cn('grid grid-cols-3 sm:grid-cols-4 gap-2', className)}>
+    <div role="group" aria-labelledby={labelledBy} aria-label={labelledBy ? undefined : 'Available time slots'} className={cn('grid grid-cols-[repeat(auto-fill,minmax(6rem,1fr))] gap-2', className)}>
       {slots.map((slot) => {
         const past = isPast?.(slot.start) ?? false
         const unavailable = slot.available === false
@@ -43,7 +43,7 @@ export function SlotGrid({ slots, value, onChange, isPast, emptyMessage, disable
             title={past ? 'Already passed' : unavailable ? 'Unavailable' : undefined}
             onClick={() => onChange(slot.start)}
             className={cn(
-              'px-3 py-2.5 rounded-xl text-sm font-medium transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-dark-gray/30 dark:focus-visible:ring-white/30',
+              'px-3 py-2.5 rounded-xl text-sm font-medium whitespace-nowrap tabular-nums transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-dark-gray/30 dark:focus-visible:ring-white/30',
               past
                 ? 'bg-off-white dark:bg-dark-gray text-light-gray dark:text-medium-gray/40 cursor-not-allowed line-through'
                 : unavailable || disabled
