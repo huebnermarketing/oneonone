@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { parseBody, parseQuery, withApiAuth } from '@/lib/api'
+import { createAuditLog } from '@/lib/audit'
 import {
   getFilteredNotifications,
   getUnreadCount,
@@ -45,12 +46,10 @@ export const POST = withApiAuth(async (req: NextRequest, { user }) => {
     return NextResponse.json({ success: true })
   }
 
-  if (action === 'deleteAllRead') {
-    const result = await deleteAllReadNotifications(user.id)
-    return NextResponse.json({ success: true, deleted: result.count })
+  // Bulk deletes are irreversible, so they are audited (single deletes / mark-read are not — too noisy)
+  const result = action === 'deleteAllRead' ? await deleteAllReadNotifications(user.id) : await deleteAllNotifications(user.id)
+  if (result.count > 0) {
+    await createAuditLog({ userId: user.id, action: 'DELETE', entityType: 'Notification', entityId: user.id, details: { action, deleted: result.count } })
   }
-
-  // deleteAll
-  const result = await deleteAllNotifications(user.id)
   return NextResponse.json({ success: true, deleted: result.count })
 })

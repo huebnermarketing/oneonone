@@ -70,7 +70,7 @@ If `migrate status` reports drift (columns that exist in the DB but not in `0_in
 | `DATABASE_URL` | `postgresql://user:pass@host:5432/ami_oneonone?schema=public` |
 | `NEXTAUTH_URL` | Exactly how users reach the app, e.g. `https://oneonone.example.com` (no trailing slash). Must match the Google OAuth redirect URI `${NEXTAUTH_URL}/api/auth/callback/google`. |
 | `NEXTAUTH_SECRET` | `openssl rand -base64 32`. Signs sessions. |
-| `ENCRYPTION_SECRET` | `openssl rand -base64 32`. Encrypts API keys stored in Admin → Settings. See `docs/ENV_VARIABLES.md` → Encryption for the one-time adoption step (`npm run secrets:reencrypt`) and rotation. |
+| `ENCRYPTION_SECRET` | `openssl rand -base64 32`. Encrypts API keys stored in Admin → Settings and users' Google OAuth tokens. See `docs/ENV_VARIABLES.md` → Encryption for the one-time adoption step (`npm run secrets:reencrypt`) and rotation. |
 | `NODE_ENV` | `production` (also set by `ecosystem.config.cjs`) |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | OAuth client with Calendar API enabled (`deploy/GOOGLE-CALENDAR-SETUP.md`) |
 | `GOOGLE_WORKSPACE_DOMAIN` | Restrict sign-in to one domain. **Required in production** — the app refuses to boot without it. |

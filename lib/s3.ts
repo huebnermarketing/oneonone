@@ -34,7 +34,6 @@ export async function isS3Configured(): Promise<boolean> {
     region
   )
 
-  console.log(`[S3] Configuration check: ${isConfigured ? 'Configured' : 'Not configured'}`)
   return isConfigured
 }
 
