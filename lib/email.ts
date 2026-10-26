@@ -1,5 +1,5 @@
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses'
-import nodemailer from 'nodemailer'
+import nodemailer, { type Transporter } from 'nodemailer'
 import { APP_NAME } from './constants'
 import { prisma } from './prisma'
 import { formatDateOnly, formatMeetingLong, resolveTimeZone, timeZoneAbbrev } from './dates'
@@ -21,8 +21,8 @@ function getFromEmail(): string {
 }
 
 // Lazy SMTP transporter (only when SMTP is configured)
-let smtpTransporter: nodemailer.Transporter | null = null
-function getSmtpTransporter(): nodemailer.Transporter {
+let smtpTransporter: Transporter | null = null
+function getSmtpTransporter(): Transporter {
   if (!smtpTransporter) {
     const port = parseInt(process.env.SMTP_PORT || '587', 10)
     const secure = port === 465
