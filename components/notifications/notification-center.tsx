@@ -2,19 +2,11 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
-import { 
-  Bell, 
-  X, 
-  Check, 
-  Calendar, 
-  CheckSquare, 
-  FileText, 
-  Mic, 
-  AlertCircle,
-  Clock
-} from 'lucide-react'
+import { Bell } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { useToast } from '@/components/ui/toast'
+import { notificationMeta } from '@/components/notifications/notification-meta'
 
 interface Notification {
   id: string
@@ -26,41 +18,99 @@ interface Notification {
   createdAt: string
 }
 
-const notificationIcons: Record<string, any> = {
-  MEETING_REMINDER: Clock,
-  MEETING_SCHEDULED: Calendar,
-  MEETING_CANCELLED: Calendar,
-  TODO_ASSIGNED: CheckSquare,
-  TODO_DUE_SOON: CheckSquare,
-  TODO_OVERDUE: AlertCircle,
-  FORM_SUBMITTED: FileText,
-  RECORDING_READY: Mic,
-  SYSTEM: Bell,
-}
-
-const notificationColors: Record<string, string> = {
-  MEETING_REMINDER: 'text-blue-500 bg-blue-500/10',
-  MEETING_SCHEDULED: 'text-green-500 bg-green-500/10',
-  MEETING_CANCELLED: 'text-red-500 bg-red-500/10',
-  TODO_ASSIGNED: 'text-purple-500 bg-purple-500/10',
-  TODO_DUE_SOON: 'text-amber-500 bg-amber-500/10',
-  TODO_OVERDUE: 'text-red-500 bg-red-500/10',
-  FORM_SUBMITTED: 'text-teal-500 bg-teal-500/10',
-  RECORDING_READY: 'text-pink-500 bg-pink-500/10',
-  SYSTEM: 'text-gray-500 bg-gray-500/10',
-}
-
 const DROPDOWN_WIDTH = 384
 const DROPDOWN_MAX_HEIGHT = 500
 const VIEWPORT_PADDING = 12
+const POLL_MS = 30000
 
-export function NotificationCenter() {
-  const router = useRouter()
-  const f = useFormat()
-  const [isOpen, setIsOpen] = useState(false)
+export interface NotificationStore {
+  notifications: Notification[]
+  unreadCount: number
+  loading: boolean
+  markAllRead: () => Promise<void>
+  markRead: (id: string) => Promise<void>
+}
+
+/**
+ * Notification list + 30s poller. Call ONCE per page (the sidebar does) and hand the store to every
+ * <NotificationCenter> bell so several bells never start several pollers.
+ */
+export function useNotifications(): NotificationStore {
+  const { toastError } = useToast()
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [loading, setLoading] = useState(false)
+  const pollFailedRef = useRef(false)
+  // Keep the poller's effect deps empty even if the toast fn identity changes
+  const toastRef = useRef(toastError)
+  toastRef.current = toastError
+
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const response = await fetch('/api/notifications')
+      if (response.ok) {
+        const data = await response.json()
+        setNotifications(data.notifications || [])
+        setUnreadCount(data.unreadCount || 0)
+        pollFailedRef.current = false
+      }
+    } catch (error) {
+      // Polls every 30s: toast once per failure streak, not on every tick
+      if (!pollFailedRef.current) {
+        pollFailedRef.current = true
+        toastRef.current('Failed to load notifications')
+      }
+    }
+  }, [])
+
+  useEffect(() => {
+    fetchNotifications()
+    const interval = setInterval(fetchNotifications, POLL_MS)
+    return () => clearInterval(interval)
+  }, [fetchNotifications])
+
+  const markAllRead = useCallback(async () => {
+    setLoading(true)
+    try {
+      const response = await fetch('/api/notifications', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'markAllRead' }),
+      })
+      if (response.ok) {
+        setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })))
+        setUnreadCount(0)
+      }
+    } catch (error) {
+      toastError('Failed to mark notifications as read')
+    } finally {
+      setLoading(false)
+    }
+  }, [toastError])
+
+  const markRead = useCallback(async (id: string) => {
+    try {
+      await fetch(`/api/notifications/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isRead: true }),
+      })
+      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)))
+      setUnreadCount((c) => Math.max(0, c - 1))
+    } catch (error) {
+      toastError('Failed to mark notification as read')
+    }
+  }, [toastError])
+
+  return { notifications, unreadCount, loading, markAllRead, markRead }
+}
+
+/** Bell + dropdown. Presentational: data and polling come from `useNotifications()` via `store`. */
+export function NotificationCenter({ store }: { store: NotificationStore }) {
+  const { notifications, unreadCount, loading, markAllRead, markRead } = store
+  const router = useRouter()
+  const f = useFormat()
+  const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({})
@@ -122,26 +172,6 @@ export function NotificationCenter() {
     })
   }, [])
 
-  // Fetch notifications
-  const fetchNotifications = async () => {
-    try {
-      const response = await fetch('/api/notifications')
-      if (response.ok) {
-        const data = await response.json()
-        setNotifications(data.notifications || [])
-        setUnreadCount(data.unreadCount || 0)
-      }
-    } catch (error) {
-      // silently fail
-    }
-  }
-
-  useEffect(() => {
-    fetchNotifications()
-    const interval = setInterval(fetchNotifications, 30000)
-    return () => clearInterval(interval)
-  }, [])
-
   // Close on click outside
   useEffect(() => {
     if (!isOpen) return
@@ -166,41 +196,8 @@ export function NotificationCenter() {
     }
   }, [isOpen, computePosition])
 
-  const handleMarkAllRead = async () => {
-    setLoading(true)
-    try {
-      const response = await fetch('/api/notifications', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'markAllRead' }),
-      })
-      if (response.ok) {
-        setNotifications(notifications.map(n => ({ ...n, isRead: true })))
-        setUnreadCount(0)
-      }
-    } catch (error) {
-      // silently fail
-    } finally {
-      setLoading(false)
-    }
-  }
-
   const handleNotificationClick = async (notification: Notification) => {
-    if (!notification.isRead) {
-      try {
-        await fetch(`/api/notifications/${notification.id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ isRead: true }),
-        })
-        setNotifications(notifications.map(n => 
-          n.id === notification.id ? { ...n, isRead: true } : n
-        ))
-        setUnreadCount(Math.max(0, unreadCount - 1))
-      } catch (error) {
-        // silently fail
-      }
-    }
+    if (!notification.isRead) await markRead(notification.id)
 
     if (notification.link) {
       setIsOpen(false)
@@ -228,6 +225,7 @@ export function NotificationCenter() {
       {/* Bell Button */}
       <button
         ref={buttonRef}
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
         aria-label="Notifications"
         aria-expanded={isOpen}
@@ -254,7 +252,8 @@ export function NotificationCenter() {
             <h3 className="font-semibold text-dark-gray dark:text-white">Notifications</h3>
             {unreadCount > 0 && (
               <button
-                onClick={handleMarkAllRead}
+                type="button"
+                onClick={markAllRead}
                 disabled={loading}
                 className="text-xs font-medium text-medium-gray hover:text-dark-gray dark:hover:text-white transition-colors"
               >
@@ -273,12 +272,12 @@ export function NotificationCenter() {
             ) : (
               <div className="divide-y divide-off-white dark:divide-medium-gray/20">
                 {notifications.map((notification) => {
-                  const Icon = notificationIcons[notification.type] || Bell
-                  const colorClass = notificationColors[notification.type] || 'text-gray-500 bg-gray-500/10'
+                  const { icon: Icon, tone: colorClass } = notificationMeta(notification.type)
 
                   return (
                     <button
                       key={notification.id}
+                      type="button"
                       onClick={() => handleNotificationClick(notification)}
                       className={cn(
                         'w-full px-4 py-3 text-left hover:bg-off-white dark:hover:bg-charcoal transition-colors',
@@ -322,6 +321,7 @@ export function NotificationCenter() {
           {notifications.length > 0 && (
             <div className="px-4 py-2 border-t border-off-white dark:border-medium-gray/20 shrink-0">
               <button
+                type="button"
                 onClick={() => {
                   setIsOpen(false)
                   router.push('/notifications')

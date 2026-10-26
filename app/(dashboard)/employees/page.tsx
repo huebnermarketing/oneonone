@@ -2,7 +2,10 @@ import { requireRole } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { UserRole } from '@prisma/client'
 import Link from 'next/link'
-import { Users, Calendar, Mic, ChevronRight, Building2, CheckCircle2, XCircle } from 'lucide-react'
+import { Users, Mic, ChevronRight, CheckCircle2, XCircle } from 'lucide-react'
+import { StatCard } from '@/components/ui/stat-card'
+import { Avatar } from '@/components/ui/avatar'
+import { Pill } from '@/components/ui/pill'
 
 export default async function EmployeesPage() {
   const user = await requireRole([UserRole.REPORTER, UserRole.SUPER_ADMIN])
@@ -69,50 +72,10 @@ export default async function EmployeesPage() {
 
       {/* Stats */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-blue-500/10 flex items-center justify-center flex-shrink-0">
-              <Users className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500" />
-            </div>
-            <div>
-              <p className="text-xl sm:text-2xl font-bold text-dark-gray dark:text-white">{peopleWithStats.length}</p>
-              <p className="text-xs sm:text-sm text-medium-gray">Members</p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-green-500/10 flex items-center justify-center flex-shrink-0">
-              <CheckCircle2 className="w-5 h-5 sm:w-6 sm:h-6 text-green-500" />
-            </div>
-            <div>
-              <p className="text-xl sm:text-2xl font-bold text-dark-gray dark:text-white">{totalCompleted}</p>
-              <p className="text-xs sm:text-sm text-medium-gray">Attended</p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-red-500/10 flex items-center justify-center flex-shrink-0">
-              <XCircle className="w-5 h-5 sm:w-6 sm:h-6 text-red-500" />
-            </div>
-            <div>
-              <p className="text-xl sm:text-2xl font-bold text-dark-gray dark:text-white">{totalMissed}</p>
-              <p className="text-xs sm:text-sm text-medium-gray">Missed</p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-5">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-purple-500/10 flex items-center justify-center flex-shrink-0">
-              <Mic className="w-5 h-5 sm:w-6 sm:h-6 text-purple-500" />
-            </div>
-            <div>
-              <p className="text-xl sm:text-2xl font-bold text-dark-gray dark:text-white">{totalRecordings}</p>
-              <p className="text-xs sm:text-sm text-medium-gray">Recordings</p>
-            </div>
-          </div>
-        </div>
+        <StatCard label="Members" value={peopleWithStats.length} icon={Users} accent="blue" />
+        <StatCard label="Attended" value={totalCompleted} icon={CheckCircle2} accent="green" />
+        <StatCard label="Missed" value={totalMissed} icon={XCircle} accent="red" />
+        <StatCard label="Recordings" value={totalRecordings} icon={Mic} accent="neutral" />
       </div>
 
       {/* People List */}
@@ -131,16 +94,7 @@ export default async function EmployeesPage() {
                 href={`/employees/${person.id}`}
                 className="flex items-center gap-3 sm:gap-4 px-4 sm:px-6 py-3 sm:py-4 even:bg-off-white/40 dark:even:bg-charcoal/40 hover:bg-off-white/70 dark:hover:bg-charcoal/60 active:bg-off-white dark:active:bg-charcoal active:scale-[0.98] transition-colors"
               >
-                {/* Avatar */}
-                <div className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-off-white dark:bg-dark-gray flex items-center justify-center flex-shrink-0">
-                  <span className="text-sm font-semibold text-blue-600 dark:text-blue-400">
-                    {person.name
-                      .split(' ')
-                      .map((n) => n[0])
-                      .join('')
-                      .slice(0, 2)}
-                  </span>
-                </div>
+                <Avatar name={person.name} src={person.image} size="md" alt="" />
 
                 {/* Name + Role */}
                 <div className="flex-1 min-w-0">
@@ -149,9 +103,7 @@ export default async function EmployeesPage() {
                       {person.name}
                     </p>
                     {person.role === UserRole.REPORTER && (
-                      <span className="px-1.5 py-0.5 text-xs font-medium bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-full flex-shrink-0">
-                        Reporter
-                      </span>
+                      <Pill tone="purple" className="flex-shrink-0 px-1.5 py-0.5">Reporter</Pill>
                     )}
                   </div>
                   <p className="text-xs sm:text-sm text-medium-gray truncate">

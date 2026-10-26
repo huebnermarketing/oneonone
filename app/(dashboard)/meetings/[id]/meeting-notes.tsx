@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { FileText, Save, Loader2 } from 'lucide-react'
+import { useToast } from '@/components/ui/toast'
 
 interface MeetingNotesProps {
   meetingId: string
@@ -14,6 +15,7 @@ export function MeetingNotes({ meetingId, initialNotes, canEdit }: MeetingNotesP
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const timeoutRef = useRef<NodeJS.Timeout>()
+  const { toastError } = useToast()
 
   const saveNotes = useCallback(async () => {
     if (notes === initialNotes) return
@@ -31,13 +33,15 @@ export function MeetingNotes({ meetingId, initialNotes, canEdit }: MeetingNotesP
       if (response.ok) {
         setSaved(true)
         setTimeout(() => setSaved(false), 2000)
+      } else {
+        toastError('Failed to save notes')
       }
-    } catch (error) {
-      // Error handled by toast
+    } catch {
+      toastError('Failed to save notes')
     } finally {
       setSaving(false)
     }
-  }, [meetingId, notes, initialNotes])
+  }, [meetingId, notes, initialNotes, toastError])
 
   // Auto-save after 2 seconds of no typing
   useEffect(() => {
@@ -90,6 +94,8 @@ export function MeetingNotes({ meetingId, initialNotes, canEdit }: MeetingNotesP
       <div className="p-6">
         {canEdit ? (
           <textarea
+            id="meeting-notes"
+            aria-label="Meeting notes"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Add meeting notes here... (auto-saves as you type)"

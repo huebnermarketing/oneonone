@@ -18,6 +18,10 @@ import { UserRole } from '@prisma/client'
 import { QuarterlySummary } from './quarterly-summary'
 import { MeetingHistoryList } from './meeting-history-list'
 import { formatDateOnly } from '@/lib/dates'
+import { StatCard } from '@/components/ui/stat-card'
+import { Avatar } from '@/components/ui/avatar'
+import { Pill, TodoPriorityPill, TodoStatusPill } from '@/components/ui/pill'
+import { plural } from '@/lib/ui'
 
 export default async function EmployeeDetailPage({
   params,
@@ -134,25 +138,13 @@ export default async function EmployeeDetailPage({
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div className="flex items-center gap-4">
-          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-br from-orange/20 to-orange/10 flex items-center justify-center flex-shrink-0">
-            <span className="text-xl sm:text-2xl font-bold text-orange">
-              {employee.name
-                .split(' ')
-                .map((n) => n[0])
-                .join('')
-                .slice(0, 2)}
-            </span>
-          </div>
+          <Avatar name={employee.name} src={employee.image} size="xl" alt="" className="rounded-2xl" />
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-2xl sm:text-3xl font-bold text-dark-gray dark:text-white">
                 {employee.name}
               </h1>
-              {employee.role === UserRole.REPORTER && (
-                <span className="px-2 py-0.5 text-xs font-medium bg-purple-500/10 text-purple-600 dark:text-purple-400 rounded-full">
-                  Reporter
-                </span>
-              )}
+              {employee.role === UserRole.REPORTER && <Pill tone="purple">Reporter</Pill>}
             </div>
             <p className="text-sm text-medium-gray flex items-center gap-1.5 mt-0.5">
               <Mail className="w-3.5 h-3.5" />
@@ -165,104 +157,18 @@ export default async function EmployeeDetailPage({
 
       {/* Stat Cards Row 1 */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center flex-shrink-0">
-              <Calendar className="w-5 h-5 text-blue-500" />
-            </div>
-            <div>
-              <p className="text-xl font-bold text-dark-gray dark:text-white">{totalMeetings}</p>
-              <p className="text-xs text-medium-gray">Total Meetings</p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center flex-shrink-0">
-              <CheckCircle2 className="w-5 h-5 text-green-500" />
-            </div>
-            <div>
-              <p className="text-xl font-bold text-dark-gray dark:text-white">{completedMeetings}</p>
-              <p className="text-xs text-medium-gray">Attended</p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center flex-shrink-0">
-              <XCircle className="w-5 h-5 text-red-500" />
-            </div>
-            <div>
-              <p className="text-xl font-bold text-dark-gray dark:text-white">{missedMeetings}</p>
-              <p className="text-xs text-medium-gray">Missed</p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center flex-shrink-0">
-              <Mic className="w-5 h-5 text-purple-500" />
-            </div>
-            <div>
-              <p className="text-xl font-bold text-dark-gray dark:text-white">{recordingsCompleted}</p>
-              <p className="text-xs text-medium-gray">Recordings</p>
-            </div>
-          </div>
-        </div>
+        <StatCard label="Total Meetings" value={totalMeetings} icon={Calendar} accent="blue" />
+        <StatCard label="Attended" value={completedMeetings} icon={CheckCircle2} accent="green" />
+        <StatCard label="Missed" value={missedMeetings} icon={XCircle} accent="red" />
+        <StatCard label="Recordings" value={recordingsCompleted} icon={Mic} accent="neutral" />
       </div>
 
       {/* Stat Cards Row 2: Info + Attendance */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-off-white dark:bg-dark-gray flex items-center justify-center flex-shrink-0">
-              <Building2 className="w-5 h-5 text-dark-gray dark:text-white" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs text-medium-gray">Department</p>
-              <p className="font-medium text-sm text-dark-gray dark:text-white truncate">
-                {employee.department?.name || 'None'}
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-off-white dark:bg-dark-gray flex items-center justify-center flex-shrink-0">
-              <Users className="w-5 h-5 text-dark-gray dark:text-white" />
-            </div>
-            <div className="min-w-0">
-              <p className="text-xs text-medium-gray">Reports To</p>
-              <p className="font-medium text-sm text-dark-gray dark:text-white truncate">
-                {employee.reportsTo?.name || 'None'}
-              </p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center flex-shrink-0">
-              <TrendingUp className="w-5 h-5 text-amber-500" />
-            </div>
-            <div>
-              <p className="text-xs text-medium-gray">Attendance</p>
-              <p className="font-medium text-sm text-dark-gray dark:text-white">{attendanceRate}%</p>
-            </div>
-          </div>
-        </div>
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-orange/10 flex items-center justify-center flex-shrink-0">
-              <CheckSquare className="w-5 h-5 text-orange" />
-            </div>
-            <div>
-              <p className="text-xs text-medium-gray">Tasks Done</p>
-              <p className="font-medium text-sm text-dark-gray dark:text-white">
-                {completedTodos}/{todos.length}
-              </p>
-            </div>
-          </div>
-        </div>
+        <StatCard label="Department" value={<span className="text-base sm:text-lg">{employee.department?.name || 'None'}</span>} icon={Building2} accent="neutral" />
+        <StatCard label="Reports To" value={<span className="text-base sm:text-lg">{employee.reportsTo?.name || 'None'}</span>} icon={Users} accent="neutral" />
+        <StatCard label="Attendance" value={`${attendanceRate}%`} icon={TrendingUp} accent="amber" />
+        <StatCard label="Tasks Done" value={`${completedTodos}/${todos.length}`} icon={CheckSquare} accent="orange" />
       </div>
 
       {/* Overall Analysis (combined from all recordings) */}
@@ -271,7 +177,7 @@ export default async function EmployeeDetailPage({
           <div className="px-4 sm:px-6 py-4 border-b border-off-white dark:border-medium-gray/20">
             <h2 className="font-semibold text-dark-gray dark:text-white flex items-center gap-2">
               <TrendingUp className="w-5 h-5 text-orange" />
-              Overall Analysis ({analyzedMeetings.length} recording{analyzedMeetings.length !== 1 ? 's' : ''})
+              Overall Analysis ({plural(analyzedMeetings.length, 'recording')})
             </h2>
           </div>
           <div className="p-4 sm:p-6 space-y-5">
@@ -335,12 +241,9 @@ export default async function EmployeeDetailPage({
                   {[...new Set(allKeyPoints)]
                     .slice(0, 12)
                     .map((point, i) => (
-                      <span
-                        key={i}
-                        className="px-2.5 py-1 text-xs rounded-full bg-blue-500/10 text-blue-700 dark:text-blue-300"
-                      >
+                      <Pill key={i} tone="blue" className="whitespace-normal">
                         {point.length > 60 ? point.slice(0, 60) + '...' : point}
-                      </span>
+                      </Pill>
                     ))}
                 </div>
               </div>
@@ -424,28 +327,8 @@ export default async function EmployeeDetailPage({
                     </div>
                   </div>
                   <div className="flex items-center gap-1.5 flex-shrink-0">
-                    <span
-                      className={`px-2 py-0.5 text-xs font-medium rounded-full ${
-                        todo.priority === 'HIGH'
-                          ? 'bg-red-500/10 text-red-500'
-                          : todo.priority === 'MEDIUM'
-                            ? 'bg-orange/10 text-orange'
-                            : 'bg-gray-500/10 text-gray-500'
-                      }`}
-                    >
-                      {todo.priority}
-                    </span>
-                    <span
-                      className={`px-2 py-0.5 text-xs font-medium rounded-full ${
-                        todo.status === 'DONE'
-                          ? 'bg-green-500/10 text-green-600'
-                          : todo.status === 'IN_PROGRESS'
-                            ? 'bg-blue-500/10 text-blue-600'
-                            : 'bg-gray-500/10 text-gray-600'
-                      }`}
-                    >
-                      {todo.status.replace('_', ' ')}
-                    </span>
+                    <TodoPriorityPill priority={todo.priority} />
+                    <TodoStatusPill status={todo.status} />
                   </div>
                 </div>
               </div>

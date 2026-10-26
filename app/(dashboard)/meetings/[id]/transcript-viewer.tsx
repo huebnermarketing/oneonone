@@ -19,6 +19,8 @@ import {
 import { useRouter } from 'next/navigation'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
+import { languageName } from '@/lib/ui'
+import { TodoPriorityPill } from '@/components/ui/pill'
 
 interface TranscriptViewerProps {
   recording: {
@@ -59,14 +61,6 @@ interface TranscriptViewerProps {
   canManage?: boolean
 }
 
-const languageNames: Record<string, string> = {
-  en: 'English',
-  hi: 'Hindi',
-  gu: 'Gujarati',
-  mr: 'Marathi',
-  ta: 'Tamil',
-}
-
 export function TranscriptViewer({ recording, employeeId, reporterId, canManage = true }: TranscriptViewerProps) {
   const router = useRouter()
   const { toastError } = useToast()
@@ -96,15 +90,15 @@ export function TranscriptViewer({ recording, employeeId, reporterId, canManage 
             setAudioUrl(data.recording.audioPlaybackUrl)
           }
         }
-      } catch (error) {
-        // Error handled by toast
+      } catch {
+        toastError('Failed to load recording audio')
       }
     }
     
     if (!recording.audioPlaybackUrl) {
       fetchAudioUrl()
     }
-  }, [recording.meetingId, recording.audioPlaybackUrl])
+  }, [recording.meetingId, recording.audioPlaybackUrl, toastError])
 
   const handleDelete = async () => {
     if (!await confirm('Are you sure you want to delete this recording? This cannot be undone.', { variant: 'danger' })) {
@@ -191,8 +185,10 @@ export function TranscriptViewer({ recording, employeeId, reporterId, canManage 
     <div className="space-y-6">
       {/* Header with tabs */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" role="tablist" aria-label="Recording views">
           <button
+            role="tab"
+            aria-selected={activeTab === 'summary'}
             onClick={() => setActiveTab('summary')}
             className={`px-4 py-2 text-sm font-medium rounded-xl transition-colors ${
               activeTab === 'summary'
@@ -203,6 +199,8 @@ export function TranscriptViewer({ recording, employeeId, reporterId, canManage 
             Summary
           </button>
           <button
+            role="tab"
+            aria-selected={activeTab === 'transcript'}
             onClick={() => setActiveTab('transcript')}
             className={`px-4 py-2 text-sm font-medium rounded-xl transition-colors ${
               activeTab === 'transcript'
@@ -213,6 +211,8 @@ export function TranscriptViewer({ recording, employeeId, reporterId, canManage 
             Transcript
           </button>
           <button
+            role="tab"
+            aria-selected={activeTab === 'analysis'}
             onClick={() => setActiveTab('analysis')}
             className={`px-4 py-2 text-sm font-medium rounded-xl transition-colors ${
               activeTab === 'analysis'
@@ -227,7 +227,7 @@ export function TranscriptViewer({ recording, employeeId, reporterId, canManage 
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 text-sm text-medium-gray">
             <Globe className="w-4 h-4" />
-            {languageNames[recording.language || 'en'] || recording.language}
+            {languageName(recording.language || 'en')}
           </div>
           <div className="flex items-center gap-2 text-sm text-medium-gray">
             <Volume2 className="w-4 h-4" />
@@ -238,6 +238,7 @@ export function TranscriptViewer({ recording, employeeId, reporterId, canManage 
             disabled={isDeleting}
             className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50"
             title="Delete recording"
+            aria-label="Delete recording"
           >
             {isDeleting ? (
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -350,13 +351,7 @@ export function TranscriptViewer({ recording, employeeId, reporterId, canManage 
                         <p className="font-medium text-dark-gray dark:text-white">{todo.title}</p>
                         <p className="text-sm text-medium-gray mt-1">{todo.description}</p>
                         <div className="flex items-center gap-2 mt-2">
-                          <span className={`px-2 py-1 text-xs font-medium rounded-full ${
-                            todo.priority === 'HIGH' ? 'bg-red-500/10 text-red-500' :
-                            todo.priority === 'MEDIUM' ? 'bg-yellow-500/10 text-yellow-500' :
-                            'bg-green-500/10 text-green-500'
-                          }`}>
-                            {todo.priority}
-                          </span>
+                          <TodoPriorityPill priority={todo.priority} />
                           <span className="px-2 py-1 text-xs font-medium rounded-full bg-blue-500/10 text-blue-500 capitalize">
                             → {todo.assignTo}
                           </span>

@@ -12,8 +12,17 @@ import {
   FileJson,
   AlertTriangle
 } from 'lucide-react'
-import { BackupHistory, BackupStatus, BackupType } from '@prisma/client'
+import { BackupHistory, BackupStatus } from '@prisma/client'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { Pill, type PillTone } from '@/components/ui/pill'
+import { formatFileSize } from '@/lib/ui'
+
+const STATUS_META: Record<BackupStatus, { icon: typeof Clock; tone: PillTone; label: string; spin?: boolean }> = {
+  PENDING: { icon: Clock, tone: 'amber', label: 'Pending' },
+  IN_PROGRESS: { icon: Loader2, tone: 'blue', label: 'In progress', spin: true },
+  COMPLETED: { icon: CheckCircle, tone: 'green', label: 'Completed' },
+  FAILED: { icon: XCircle, tone: 'red', label: 'Failed' },
+}
 
 interface BackupClientProps {
   initialBackups: BackupHistory[]
@@ -105,27 +114,6 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
     }
   }
 
-  const formatFileSize = (bytes: number | null) => {
-    if (!bytes) return '—'
-    if (bytes < 1024) return `${bytes} B`
-    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  }
-
-  const statusIcons: Record<BackupStatus, typeof Clock> = {
-    PENDING: Clock,
-    IN_PROGRESS: Loader2,
-    COMPLETED: CheckCircle,
-    FAILED: XCircle,
-  }
-
-  const statusColors: Record<BackupStatus, string> = {
-    PENDING: 'text-amber-500',
-    IN_PROGRESS: 'text-blue-500 animate-spin',
-    COMPLETED: 'text-green-500',
-    FAILED: 'text-red-500',
-  }
-
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -136,7 +124,7 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
 
       {/* Message */}
       {message && (
-        <div className={`rounded-xl p-4 ${
+        <div role={message.type === 'error' ? 'alert' : 'status'} className={`rounded-xl p-4 ${
           message.type === 'success' 
             ? 'bg-green-500/10 border border-green-500/20 text-green-600 dark:text-green-400' 
             : 'bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400'
@@ -162,6 +150,7 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
             Creates a complete backup of users, departments, meetings, todos, and recordings metadata.
           </p>
           <button
+            type="button"
             onClick={createBackup}
             disabled={creating}
             className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-blue-500 text-white rounded-xl font-medium hover:bg-blue-600 disabled:opacity-50 transition-colors"
@@ -203,8 +192,11 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
             accept=".json"
             onChange={handleFileSelect}
             className="hidden"
+            aria-label="Backup file"
+            tabIndex={-1}
           />
           <button
+            type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={restoring}
             className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-off-white dark:bg-charcoal text-dark-gray dark:text-white rounded-xl font-medium hover:bg-light-gray/20 dark:hover:bg-dark-gray disabled:opacity-50 transition-colors border border-off-white dark:border-medium-gray/20"
@@ -238,8 +230,8 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
         ) : (
           <div className="divide-y divide-off-white dark:divide-medium-gray/20">
             {backups.map((backup) => {
-              const Icon = statusIcons[backup.status]
-              const colorClass = statusColors[backup.status]
+              const meta = STATUS_META[backup.status] ?? { icon: Clock, tone: 'neutral' as PillTone, label: backup.status }
+              const Icon = meta.icon
 
               return (
                 <div key={backup.id} className="flex items-center gap-4 px-6 py-4 even:bg-off-white/40 dark:even:bg-charcoal/40">
@@ -251,15 +243,13 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
                       {backup.fileName || 'Backup'}
                     </p>
                     <p className="text-sm text-medium-gray">
-                      {f.dateTime(backup.startedAt, 'short')} • {formatFileSize(backup.fileSize)}
+                      {f.dateTime(backup.startedAt, 'short')} • {backup.fileSize ? formatFileSize(backup.fileSize) : '—'}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Icon className={`w-5 h-5 ${colorClass}`} />
-                    <span className="text-sm text-medium-gray capitalize">
-                      {backup.status.toLowerCase().replace('_', ' ')}
-                    </span>
-                  </div>
+                  <Pill tone={meta.tone}>
+                    <Icon className={`w-3.5 h-3.5 ${meta.spin ? 'animate-spin' : ''}`} aria-hidden="true" />
+                    {meta.label}
+                  </Pill>
                 </div>
               )
             })}

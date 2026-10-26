@@ -1,29 +1,34 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useId } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { 
-  ArrowLeft, 
-  Plus, 
-  Clock, 
-  User, 
-  Repeat, 
-  Trash2, 
-  ToggleLeft, 
+import {
+  ArrowLeft,
+  Plus,
+  Clock,
+  User,
+  Repeat,
+  Trash2,
+  ToggleLeft,
   ToggleRight,
   Loader2,
   Check,
   Pencil,
   X,
-  ChevronDown,
   AlertCircle,
-  Search,
 } from 'lucide-react'
 import { RecurringFrequency } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
+import { Select } from '@/components/ui/select'
+import { Avatar } from '@/components/ui/avatar'
+import { EmployeePicker } from '@/components/forms/employee-picker'
+import { SlotGrid } from '@/components/forms/slot-grid'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { DAY_NAMES } from '@/lib/ui'
+import { DEFAULT_TIMEZONE } from '@/lib/dates'
+import { formatTimeOfDay, getNextOccurrenceDate, slotToTimeInTz, type FreeSlot } from '@/lib/slots'
 
 interface Employee {
   id: string
@@ -49,57 +54,22 @@ interface Props {
   initialSchedules: Schedule[]
 }
 
-const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-
 const frequencyLabels: Record<RecurringFrequency, string> = {
   WEEKLY: 'Weekly',
   BIWEEKLY: 'Every 2 Weeks',
   MONTHLY: 'Monthly',
 }
 
-function formatTime(time: string) {
-  return new Date(`2000-01-01T${time}:00`).toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  })
-}
+const frequencyOptions = (Object.keys(frequencyLabels) as RecurringFrequency[]).map((value) => ({ value, label: frequencyLabels[value] }))
 
-interface FreeSlot {
-  start: string
-  end: string
-}
-
-/** Get YYYY-MM-DD for the next occurrence of dayOfWeek (0-6) from today. */
-function getNextOccurrenceDate(dayOfWeek: number): string {
-  const now = new Date()
-  const currentDay = now.getDay()
-  let daysUntil = dayOfWeek - currentDay
-  if (daysUntil < 0 || (daysUntil === 0 && now.getHours() >= 18)) daysUntil += 7
-  const next = new Date(now)
-  next.setDate(now.getDate() + daysUntil)
-  const y = next.getFullYear()
-  const m = String(next.getMonth() + 1).padStart(2, '0')
-  const d = String(next.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-/** Format slot start (ISO) to HH:mm in the given timezone. */
-function slotToTimeInTz(slotStartIso: string, timeZone: string): string {
-  const d = new Date(slotStartIso)
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(d)
-}
+const selectClass = 'bg-off-white dark:bg-dark-gray py-3 focus:ring-orange/50'
 
 export function RecurringSchedulesClient({ employees, initialSchedules }: Props) {
   const router = useRouter()
   const { toastSuccess, toastError } = useToast()
   const confirm = useConfirm()
   const f = useFormat()
+  const baseId = useId()
   const [schedules, setSchedules] = useState<Schedule[]>(initialSchedules)
   const [showForm, setShowForm] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -113,7 +83,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
   const [editSlots, setEditSlots] = useState<FreeSlot[]>([])
   const [editSlotsLoading, setEditSlotsLoading] = useState(false)
   const [editWorkingHoursLabel, setEditWorkingHoursLabel] = useState<string | null>(null)
-  const [editReporterTimeZone, setEditReporterTimeZone] = useState<string>('Asia/Kolkata')
+  const [editReporterTimeZone, setEditReporterTimeZone] = useState<string>(DEFAULT_TIMEZONE)
   const [formData, setFormData] = useState({
     employeeId: '',
     frequency: 'BIWEEKLY' as RecurringFrequency,
@@ -129,9 +99,9 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
   const [recurringSlots, setRecurringSlots] = useState<FreeSlot[]>([])
   const [recurringSlotsLoading, setRecurringSlotsLoading] = useState(false)
   const [recurringWorkingHoursLabel, setRecurringWorkingHoursLabel] = useState<string | null>(null)
-  const [reporterTimeZone, setReporterTimeZone] = useState<string>('Asia/Kolkata')
-  const [employeeSearch, setEmployeeSearch] = useState('')
+  const [reporterTimeZone, setReporterTimeZone] = useState<string>(DEFAULT_TIMEZONE)
 
+  // Create form: fetch slots when employee or day changes
   useEffect(() => {
     setFormData((prev) => ({ ...prev, timeOfDay: '' }))
     if (!formData.employeeId || formData.dayOfWeek == null) {
@@ -142,7 +112,8 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
     let cancelled = false
     setRecurringSlotsLoading(true)
     setRecurringSlots([])
-    const date = getNextOccurrenceDate(formData.dayOfWeek)
+    // Which day's availability to fetch is decided on the VIEWER's calendar, not the browser's
+    const date = getNextOccurrenceDate(formData.dayOfWeek, f.timeZone)
     fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(formData.employeeId)}&date=${encodeURIComponent(date)}`)
       .then((res) => res.json())
       .then((data) => {
@@ -150,16 +121,23 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
         if (!data.calendarUnavailable && Array.isArray(data.slots)) {
           setRecurringSlots(data.slots)
           setRecurringWorkingHoursLabel(data.workingHoursLabel ?? null)
-          setReporterTimeZone(data.reporterTimeZone ?? 'Asia/Kolkata')
+          setReporterTimeZone(data.reporterTimeZone ?? DEFAULT_TIMEZONE)
         } else {
           setRecurringSlots([])
           setRecurringWorkingHoursLabel(null)
         }
       })
+      .catch(() => {
+        if (cancelled) return
+        setRecurringSlots([])
+        setRecurringWorkingHoursLabel(null)
+        toastError('Failed to load available slots')
+      })
       .finally(() => { if (!cancelled) setRecurringSlotsLoading(false) })
     return () => { cancelled = true }
-  }, [formData.employeeId, formData.dayOfWeek])
+  }, [formData.employeeId, formData.dayOfWeek, f.timeZone, toastError])
 
+  // Create form: check the first occurrence on both calendars once a time is picked
   useEffect(() => {
     if (!formData.employeeId || !formData.timeOfDay) {
       setRecurringAvailability(null)
@@ -185,12 +163,16 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
           })
         }
       })
-      .catch(() => { if (!cancelled) setRecurringAvailability(null) })
+      .catch(() => {
+        if (cancelled) return
+        setRecurringAvailability(null)
+        toastError('Failed to check availability')
+      })
       .finally(() => { if (!cancelled) setRecurringAvailabilityLoading(false) })
     return () => { cancelled = true }
-  }, [formData.employeeId, formData.dayOfWeek, formData.timeOfDay, formData.frequency])
+  }, [formData.employeeId, formData.dayOfWeek, formData.timeOfDay, formData.frequency, toastError])
 
-  // Fetch available slots when editing a schedule (employee + day change)
+  // Edit form: fetch available slots when the day changes
   useEffect(() => {
     if (!editingId || !editData) {
       setEditSlots([])
@@ -204,8 +186,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
     setEditSlotsLoading(true)
     setEditSlots([])
     setEditWorkingHoursLabel(null)
-    // Clear time selection when day changes (keep it if only frequency changed)
-    const date = getNextOccurrenceDate(editData.dayOfWeek)
+    const date = getNextOccurrenceDate(editData.dayOfWeek, f.timeZone)
     fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(schedule.employeeId)}&date=${encodeURIComponent(date)}`)
       .then((res) => res.json())
       .then((data) => {
@@ -213,28 +194,38 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
         if (!data.calendarUnavailable && Array.isArray(data.slots)) {
           setEditSlots(data.slots)
           setEditWorkingHoursLabel(data.workingHoursLabel ?? null)
-          setEditReporterTimeZone(data.reporterTimeZone ?? 'Asia/Kolkata')
+          setEditReporterTimeZone(data.reporterTimeZone ?? DEFAULT_TIMEZONE)
         } else {
           setEditSlots([])
           setEditWorkingHoursLabel(null)
         }
       })
+      .catch(() => {
+        if (cancelled) return
+        setEditSlots([])
+        setEditWorkingHoursLabel(null)
+        toastError('Failed to load available slots')
+      })
       .finally(() => { if (!cancelled) setEditSlotsLoading(false) })
     return () => { cancelled = true }
+    // Only re-fetch when the schedule being edited or its chosen day changes (frequency/time edits keep the slots)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingId, editData?.dayOfWeek])
+  }, [editingId, editData?.dayOfWeek, f.timeZone, toastError])
 
-  const availableEmployees = employees.filter(
-    (emp) => !schedules.some((s) => s.employeeId === emp.id && s.isActive)
+  const availableEmployees = useMemo(
+    () => employees.filter((emp) => !schedules.some((s) => s.employeeId === emp.id && s.isActive)),
+    [employees, schedules]
   )
 
-  const filteredAvailableEmployees = useMemo(() => {
-    const q = employeeSearch.trim().toLowerCase()
-    if (!q) return availableEmployees
-    return availableEmployees.filter(
-      (e) => e.name.toLowerCase().includes(q) || e.email.toLowerCase().includes(q)
-    )
-  }, [availableEmployees, employeeSearch])
+  // The grids work in slot instants; schedules store "HH:mm" in the reporter's zone
+  const selectedCreateSlotIso = useMemo(
+    () => recurringSlots.find((s) => slotToTimeInTz(s.start, reporterTimeZone) === formData.timeOfDay)?.start ?? null,
+    [recurringSlots, reporterTimeZone, formData.timeOfDay]
+  )
+  const selectedEditSlotIso = useMemo(
+    () => editSlots.find((s) => slotToTimeInTz(s.start, editReporterTimeZone) === editData?.timeOfDay)?.start ?? null,
+    [editSlots, editReporterTimeZone, editData?.timeOfDay]
+  )
 
   const handleCreate = async () => {
     if (!formData.employeeId) return
@@ -255,7 +246,6 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
           ...schedules,
         ])
         setShowForm(false)
-        setEmployeeSearch('')
         setFormData({
           employeeId: '',
           frequency: 'BIWEEKLY',
@@ -388,6 +378,9 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
         )
         toastSuccess('Schedule resumed')
         router.refresh()
+      } else {
+        const err = await response.json().catch(() => ({}))
+        toastError(err.error || 'Failed to resume schedule')
       }
     } catch {
       toastError('Failed to update schedule')
@@ -427,7 +420,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
     }
   }
 
-  const selectClass = "w-full rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white dark:bg-dark-gray px-4 py-3 text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 appearance-none pr-10 text-sm"
+  const createSlotsHeadingId = `${baseId}-create-slots`
 
   return (
     <div className="space-y-6">
@@ -439,7 +432,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
             className="w-10 h-10 flex items-center justify-center rounded-xl hover:bg-off-white dark:hover:bg-dark-gray transition-colors"
             aria-label="Back to meetings"
           >
-            <ArrowLeft className="w-5 h-5 text-medium-gray" />
+            <ArrowLeft className="w-5 h-5 text-medium-gray" aria-hidden="true" />
           </Link>
           <div>
             <h1 className="text-2xl sm:text-3xl font-bold text-dark-gray dark:text-white">
@@ -451,11 +444,12 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
           </div>
         </div>
         <button
+          type="button"
           onClick={() => setShowForm(true)}
           disabled={availableEmployees.length === 0}
           className="flex items-center gap-2 px-4 sm:px-5 py-2.5 sm:py-3 bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white disabled:opacity-50 transition-all text-sm sm:text-base min-h-[44px]"
         >
-          <Plus className="w-5 h-5" />
+          <Plus className="w-5 h-5" aria-hidden="true" />
           <span className="hidden sm:inline">New Schedule</span>
           <span className="sm:hidden">New</span>
         </button>
@@ -463,166 +457,93 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
 
       {/* Create Form */}
       {showForm && (
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-6">
-          <h3 className="font-semibold text-dark-gray dark:text-white mb-4">
+        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-6 space-y-4">
+          <h3 className="font-semibold text-dark-gray dark:text-white">
             Create Recurring Schedule
           </h3>
-          {/* Team Member search + list */}
-          <div className="rounded-xl border border-off-white dark:border-medium-gray/20 overflow-hidden flex flex-col max-h-[280px]">
-            <div className="px-4 py-3 border-b border-off-white dark:border-medium-gray/20 flex items-center gap-3 shrink-0">
-              <div className="w-9 h-9 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
-                <User className="w-4 h-4 text-blue-500" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-dark-gray dark:text-white text-sm">Select Team Member</p>
-                <p className="text-xs text-medium-gray truncate">Search by name or email</p>
-              </div>
-            </div>
-            <div className="px-3 py-2.5 border-b border-off-white dark:border-medium-gray/20 shrink-0">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-medium-gray pointer-events-none" />
-                <input
-                  type="text"
-                  value={employeeSearch}
-                  onChange={(e) => setEmployeeSearch(e.target.value)}
-                  placeholder="Search by name or email..."
-                  className="w-full pl-9 pr-4 py-2 rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white dark:bg-charcoal text-dark-gray dark:text-white placeholder:text-medium-gray focus:outline-none focus:ring-2 focus:ring-dark-gray/20 dark:focus:ring-white/20 text-sm"
-                />
-              </div>
-            </div>
-            <div className="p-3 overflow-y-auto min-h-0 flex-1">
-              {availableEmployees.length === 0 ? (
-                <div className="text-center py-4">
-                  <User className="w-8 h-8 text-light-gray mx-auto mb-1" />
-                  <p className="text-xs text-medium-gray">No team members available</p>
-                </div>
-              ) : filteredAvailableEmployees.length === 0 ? (
-                <p className="text-xs text-medium-gray text-center py-3">No matches for &quot;{employeeSearch}&quot;</p>
-              ) : (
-                <div className="grid gap-1.5">
-                  {filteredAvailableEmployees.map((emp) => (
-                    <button
-                      key={emp.id}
-                      type="button"
-                      onClick={() => setFormData({ ...formData, employeeId: emp.id })}
-                      className={`flex items-center gap-3 p-2.5 rounded-xl border text-left transition-all ${
-                        formData.employeeId === emp.id
-                          ? 'border-dark-gray dark:border-white bg-dark-gray/5 dark:bg-white/5'
-                          : 'border-off-white dark:border-medium-gray/20 hover:border-medium-gray dark:hover:border-medium-gray/40'
-                      }`}
-                    >
-                      <div className="w-8 h-8 rounded-full bg-off-white dark:bg-dark-gray flex items-center justify-center shrink-0">
-                        <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                          {emp.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}
-                        </span>
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium text-dark-gray dark:text-white text-sm truncate">{emp.name}</p>
-                        <p className="text-xs text-medium-gray truncate">{emp.email}</p>
-                      </div>
-                      {formData.employeeId === emp.id && (
-                        <div className="w-5 h-5 rounded-full bg-dark-gray dark:bg-white flex items-center justify-center shrink-0">
-                          <Check className="w-3 h-3 text-white dark:text-dark-gray" />
-                        </div>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          <EmployeePicker
+            employees={availableEmployees}
+            value={formData.employeeId || null}
+            onChange={(id) => setFormData({ ...formData, employeeId: id })}
+            title="Select Team Member"
+            description="Search by name or email"
+          />
 
           {/* Frequency + Day */}
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
+              <label htmlFor={`${baseId}-frequency`} className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
                 Frequency
               </label>
-              <div className="relative">
-                <select
-                  value={formData.frequency}
-                  onChange={(e) => setFormData({ ...formData, frequency: e.target.value as RecurringFrequency })}
-                  className={selectClass}
-                >
-                  <option value="WEEKLY">Weekly</option>
-                  <option value="BIWEEKLY">Every 2 Weeks</option>
-                  <option value="MONTHLY">Monthly</option>
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-medium-gray pointer-events-none" />
-              </div>
+              <Select
+                id={`${baseId}-frequency`}
+                value={formData.frequency}
+                onChange={(e) => setFormData({ ...formData, frequency: e.target.value as RecurringFrequency })}
+                className={selectClass}
+              >
+                {frequencyOptions.map((opt) => (
+                  <option key={opt.value} value={opt.value}>{opt.label}</option>
+                ))}
+              </Select>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
+              <label htmlFor={`${baseId}-day`} className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
                 Day
               </label>
-              <div className="relative">
-                <select
-                  value={formData.dayOfWeek}
-                  onChange={(e) => setFormData({ ...formData, dayOfWeek: parseInt(e.target.value) })}
-                  className={selectClass}
-                >
-                  {dayNames.map((day, index) => (
-                    <option key={day} value={index}>{day}</option>
-                  ))}
-                </select>
-                <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-medium-gray pointer-events-none" />
-              </div>
+              <Select
+                id={`${baseId}-day`}
+                value={formData.dayOfWeek}
+                onChange={(e) => setFormData({ ...formData, dayOfWeek: parseInt(e.target.value, 10) })}
+                className={selectClass}
+              >
+                {DAY_NAMES.map((day, index) => (
+                  <option key={day} value={index}>{day}</option>
+                ))}
+              </Select>
             </div>
           </div>
 
           {formData.employeeId && formData.dayOfWeek != null && (
-            <div className="mt-4 rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-5">
+            <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-5">
               <div className="flex items-center gap-3 mb-1">
-                <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-500/20 flex items-center justify-center">
+                <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-500/20 flex items-center justify-center" aria-hidden="true">
                   <Clock className="w-5 h-5 text-purple-500" />
                 </div>
                 <div>
-                  <p className="font-semibold text-dark-gray dark:text-white">Available time slots</p>
+                  <p id={createSlotsHeadingId} className="font-semibold text-dark-gray dark:text-white">Available time slots</p>
                   {recurringWorkingHoursLabel && (
                     <p className="text-sm text-medium-gray">{recurringWorkingHoursLabel}</p>
                   )}
                 </div>
               </div>
               {recurringSlotsLoading ? (
-                <p className="text-sm text-medium-gray flex items-center gap-2 mt-3">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Loading slots for next {dayNames[formData.dayOfWeek]}...
+                <p className="text-sm text-medium-gray flex items-center gap-2 mt-3" role="status">
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                  Loading slots for next {DAY_NAMES[formData.dayOfWeek]}...
                 </p>
-              ) : recurringSlots.length > 0 ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mt-3">
-                  {recurringSlots.map((slot) => {
-                    const timeInTz = slotToTimeInTz(slot.start, reporterTimeZone)
-                    const isSelected = formData.timeOfDay === timeInTz
-                    return (
-                      <button
-                        key={slot.start}
-                        type="button"
-                        onClick={() => setFormData({ ...formData, timeOfDay: timeInTz })}
-                        className={`py-2.5 px-3 rounded-xl border text-sm font-medium transition-colors ${
-                          isSelected
-                            ? 'border-orange bg-orange/10 text-orange dark:bg-orange/20'
-                            : 'border-off-white dark:border-medium-gray/20 hover:border-orange/50 text-dark-gray dark:text-white'
-                        }`}
-                      >
-                        {f.time(slot.start)}
-                      </button>
-                    )
-                  })}
-                </div>
               ) : (
-                <p className="text-sm text-medium-gray mt-3">
-                  No free slots in overlapping working hours for that day. Try a different day.
-                </p>
+                <SlotGrid
+                  slots={recurringSlots}
+                  value={selectedCreateSlotIso}
+                  onChange={(iso) => setFormData({ ...formData, timeOfDay: slotToTimeInTz(iso, reporterTimeZone) })}
+                  aria-labelledby={createSlotsHeadingId}
+                  className="grid-cols-2 sm:grid-cols-3 md:grid-cols-4 mt-3"
+                  emptyMessage={
+                    <p className="text-sm text-medium-gray mt-3">
+                      No free slots in overlapping working hours for that day. Try a different day.
+                    </p>
+                  }
+                />
               )}
             </div>
           )}
 
           {formData.employeeId && formData.timeOfDay && (
-            <div className="rounded-xl border border-off-white dark:border-medium-gray/20 p-3 sm:p-4 bg-off-white/30 dark:bg-dark-gray/30">
+            <div className="rounded-xl border border-off-white dark:border-medium-gray/20 p-3 sm:p-4 bg-off-white/30 dark:bg-dark-gray/30" role="status">
               {recurringAvailabilityLoading ? (
                 <p className="text-sm text-medium-gray flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
                   Checking both calendars...
                 </p>
               ) : recurringAvailability?.message ? (
@@ -634,7 +555,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
                       : 'text-amber-600 dark:text-amber-400'
                 }`}>
                   {!recurringAvailability.calendarUnavailable && recurringAvailability.available === false && (
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
                   )}
                   {recurringAvailability.message}
                 </p>
@@ -642,26 +563,28 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
             </div>
           )}
 
-          <div className="flex justify-end gap-3 mt-6">
+          <div className="flex justify-end gap-3 pt-2">
             <button
-              onClick={() => { setShowForm(false); setEmployeeSearch('') }}
+              type="button"
+              onClick={() => setShowForm(false)}
               className="px-4 py-2.5 text-medium-gray hover:text-dark-gray dark:hover:text-white transition-colors min-h-[44px]"
             >
               Cancel
             </button>
             <button
+              type="button"
               onClick={handleCreate}
               disabled={loading || !formData.employeeId || !formData.timeOfDay}
               className="flex items-center gap-2 px-5 py-2.5 bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white disabled:opacity-50 transition-all min-h-[44px]"
             >
               {loading ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
                   Creating...
                 </>
               ) : (
                 <>
-                  <Check className="w-4 h-4" />
+                  <Check className="w-4 h-4" aria-hidden="true" />
                   Create Schedule
                 </>
               )}
@@ -673,7 +596,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
       {/* Schedules List */}
       {schedules.length === 0 ? (
         <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-12 text-center">
-          <Repeat className="w-16 h-16 text-light-gray mx-auto mb-4" />
+          <Repeat className="w-16 h-16 text-light-gray mx-auto mb-4" aria-hidden="true" />
           <h3 className="text-xl font-semibold text-dark-gray dark:text-white mb-2">
             No Recurring Schedules
           </h3>
@@ -686,25 +609,32 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
           <div className="divide-y divide-off-white dark:divide-medium-gray/20">
             {schedules.map((schedule) => {
               const isEditing = editingId === schedule.id
+              const editFrequencyId = `${baseId}-edit-frequency-${schedule.id}`
+              const editDayId = `${baseId}-edit-day-${schedule.id}`
+              const editSlotsHeadingId = `${baseId}-edit-slots-${schedule.id}`
 
               return (
                 <div key={schedule.id} className={!schedule.isActive && !isEditing ? 'opacity-50' : ''}>
                   {/* View mode */}
                   {!isEditing ? (
                     <div className="flex items-center gap-3 sm:gap-4 p-4 sm:p-6">
-                      <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-blue-500/10 flex items-center justify-center flex-shrink-0">
-                        <User className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500" />
-                      </div>
+                      {schedule.employee ? (
+                        <Avatar name={schedule.employee.name} size="md" alt="" className="sm:w-12 sm:h-12 sm:text-base" />
+                      ) : (
+                        <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-blue-500/10 flex items-center justify-center flex-shrink-0" aria-hidden="true">
+                          <User className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500" />
+                        </div>
+                      )}
                       <div className="flex-1 min-w-0">
                         <p className="font-medium text-dark-gray dark:text-white truncate">
                           {schedule.employee?.name || 'Unknown'}
                         </p>
                         <p className="text-sm text-medium-gray">
-                          {frequencyLabels[schedule.frequency]} · {dayNames[schedule.dayOfWeek]}s · {formatTime(schedule.timeOfDay)}
+                          {frequencyLabels[schedule.frequency]} · {DAY_NAMES[schedule.dayOfWeek]}s · {formatTimeOfDay(schedule.timeOfDay)}
                         </p>
                         {schedule.nextMeetingDate && schedule.isActive && (
                           <p className="text-xs text-medium-gray mt-1 flex items-center gap-1">
-                            <Clock className="w-3 h-3" />
+                            <Clock className="w-3 h-3" aria-hidden="true" />
                             Next: {f.meetingShort(schedule.nextMeetingDate)}
                           </p>
                         )}
@@ -712,32 +642,36 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
 
                       <div className="flex items-center gap-1">
                         <button
+                          type="button"
                           onClick={() => startEditing(schedule)}
                           className="p-2.5 hover:bg-off-white dark:hover:bg-dark-gray rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
                           title="Edit schedule"
                           aria-label="Edit schedule"
                         >
-                          <Pencil className="w-4 h-4 text-medium-gray" />
+                          <Pencil className="w-4 h-4 text-medium-gray" aria-hidden="true" />
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleToggle(schedule, schedule.isActive)}
                           className="p-2.5 hover:bg-off-white dark:hover:bg-dark-gray rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
                           title={schedule.isActive ? 'Pause schedule' : 'Resume schedule'}
                           aria-label={schedule.isActive ? 'Pause schedule' : 'Resume schedule'}
+                          aria-pressed={schedule.isActive}
                         >
                           {schedule.isActive ? (
-                            <ToggleRight className="w-6 h-6 text-green-500" />
+                            <ToggleRight className="w-6 h-6 text-green-500" aria-hidden="true" />
                           ) : (
-                            <ToggleLeft className="w-6 h-6 text-medium-gray" />
+                            <ToggleLeft className="w-6 h-6 text-medium-gray" aria-hidden="true" />
                           )}
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleDelete(schedule)}
                           className="p-2.5 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
                           title="Delete schedule"
                           aria-label="Delete schedule"
                         >
-                          <Trash2 className="w-4 h-4 text-red-500" />
+                          <Trash2 className="w-4 h-4 text-red-500" aria-hidden="true" />
                         </button>
                       </div>
                     </div>
@@ -745,9 +679,13 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
                     /* Edit mode */
                     <div className="p-4 sm:p-6 bg-off-white/50 dark:bg-dark-gray/30">
                       <div className="flex items-center gap-3 mb-4">
-                        <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center flex-shrink-0">
-                          <User className="w-5 h-5 text-blue-500" />
-                        </div>
+                        {schedule.employee ? (
+                          <Avatar name={schedule.employee.name} size="md" alt="" />
+                        ) : (
+                          <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center flex-shrink-0" aria-hidden="true">
+                            <User className="w-5 h-5 text-blue-500" />
+                          </div>
+                        )}
                         <div>
                           <p className="font-medium text-dark-gray dark:text-white">
                             {schedule.employee?.name || 'Unknown'}
@@ -758,107 +696,92 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
 
                       <div className="grid gap-3 sm:grid-cols-3">
                         <div>
-                          <label className="block text-xs font-medium text-medium-gray mb-1.5">Frequency</label>
-                          <div className="relative">
-                            <select
-                              value={editData?.frequency}
-                              onChange={(e) => setEditData({ ...editData!, frequency: e.target.value as RecurringFrequency })}
-                              className={selectClass}
-                            >
-                              <option value="WEEKLY">Weekly</option>
-                              <option value="BIWEEKLY">Every 2 Weeks</option>
-                              <option value="MONTHLY">Monthly</option>
-                            </select>
-                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-medium-gray pointer-events-none" />
-                          </div>
+                          <label htmlFor={editFrequencyId} className="block text-xs font-medium text-medium-gray mb-1.5">Frequency</label>
+                          <Select
+                            id={editFrequencyId}
+                            value={editData?.frequency}
+                            onChange={(e) => setEditData({ ...editData!, frequency: e.target.value as RecurringFrequency })}
+                            className={selectClass}
+                          >
+                            {frequencyOptions.map((opt) => (
+                              <option key={opt.value} value={opt.value}>{opt.label}</option>
+                            ))}
+                          </Select>
                         </div>
 
                         <div>
-                          <label className="block text-xs font-medium text-medium-gray mb-1.5">Day</label>
-                          <div className="relative">
-                            <select
-                              value={editData?.dayOfWeek}
-                              onChange={(e) => setEditData({ ...editData!, dayOfWeek: parseInt(e.target.value) })}
-                              className={selectClass}
-                            >
-                              {dayNames.map((day, index) => (
-                                <option key={day} value={index}>{day}</option>
-                              ))}
-                            </select>
-                            <ChevronDown className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-medium-gray pointer-events-none" />
-                          </div>
+                          <label htmlFor={editDayId} className="block text-xs font-medium text-medium-gray mb-1.5">Day</label>
+                          <Select
+                            id={editDayId}
+                            value={editData?.dayOfWeek}
+                            onChange={(e) => setEditData({ ...editData!, dayOfWeek: parseInt(e.target.value, 10) })}
+                            className={selectClass}
+                          >
+                            {DAY_NAMES.map((day, index) => (
+                              <option key={day} value={index}>{day}</option>
+                            ))}
+                          </Select>
                         </div>
-
                       </div>
 
                       {/* Available time slots for edit */}
                       <div className="mt-4 rounded-xl border border-off-white dark:border-medium-gray/20 p-4">
                         <div className="flex items-center gap-3 mb-3">
-                          <div className="w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-500/20 flex items-center justify-center">
+                          <div className="w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-500/20 flex items-center justify-center" aria-hidden="true">
                             <Clock className="w-4 h-4 text-purple-500" />
                           </div>
                           <div>
-                            <p className="text-sm font-semibold text-dark-gray dark:text-white">Available time slots</p>
+                            <p id={editSlotsHeadingId} className="text-sm font-semibold text-dark-gray dark:text-white">Available time slots</p>
                             {editWorkingHoursLabel && (
                               <p className="text-xs text-medium-gray">{editWorkingHoursLabel}</p>
                             )}
                           </div>
                         </div>
                         {editSlotsLoading ? (
-                          <p className="text-sm text-medium-gray flex items-center gap-2">
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            Loading slots for next {dayNames[editData?.dayOfWeek ?? 0]}...
+                          <p className="text-sm text-medium-gray flex items-center gap-2" role="status">
+                            <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                            Loading slots for next {DAY_NAMES[editData?.dayOfWeek ?? 0]}...
                           </p>
-                        ) : editSlots.length > 0 ? (
-                          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-2">
-                            {editSlots.map((slot) => {
-                              const timeInTz = slotToTimeInTz(slot.start, editReporterTimeZone)
-                              const isSelected = editData?.timeOfDay === timeInTz
-                              return (
-                                <button
-                                  key={slot.start}
-                                  type="button"
-                                  onClick={() => setEditData({ ...editData!, timeOfDay: timeInTz })}
-                                  className={`py-2 px-2 rounded-xl border text-sm font-medium transition-colors ${
-                                    isSelected
-                                      ? 'border-orange bg-orange/10 text-orange dark:bg-orange/20'
-                                      : 'border-off-white dark:border-medium-gray/20 hover:border-orange/50 text-dark-gray dark:text-white'
-                                  }`}
-                                >
-                                  {f.time(slot.start)}
-                                </button>
-                              )
-                            })}
-                          </div>
                         ) : (
-                          <p className="text-sm text-medium-gray">
-                            No free slots in overlapping working hours for that day. Try a different day.
-                          </p>
+                          <SlotGrid
+                            slots={editSlots}
+                            value={selectedEditSlotIso}
+                            onChange={(iso) => setEditData({ ...editData!, timeOfDay: slotToTimeInTz(iso, editReporterTimeZone) })}
+                            aria-labelledby={editSlotsHeadingId}
+                            className="grid-cols-3 sm:grid-cols-4 md:grid-cols-5"
+                            emptyMessage={
+                              <p className="text-sm text-medium-gray">
+                                No free slots in overlapping working hours for that day. Try a different day.
+                              </p>
+                            }
+                          />
                         )}
                       </div>
 
                       <div className="flex justify-end gap-2 mt-4">
                         <button
+                          type="button"
                           onClick={cancelEditing}
                           disabled={editLoading}
                           className="flex items-center gap-1.5 px-4 py-2.5 text-sm text-medium-gray hover:text-dark-gray dark:hover:text-white transition-colors min-h-[44px] rounded-xl"
                         >
-                          <X className="w-4 h-4" />
+                          <X className="w-4 h-4" aria-hidden="true" />
                           Cancel
                         </button>
                         <button
+                          type="button"
                           onClick={() => handleUpdate(schedule.id)}
                           disabled={editLoading}
                           className="flex items-center gap-1.5 px-5 py-2.5 text-sm bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white disabled:opacity-50 transition-all min-h-[44px]"
                         >
                           {editLoading ? (
                             <>
-                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
                               Saving...
                             </>
                           ) : (
                             <>
-                              <Check className="w-4 h-4" />
+                              <Check className="w-4 h-4" aria-hidden="true" />
                               Save Changes
                             </>
                           )}

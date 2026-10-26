@@ -1,10 +1,11 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { Paperclip, Upload, File, Trash2, Download, Loader2, X, FileText, Image, FileArchive } from 'lucide-react'
+import { Paperclip, Upload, File, Trash2, Download, Loader2, FileText, Image, FileArchive } from 'lucide-react'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { formatFileSize, plural } from '@/lib/ui'
 
 interface Attachment {
   id: string
@@ -32,12 +33,6 @@ function getFileIcon(fileType: string) {
     if (fileType.startsWith(prefix)) return icon
   }
   return File
-}
-
-function formatFileSize(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 export function FileAttachments({ meetingId, initialAttachments, canUpload }: FileAttachmentsProps) {
@@ -192,7 +187,7 @@ export function FileAttachments({ meetingId, initialAttachments, canUpload }: Fi
           <div>
             <h2 className="font-semibold text-dark-gray dark:text-white">Attachments</h2>
             <p className="text-sm text-medium-gray">
-              {attachments.length} file{attachments.length !== 1 ? 's' : ''} attached
+              {plural(attachments.length, 'file')} attached
             </p>
           </div>
         </div>
@@ -204,6 +199,7 @@ export function FileAttachments({ meetingId, initialAttachments, canUpload }: Fi
               multiple
               onChange={handleFileSelect}
               className="hidden"
+              aria-label="Choose files to upload"
               accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip"
             />
             <button
@@ -264,12 +260,14 @@ export function FileAttachments({ meetingId, initialAttachments, canUpload }: Fi
                       {f.date(attachment.createdAt, 'short')}
                     </p>
                   </div>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
                     <button
+                      type="button"
                       onClick={() => handleDownload(attachment)}
                       disabled={downloading === attachment.id}
                       className="p-2 hover:bg-white dark:hover:bg-dark-gray rounded-lg transition-colors"
                       title="Download"
+                      aria-label={`Download ${attachment.fileName}`}
                     >
                       {downloading === attachment.id ? (
                         <Loader2 className="w-4 h-4 text-medium-gray animate-spin" />
@@ -279,10 +277,12 @@ export function FileAttachments({ meetingId, initialAttachments, canUpload }: Fi
                     </button>
                     {canUpload && (
                       <button
+                        type="button"
                         onClick={() => handleDelete(attachment.id)}
                         disabled={deleting === attachment.id}
                         className="p-2 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-lg transition-colors"
                         title="Delete"
+                        aria-label={`Delete ${attachment.fileName}`}
                       >
                         {deleting === attachment.id ? (
                           <Loader2 className="w-4 h-4 text-red-500 animate-spin" />

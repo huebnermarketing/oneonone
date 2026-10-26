@@ -1,10 +1,13 @@
 import { getCurrentUser } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { UserRole } from '@prisma/client'
-import { formatMeetingShort, isTodoOverdue } from '@/lib/dates'
+import { formatMeetingShort, isTodoOverdue, toDateKey, startOfDayInTz, offsetMinutes } from '@/lib/dates'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
+import { greeting } from '@/lib/ui'
 import Link from 'next/link'
-import { Calendar, CheckSquare, Users, TrendingUp, Clock, AlertCircle, ChevronRight } from 'lucide-react'
+import { Calendar, CheckSquare, Users, TrendingUp, Clock, ChevronRight } from 'lucide-react'
+import { StatCard } from '@/components/ui/stat-card'
+import { MeetingStatusPill } from '@/components/ui/pill'
 import { WeekCalendar } from './week-calendar'
 import { PendingRequests } from './pending-requests'
 
@@ -143,13 +146,14 @@ export default async function DashboardPage() {
   }
 
   // ── Week calendar meetings (1 year ahead so calendar shows full year) ─────
-  const dayOfWeek = now.getDay()
+  // Monday of the current week as a calendar day in the VIEWER's zone, then its start instant.
+  const [ty, tm, td] = toDateKey(now, tz).split('-').map(Number)
+  const todayUtc = new Date(Date.UTC(ty, tm - 1, td))
+  const dayOfWeek = todayUtc.getUTCDay()
   const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
-  const weekStart = new Date(now)
-  weekStart.setHours(0, 0, 0, 0)
-  weekStart.setDate(weekStart.getDate() + mondayOffset)
-  const calendarEnd = new Date(weekStart)
-  calendarEnd.setDate(calendarEnd.getDate() + 365)
+  todayUtc.setUTCDate(todayUtc.getUTCDate() + mondayOffset)
+  const weekStart = startOfDayInTz(todayUtc.toISOString().slice(0, 10), tz)
+  const calendarEnd = new Date(weekStart.getTime() + 365 * 86_400_000)
 
   const weekMeetingsWhere = user.role === UserRole.EMPLOYEE
     ? { employeeId: user.id, meetingDate: { gte: weekStart, lt: calendarEnd }, status: { in: ['SCHEDULED', 'PROPOSED', 'COMPLETED'] as ('SCHEDULED' | 'PROPOSED' | 'COMPLETED')[] } }
@@ -199,19 +203,15 @@ export default async function DashboardPage() {
     take: 5,
   })
 
-  const greeting = () => {
-    const hour = new Date().getHours()
-    if (hour < 12) return 'Good morning'
-    if (hour < 18) return 'Good afternoon'
-    return 'Good evening'
-  }
+  // Hour of day in the viewer's zone (never the server's)
+  const viewerHour = Math.floor((((now.getUTCHours() * 60 + now.getUTCMinutes() + offsetMinutes(now, tz)) % 1440) + 1440) % 1440 / 60)
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div>
         <h1 className="text-2xl sm:text-3xl font-bold text-dark-gray dark:text-white mb-1">
-          {greeting()}, {user.name?.split(' ')[0]}
+          {greeting(viewerHour)}, {user.name?.split(' ')[0]}
         </h1>
         <p className="text-sm sm:text-base text-medium-gray">Here&apos;s what&apos;s happening with your one-on-ones</p>
       </div>
@@ -247,60 +247,11 @@ export default async function DashboardPage() {
 
       {/* Stats Grid */}
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
-        <Link href="/meetings" aria-label="View upcoming meetings">
-          <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-5 hover:border-blue-500/30 transition-colors active:scale-[0.98]">
-            <div className="flex items-center gap-3 sm:gap-4">
-              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-blue-500/10 flex items-center justify-center flex-shrink-0">
-                <Clock className="w-5 h-5 sm:w-6 sm:h-6 text-blue-500" />
-              </div>
-              <div>
-                <p className="text-xl sm:text-2xl font-bold text-dark-gray dark:text-white">{stats.upcomingMeetings}</p>
-                <p className="text-xs sm:text-sm text-medium-gray">Upcoming</p>
-              </div>
-            </div>
-          </div>
-        </Link>
-
-        <Link href="/todos" aria-label="View pending tasks">
-          <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-5 hover:border-amber-500/30 transition-colors active:scale-[0.98]">
-            <div className="flex items-center gap-3 sm:gap-4">
-              <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-amber-500/10 flex items-center justify-center flex-shrink-0">
-                <CheckSquare className="w-5 h-5 sm:w-6 sm:h-6 text-amber-500" />
-              </div>
-              <div>
-                <p className="text-xl sm:text-2xl font-bold text-dark-gray dark:text-white">{stats.pendingTodos}</p>
-                <p className="text-xs sm:text-sm text-medium-gray">Pending Tasks</p>
-              </div>
-            </div>
-          </div>
-        </Link>
-
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-5">
-          <div className="flex items-center gap-3 sm:gap-4">
-            <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-xl bg-green-500/10 flex items-center justify-center flex-shrink-0">
-              <TrendingUp className="w-5 h-5 sm:w-6 sm:h-6 text-green-500" />
-            </div>
-            <div>
-              <p className="text-xl sm:text-2xl font-bold text-dark-gray dark:text-white">{stats.completedMeetings}</p>
-              <p className="text-xs sm:text-sm text-medium-gray">Completed</p>
-            </div>
-          </div>
-        </div>
-
+        <StatCard label="Upcoming" value={stats.upcomingMeetings} icon={Clock} accent="blue" href="/meetings" />
+        <StatCard label="Pending Tasks" value={stats.pendingTodos} icon={CheckSquare} accent="amber" href="/todos" />
+        <StatCard label="Completed" value={stats.completedMeetings} icon={TrendingUp} accent="green" />
         {(user.role === UserRole.REPORTER || user.role === UserRole.SUPER_ADMIN) && (
-          <Link href="/employees" aria-label="View team members">
-            <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 sm:p-5 hover:border-medium-gray/50 transition-colors active:scale-[0.98]">
-              <div className="flex items-center gap-3 sm:gap-4">
-                <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-2xl bg-off-white dark:bg-dark-gray flex items-center justify-center flex-shrink-0">
-                  <Users className="w-5 h-5 sm:w-6 sm:h-6 text-dark-gray dark:text-white" />
-                </div>
-                <div>
-                  <p className="text-xl sm:text-2xl font-bold text-dark-gray dark:text-white">{stats.directReports}</p>
-                  <p className="text-xs sm:text-sm text-medium-gray">Team Members</p>
-                </div>
-              </div>
-            </div>
-          </Link>
+          <StatCard label="Team Members" value={stats.directReports} icon={Users} accent="neutral" href="/employees" />
         )}
       </div>
 
@@ -357,15 +308,7 @@ export default async function DashboardPage() {
                       {formatMeetingShort(meeting.meetingDate, tz)}
                     </p>
                   </div>
-                  <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${
-                    meeting.status === 'COMPLETED' 
-                      ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                      : meeting.status === 'PROPOSED'
-                      ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-                      : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                  }`}>
-                    {meeting.status === 'COMPLETED' ? 'Completed' : meeting.status === 'PROPOSED' ? 'Proposed' : 'Scheduled'}
-                  </span>
+                  <MeetingStatusPill status={meeting.status} />
                 </Link>
               ))}
             </div>

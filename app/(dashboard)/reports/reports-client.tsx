@@ -5,6 +5,10 @@ import { Download, TrendingUp, AlertTriangle, Smile, Meh, Frown, Calendar, Users
 import { DatePicker } from '@/components/ui/date-picker'
 import { useToast } from '@/components/ui/toast'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { Select } from '@/components/ui/select'
+import { StatCard } from '@/components/ui/stat-card'
+import { MeetingStatusPill, Pill } from '@/components/ui/pill'
+import { plural } from '@/lib/ui'
 
 interface Department {
   id: string
@@ -77,7 +81,7 @@ export function ReportsClient({ departments }: ReportsClientProps) {
       if (!response.ok) throw new Error('Failed to generate report')
       const data = await response.json()
       setReportData(data)
-    } catch (error) {
+    } catch {
       toastError('Failed to generate report. Please try again.')
     } finally {
       setLoading(false)
@@ -105,7 +109,7 @@ export function ReportsClient({ departments }: ReportsClientProps) {
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
-    } catch (error) {
+    } catch {
       toastError('Failed to export report.')
     }
   }
@@ -176,10 +180,10 @@ export function ReportsClient({ departments }: ReportsClientProps) {
         <div className="p-6 space-y-6 overflow-visible">
           {/* Quick Date Presets */}
           <div>
-            <label className="block text-sm font-medium text-dark-gray dark:text-white mb-3">
+            <p id="report-quick-select" className="block text-sm font-medium text-dark-gray dark:text-white mb-3">
               Quick Select
-            </label>
-            <div className="flex flex-wrap gap-2">
+            </p>
+            <div className="flex flex-wrap gap-2" role="group" aria-labelledby="report-quick-select">
               {[
                 { id: 'week', label: 'Last 7 Days' },
                 { id: 'month', label: 'Last 30 Days' },
@@ -188,6 +192,8 @@ export function ReportsClient({ departments }: ReportsClientProps) {
               ].map((preset) => (
                 <button
                   key={preset.id}
+                  type="button"
+                  aria-pressed={selectedPreset === preset.id}
                   onClick={() => setDatePreset(preset.id)}
                   className={`px-4 py-2 text-sm font-medium rounded-xl transition-all ${
                     selectedPreset === preset.id
@@ -205,27 +211,21 @@ export function ReportsClient({ departments }: ReportsClientProps) {
           <div className="grid gap-6 md:grid-cols-3 pb-2">
             {/* Department */}
             <div>
-              <label className="flex items-center gap-2 text-sm font-medium text-dark-gray dark:text-white mb-2">
+              <label htmlFor="report-department" className="flex items-center gap-2 text-sm font-medium text-dark-gray dark:text-white mb-2">
                 <Building2 className="w-4 h-4 text-medium-gray" />
                 Department
               </label>
-              <div className="relative">
-                <select
-                  value={selectedDepartment}
-                  onChange={(e) => setSelectedDepartment(e.target.value)}
-                  className="w-full appearance-none rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white dark:bg-charcoal px-4 py-3.5 pr-10 text-dark-gray dark:text-white focus:border-orange focus:ring-2 focus:ring-orange/20 focus:outline-none transition-all cursor-pointer"
-                >
-                  <option value="all">All Departments</option>
-                  {departments.map((dept) => (
-                    <option key={dept.id} value={dept.id}>{dept.name}</option>
-                  ))}
-                </select>
-                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
-                  <svg className="w-4 h-4 text-medium-gray" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
-              </div>
+              <Select
+                id="report-department"
+                value={selectedDepartment}
+                onChange={(e) => setSelectedDepartment(e.target.value)}
+                className="bg-off-white py-3.5 text-base focus:border-orange focus:ring-orange/20 cursor-pointer"
+              >
+                <option value="all">All Departments</option>
+                {departments.map((dept) => (
+                  <option key={dept.id} value={dept.id}>{dept.name}</option>
+                ))}
+              </Select>
             </div>
 
             {/* Start Date */}
@@ -263,6 +263,7 @@ export function ReportsClient({ departments }: ReportsClientProps) {
               )}
             </p>
             <button
+              type="button"
               onClick={generateReport}
               disabled={loading}
               className="flex items-center gap-2 px-8 py-3.5 bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white disabled:opacity-50 transition-all"
@@ -289,6 +290,7 @@ export function ReportsClient({ departments }: ReportsClientProps) {
           {/* Export Button */}
           <div className="flex justify-end">
             <button
+              type="button"
               onClick={exportCSV}
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-dark-gray dark:text-white hover:bg-off-white dark:hover:bg-charcoal rounded-xl transition-colors"
             >
@@ -299,61 +301,10 @@ export function ReportsClient({ departments }: ReportsClientProps) {
 
           {/* Summary Cards */}
           <div className="grid gap-4 md:grid-cols-4">
-            <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
-                  <Calendar className="w-5 h-5 text-blue-500" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-dark-gray dark:text-white">
-                    {reportData.summary.totalMeetings}
-                  </p>
-                  <p className="text-sm text-medium-gray">Total Meetings</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center">
-                  <CheckSquare className="w-5 h-5 text-green-500" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-dark-gray dark:text-white">
-                    {reportData.summary.completedTasks}
-                  </p>
-                  <p className="text-sm text-medium-gray">Tasks Completed</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
-                  <FileText className="w-5 h-5 text-amber-500" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-dark-gray dark:text-white">
-                    {reportData.summary.pendingTasks}
-                  </p>
-                  <p className="text-sm text-medium-gray">Pending Tasks</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-5">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-off-white dark:bg-dark-gray flex items-center justify-center">
-                  <Users className="w-5 h-5 text-dark-gray dark:text-white" />
-                </div>
-                <div>
-                  <p className="text-2xl font-bold text-dark-gray dark:text-white">
-                    {reportData.summary.totalEmployees}
-                  </p>
-                  <p className="text-sm text-medium-gray">Employees</p>
-                </div>
-              </div>
-            </div>
+            <StatCard label="Total Meetings" value={reportData.summary.totalMeetings} icon={Calendar} accent="blue" />
+            <StatCard label="Tasks Completed" value={reportData.summary.completedTasks} icon={CheckSquare} accent="green" />
+            <StatCard label="Pending Tasks" value={reportData.summary.pendingTasks} icon={FileText} accent="amber" />
+            <StatCard label="Employees" value={reportData.summary.totalEmployees} icon={Users} accent="neutral" />
           </div>
 
           {/* Sentiment Analysis */}
@@ -428,7 +379,7 @@ export function ReportsClient({ departments }: ReportsClientProps) {
                       <span className="font-medium text-dark-gray dark:text-white">{issue.text}</span>
                     </div>
                     <span className="text-sm text-medium-gray">
-                      {issue.count} team member{issue.count !== 1 ? 's' : ''} mentioned
+                      {plural(issue.count, 'team member')} mentioned
                     </span>
                   </div>
                 ))}
@@ -484,22 +435,10 @@ export function ReportsClient({ departments }: ReportsClientProps) {
                       <td className="py-3 px-6 text-sm text-medium-gray">{meeting.department}</td>
                       <td className="py-3 px-6 text-sm text-medium-gray">{meeting.reporter}</td>
                       <td className="py-3 px-6">
-                        <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${
-                          meeting.status === 'COMPLETED'
-                            ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                            : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                        }`}>
-                          {meeting.status}
-                        </span>
+                        <MeetingStatusPill status={meeting.status} />
                       </td>
                       <td className="py-3 px-6">
-                        <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${
-                          meeting.hasFormData
-                            ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                            : 'bg-gray-500/10 text-gray-600 dark:text-gray-400'
-                        }`}>
-                          {meeting.hasFormData ? 'Submitted' : 'Pending'}
-                        </span>
+                        <Pill tone={meeting.hasFormData ? 'green' : 'neutral'}>{meeting.hasFormData ? 'Submitted' : 'Pending'}</Pill>
                       </td>
                     </tr>
                   ))}
@@ -518,20 +457,8 @@ export function ReportsClient({ departments }: ReportsClientProps) {
                     </span>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${
-                      meeting.status === 'COMPLETED'
-                        ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                        : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                    }`}>
-                      {meeting.status}
-                    </span>
-                    <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${
-                      meeting.hasFormData
-                        ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                        : 'bg-gray-500/10 text-gray-600 dark:text-gray-400'
-                    }`}>
-                      Form: {meeting.hasFormData ? 'Submitted' : 'Pending'}
-                    </span>
+                    <MeetingStatusPill status={meeting.status} />
+                    <Pill tone={meeting.hasFormData ? 'green' : 'neutral'}>Form: {meeting.hasFormData ? 'Submitted' : 'Pending'}</Pill>
                   </div>
                   <p className="text-xs text-medium-gray">{meeting.department} · {meeting.reporter}</p>
                 </div>

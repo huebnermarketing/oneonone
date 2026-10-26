@@ -1,23 +1,15 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useId } from 'react'
 import { useRouter } from 'next/navigation'
-import {
-  Bell,
-  Calendar,
-  CheckSquare,
-  FileText,
-  Mic,
-  AlertCircle,
-  Clock,
-  Trash2,
-  CheckCheck,
-  Filter,
-  X,
-} from 'lucide-react'
+import { Bell, Trash2, CheckCheck, Filter, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useConfirm } from '@/components/ui/confirm-modal'
+import { useToast } from '@/components/ui/toast'
+import { Select } from '@/components/ui/select'
+import { Pagination } from '@/components/ui/pagination'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { notificationMeta, NOTIFICATION_TYPE_OPTIONS } from '@/components/notifications/notification-meta'
 
 interface Notification {
   id: string
@@ -29,18 +21,7 @@ interface Notification {
   createdAt: string
 }
 
-const NOTIFICATION_TYPES = [
-  { value: '', label: 'All Types' },
-  { value: 'MEETING_REMINDER', label: 'Meeting Reminders' },
-  { value: 'MEETING_SCHEDULED', label: 'Meeting Scheduled' },
-  { value: 'MEETING_CANCELLED', label: 'Meeting Cancelled' },
-  { value: 'TODO_ASSIGNED', label: 'Task Assigned' },
-  { value: 'TODO_DUE_SOON', label: 'Task Due Soon' },
-  { value: 'TODO_OVERDUE', label: 'Task Overdue' },
-  { value: 'FORM_SUBMITTED', label: 'Form Submitted' },
-  { value: 'RECORDING_READY', label: 'Recording Ready' },
-  { value: 'SYSTEM', label: 'System' },
-]
+const NOTIFICATION_TYPES = [{ value: '', label: 'All Types' }, ...NOTIFICATION_TYPE_OPTIONS]
 
 const READ_FILTERS = [
   { value: '', label: 'All' },
@@ -48,46 +29,13 @@ const READ_FILTERS = [
   { value: 'true', label: 'Read' },
 ]
 
-const notificationIcons: Record<string, any> = {
-  MEETING_REMINDER: Clock,
-  MEETING_SCHEDULED: Calendar,
-  MEETING_CANCELLED: Calendar,
-  TODO_ASSIGNED: CheckSquare,
-  TODO_DUE_SOON: CheckSquare,
-  TODO_OVERDUE: AlertCircle,
-  FORM_SUBMITTED: FileText,
-  RECORDING_READY: Mic,
-  SYSTEM: Bell,
-}
-
-const notificationColors: Record<string, string> = {
-  MEETING_REMINDER: 'text-blue-500 bg-blue-500/10',
-  MEETING_SCHEDULED: 'text-green-500 bg-green-500/10',
-  MEETING_CANCELLED: 'text-red-500 bg-red-500/10',
-  TODO_ASSIGNED: 'text-purple-500 bg-purple-500/10',
-  TODO_DUE_SOON: 'text-amber-500 bg-amber-500/10',
-  TODO_OVERDUE: 'text-red-500 bg-red-500/10',
-  FORM_SUBMITTED: 'text-teal-500 bg-teal-500/10',
-  RECORDING_READY: 'text-pink-500 bg-pink-500/10',
-  SYSTEM: 'text-gray-500 bg-gray-500/10',
-}
-
-const typeLabels: Record<string, string> = {
-  MEETING_REMINDER: 'Reminder',
-  MEETING_SCHEDULED: 'Scheduled',
-  MEETING_CANCELLED: 'Cancelled',
-  TODO_ASSIGNED: 'Task',
-  TODO_DUE_SOON: 'Due Soon',
-  TODO_OVERDUE: 'Overdue',
-  FORM_SUBMITTED: 'Form',
-  RECORDING_READY: 'Recording',
-  SYSTEM: 'System',
-}
-
 export function NotificationsClient() {
   const router = useRouter()
   const confirm = useConfirm()
+  const { toastError } = useToast()
   const f = useFormat()
+  const typeFilterId = useId()
+  const readFilterId = useId()
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [total, setTotal] = useState(0)
@@ -120,11 +68,11 @@ export function NotificationsClient() {
         setTotal(data.total || 0)
       }
     } catch (error) {
-      // Error handled by toast
+      toastError('Failed to load notifications')
     } finally {
       setLoading(false)
     }
-  }, [page, typeFilter, readFilter])
+  }, [page, typeFilter, readFilter, toastError])
 
   useEffect(() => {
     fetchNotifications()
@@ -143,7 +91,7 @@ export function NotificationsClient() {
         setUnreadCount(0)
       }
     } catch (error) {
-      // Error handled by toast
+      toastError('Failed to mark notifications as read')
     } finally {
       setActionLoading(false)
     }
@@ -162,7 +110,7 @@ export function NotificationsClient() {
         await fetchNotifications()
       }
     } catch (error) {
-      // Error handled by toast
+      toastError('Failed to delete read notifications')
     } finally {
       setActionLoading(false)
     }
@@ -181,7 +129,7 @@ export function NotificationsClient() {
         )
         setUnreadCount((c) => Math.max(0, c - 1))
       } catch (error) {
-        // Error handled by toast
+        toastError('Failed to mark notification as read')
       }
     }
     if (notification.link) {
@@ -204,7 +152,7 @@ export function NotificationsClient() {
         }
       }
     } catch (error) {
-      // Error handled by toast
+      toastError('Failed to delete notification')
     }
   }
 
@@ -224,7 +172,6 @@ export function NotificationsClient() {
     return sameYear ? f.monthDay(date) : f.date(date, 'short')
   }
 
-  const totalPages = Math.ceil(total / pageSize)
   const hasActiveFilters = typeFilter || readFilter
 
   return (
@@ -243,7 +190,10 @@ export function NotificationsClient() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={() => setShowFilters(!showFilters)}
+            aria-expanded={showFilters}
+            aria-label="Filter notifications"
             className={cn(
               'flex items-center gap-1.5 px-3 py-2 text-sm font-medium rounded-xl transition-colors',
               hasActiveFilters
@@ -259,8 +209,10 @@ export function NotificationsClient() {
           </button>
           {unreadCount > 0 && (
             <button
+              type="button"
               onClick={handleMarkAllRead}
               disabled={actionLoading}
+              aria-label="Mark all notifications as read"
               className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-medium-gray hover:text-dark-gray dark:hover:text-white hover:bg-off-white dark:hover:bg-dark-gray rounded-xl transition-colors disabled:opacity-50"
             >
               <CheckCheck className="w-4 h-4" />
@@ -268,8 +220,10 @@ export function NotificationsClient() {
             </button>
           )}
           <button
+            type="button"
             onClick={handleDeleteAllRead}
             disabled={actionLoading}
+            aria-label="Delete all read notifications"
             className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-medium-gray hover:text-red-500 hover:bg-red-500/10 rounded-xl transition-colors disabled:opacity-50"
           >
             <Trash2 className="w-4 h-4" />
@@ -282,42 +236,45 @@ export function NotificationsClient() {
       {showFilters && (
         <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-4 flex flex-col sm:flex-row gap-3">
           <div className="flex-1">
-            <label className="block text-xs text-medium-gray mb-1">Type</label>
-            <select
+            <label htmlFor={typeFilterId} className="block text-xs text-medium-gray mb-1">Type</label>
+            <Select
+              id={typeFilterId}
               value={typeFilter}
               onChange={(e) => {
                 setTypeFilter(e.target.value)
                 setPage(0)
               }}
-              className="w-full px-3 py-2 text-sm rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white/50 dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+              className="px-3 py-2"
             >
               {NOTIFICATION_TYPES.map((t) => (
                 <option key={t.value} value={t.value}>
                   {t.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <div className="flex-1">
-            <label className="block text-xs text-medium-gray mb-1">Status</label>
-            <select
+            <label htmlFor={readFilterId} className="block text-xs text-medium-gray mb-1">Status</label>
+            <Select
+              id={readFilterId}
               value={readFilter}
               onChange={(e) => {
                 setReadFilter(e.target.value)
                 setPage(0)
               }}
-              className="w-full px-3 py-2 text-sm rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white/50 dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500/30"
+              className="px-3 py-2"
             >
-              {READ_FILTERS.map((f) => (
-                <option key={f.value} value={f.value}>
-                  {f.label}
+              {READ_FILTERS.map((opt) => (
+                <option key={opt.value} value={opt.value}>
+                  {opt.label}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           {hasActiveFilters && (
             <div className="flex items-end">
               <button
+                type="button"
                 onClick={() => {
                   setTypeFilter('')
                   setReadFilter('')
@@ -355,10 +312,7 @@ export function NotificationsClient() {
         ) : (
           <div className="divide-y divide-off-white dark:divide-medium-gray/20">
             {notifications.map((notification) => {
-              const Icon = notificationIcons[notification.type] || Bell
-              const colorClass =
-                notificationColors[notification.type] || 'text-gray-500 bg-gray-500/10'
-              const label = typeLabels[notification.type] || notification.type
+              const { icon: Icon, tone: colorClass, label } = notificationMeta(notification.type)
 
               return (
                 <div
@@ -418,9 +372,11 @@ export function NotificationsClient() {
 
                       {/* Delete button */}
                       <button
+                        type="button"
                         onClick={(e) => handleDelete(e, notification.id)}
-                        className="opacity-0 group-hover:opacity-100 p-1.5 text-medium-gray hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all flex-shrink-0"
+                        className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 p-1.5 text-medium-gray hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all flex-shrink-0"
                         title="Delete notification"
+                        aria-label="Delete notification"
                       >
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -432,33 +388,14 @@ export function NotificationsClient() {
           </div>
         )}
 
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="px-4 sm:px-6 py-3 border-t border-off-white dark:border-medium-gray/20 flex items-center justify-between">
-            <p className="text-xs text-medium-gray">
-              Showing {page * pageSize + 1}-{Math.min((page + 1) * pageSize, total)} of {total}
-            </p>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setPage((p) => Math.max(0, p - 1))}
-                disabled={page === 0}
-                className="px-3 py-1.5 text-xs font-medium text-medium-gray hover:text-dark-gray dark:hover:text-white hover:bg-off-white dark:hover:bg-dark-gray rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Previous
-              </button>
-              <span className="text-xs text-medium-gray">
-                {page + 1} / {totalPages}
-              </span>
-              <button
-                onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                disabled={page >= totalPages - 1}
-                className="px-3 py-1.5 text-xs font-medium text-medium-gray hover:text-dark-gray dark:hover:text-white hover:bg-off-white dark:hover:bg-dark-gray rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
+        <Pagination
+          offset={page * pageSize}
+          limit={pageSize}
+          total={total}
+          noun="notifications"
+          onChange={(offset) => setPage(Math.floor(offset / pageSize))}
+          className="px-4 sm:px-6 py-3 border-t border-off-white dark:border-medium-gray/20"
+        />
       </div>
     </div>
   )

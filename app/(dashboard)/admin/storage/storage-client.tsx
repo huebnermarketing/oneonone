@@ -6,7 +6,12 @@ import Link from 'next/link'
 import { HardDrive, Trash2, Loader2, ArrowLeft, FileAudio } from 'lucide-react'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
+import { Pill, type PillTone } from '@/components/ui/pill'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { formatFileSize } from '@/lib/ui'
+
+const RECORDING_STATUS_TONE: Record<string, PillTone> = { COMPLETED: 'green', FAILED: 'red' }
+const RecordingStatusPill = ({ status }: { status: string }) => <Pill tone={RECORDING_STATUS_TONE[status] ?? 'blue'}>{status}</Pill>
 
 type StorageStats = {
   storageType: 's3' | 'local'
@@ -58,13 +63,13 @@ export function StorageClient() {
           setRecordings(data.recordings ?? [])
         }
       } catch (e) {
-        // Error handled by toast
+        toastError('Failed to load storage info')
       } finally {
         setLoading(false)
       }
     }
     load()
-  }, [])
+  }, [toastError])
 
   const handleDelete = async (meetingId: string) => {
     if (!await confirm('Delete this recording? The file will be removed from storage.', { variant: 'danger' })) return
@@ -87,12 +92,7 @@ export function StorageClient() {
     }
   }
 
-  const formatBytes = (n: number | null) => {
-    if (n == null) return '–'
-    if (n < 1024) return `${n} B`
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
-    return `${(n / (1024 * 1024)).toFixed(2)} MB`
-  }
+  const formatBytes = (n: number | null) => (n == null ? '–' : formatFileSize(n))
 
   const formatDate = (d: string | null) => (d ? f.date(d, 'short') : '–')
 
@@ -109,9 +109,10 @@ export function StorageClient() {
       <div className="flex items-center gap-4">
         <Link
           href="/admin"
+          aria-label="Back to User Management"
           className="p-2 rounded-lg hover:bg-off-white dark:hover:bg-charcoal text-medium-gray"
         >
-          <ArrowLeft className="w-5 h-5" />
+          <ArrowLeft className="w-5 h-5" aria-hidden="true" />
         </Link>
         <div>
           <h1 className="text-2xl font-bold text-dark-gray dark:text-white">Recording Storage</h1>
@@ -174,13 +175,13 @@ export function StorageClient() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-off-white dark:border-medium-gray/20">
-                <th className="text-left px-6 py-3 text-medium-gray font-medium">Meeting date</th>
-                <th className="text-left px-6 py-3 text-medium-gray font-medium">Employee</th>
-                <th className="text-left px-6 py-3 text-medium-gray font-medium">Reporter</th>
-                <th className="text-left px-6 py-3 text-medium-gray font-medium">Status</th>
-                <th className="text-left px-6 py-3 text-medium-gray font-medium">Size</th>
-                <th className="text-left px-6 py-3 text-medium-gray font-medium">Recorded</th>
-                <th className="text-right px-6 py-3 text-medium-gray font-medium">Actions</th>
+                <th scope="col" className="text-left px-6 py-3 text-medium-gray font-medium">Meeting date</th>
+                <th scope="col" className="text-left px-6 py-3 text-medium-gray font-medium">Employee</th>
+                <th scope="col" className="text-left px-6 py-3 text-medium-gray font-medium">Reporter</th>
+                <th scope="col" className="text-left px-6 py-3 text-medium-gray font-medium">Status</th>
+                <th scope="col" className="text-left px-6 py-3 text-medium-gray font-medium">Size</th>
+                <th scope="col" className="text-left px-6 py-3 text-medium-gray font-medium">Recorded</th>
+                <th scope="col" className="text-right px-6 py-3 text-medium-gray font-medium">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -198,19 +199,7 @@ export function StorageClient() {
                     </td>
                     <td className="px-6 py-3 text-dark-gray dark:text-white">{r.employeeName ?? '–'}</td>
                     <td className="px-6 py-3 text-dark-gray dark:text-white">{r.reporterName ?? '–'}</td>
-                    <td className="px-6 py-3">
-                      <span
-                        className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                          r.status === 'COMPLETED'
-                            ? 'bg-green-500/10 text-green-600'
-                            : r.status === 'FAILED'
-                            ? 'bg-red-500/10 text-red-600'
-                            : 'bg-blue-500/10 text-blue-600'
-                        }`}
-                      >
-                        {r.status}
-                      </span>
-                    </td>
+                    <td className="px-6 py-3"><RecordingStatusPill status={r.status} /></td>
                     <td className="px-6 py-3 text-medium-gray">{formatBytes(r.fileSize)}</td>
                     <td className="px-6 py-3 text-medium-gray">
                       {r.recordedAt ? f.dateTime(r.recordedAt, 'short') : '–'}
@@ -223,6 +212,7 @@ export function StorageClient() {
                         View
                       </Link>
                       <button
+                        type="button"
                         onClick={() => handleDelete(r.meetingId)}
                         disabled={deletingId === r.meetingId}
                         className="inline-flex items-center gap-1 text-red-500 hover:text-red-600 disabled:opacity-50"
@@ -254,17 +244,7 @@ export function StorageClient() {
                     <p className="font-medium text-dark-gray dark:text-white">{formatDate(r.meetingDate)}</p>
                     <p className="text-sm text-medium-gray">{r.employeeName ?? '–'}</p>
                   </div>
-                  <span
-                    className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                      r.status === 'COMPLETED'
-                        ? 'bg-green-500/10 text-green-600'
-                        : r.status === 'FAILED'
-                        ? 'bg-red-500/10 text-red-600'
-                        : 'bg-blue-500/10 text-blue-600'
-                    }`}
-                  >
-                    {r.status}
-                  </span>
+                  <RecordingStatusPill status={r.status} />
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-medium-gray">{formatBytes(r.fileSize)}</span>
@@ -276,6 +256,7 @@ export function StorageClient() {
                       View
                     </Link>
                     <button
+                      type="button"
                       onClick={() => handleDelete(r.meetingId)}
                       disabled={deletingId === r.meetingId}
                       className="inline-flex items-center gap-1 text-sm text-red-500 hover:text-red-600 disabled:opacity-50"

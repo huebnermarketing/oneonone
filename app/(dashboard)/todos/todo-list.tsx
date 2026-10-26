@@ -3,10 +3,13 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { CheckSquare, AlertTriangle, Circle, CheckCircle2, Clock, Calendar, ChevronDown, ChevronRight } from 'lucide-react'
+import { CheckSquare, AlertTriangle, Circle, CheckCircle2, Clock, Calendar, ChevronRight } from 'lucide-react'
 import { UserRole, TodoStatus, TodoPriority } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { TodoPriorityPill, TODO_STATUS_META } from '@/components/ui/pill'
+import { Select } from '@/components/ui/select'
+import { Pagination } from '@/components/ui/pagination'
 
 interface Todo {
   id: string
@@ -26,16 +29,11 @@ interface TodoListProps {
   userRole: UserRole
 }
 
-const statusConfig = {
-  NOT_STARTED: { label: 'Not Started', icon: Circle, color: 'text-gray-500', bg: 'bg-gray-500/10' },
-  IN_PROGRESS: { label: 'In Progress', icon: Clock, color: 'text-blue-500', bg: 'bg-blue-500/10' },
-  DONE: { label: 'Done', icon: CheckCircle2, color: 'text-green-500', bg: 'bg-green-500/10' },
-}
-
-const priorityConfig = {
-  HIGH: { label: 'High', color: 'text-red-500', bg: 'bg-red-500/10', dot: 'bg-red-500' },
-  MEDIUM: { label: 'Medium', color: 'text-orange', bg: 'bg-orange/10', dot: 'bg-orange' },
-  LOW: { label: 'Low', color: 'text-gray-500', bg: 'bg-gray-500/10', dot: 'bg-gray-500' },
+/** Icon + colours for the status toggle button (chip visuals come from TODO_STATUS_META). */
+const statusIcons: Record<TodoStatus, { icon: typeof Circle; color: string; bg: string }> = {
+  NOT_STARTED: { icon: Circle, color: 'text-gray-500', bg: 'bg-gray-500/10' },
+  IN_PROGRESS: { icon: Clock, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+  DONE: { icon: CheckCircle2, color: 'text-green-500', bg: 'bg-green-500/10' },
 }
 
 export function TodoList({ todos, currentUserId, userRole }: TodoListProps) {
@@ -53,7 +51,6 @@ export function TodoList({ todos, currentUserId, userRole }: TodoListProps) {
     return true
   })
 
-  const totalPages = Math.ceil(filteredTodos.length / ITEMS_PER_PAGE)
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
   const endIndex = startIndex + ITEMS_PER_PAGE
   const paginatedTodos = filteredTodos.slice(startIndex, endIndex)
@@ -93,10 +90,13 @@ export function TodoList({ todos, currentUserId, userRole }: TodoListProps) {
   return (
     <div className="space-y-4">
       {/* Filter Tabs */}
-      <div className="flex gap-2">
+      <div className="flex gap-2" role="tablist" aria-label="Task filter">
         {(['all', 'active', 'completed'] as const).map((tab) => (
           <button
             key={tab}
+            type="button"
+            role="tab"
+            aria-selected={filter === tab}
             onClick={() => { setFilter(tab); setCurrentPage(1) }}
             className={`px-4 py-2 rounded-xl text-sm font-medium transition-all focus-visible:ring-2 focus-visible:ring-orange/50 focus-visible:outline-none ${
               filter === tab
@@ -118,15 +118,14 @@ export function TodoList({ todos, currentUserId, userRole }: TodoListProps) {
             </div>
           ) : (
             paginatedTodos.map((todo) => {
-              const status = statusConfig[todo.status]
-              const priority = priorityConfig[todo.priority]
+              const status = statusIcons[todo.status]
               const isOverdue = f.isTodoOverdue(todo.dueDate, todo.status, now)
               const StatusIcon = status.icon
 
               const nextStatus: TodoStatus =
                 todo.status === 'NOT_STARTED' ? 'IN_PROGRESS' :
                 todo.status === 'IN_PROGRESS' ? 'DONE' : 'NOT_STARTED'
-              const nextStatusLabel = statusConfig[nextStatus].label
+              const nextStatusLabel = TODO_STATUS_META[nextStatus].label
 
               return (
                 <div
@@ -140,8 +139,10 @@ export function TodoList({ todos, currentUserId, userRole }: TodoListProps) {
                         e.stopPropagation()
                         updateStatus(todo.id, nextStatus)
                       }}
+                      type="button"
                       disabled={updating === todo.id}
                       title={`Mark as ${nextStatusLabel}`}
+                      aria-label={`Mark "${todo.title}" as ${nextStatusLabel}`}
                       className={`relative z-10 w-9 h-9 sm:w-10 sm:h-10 rounded-xl ${status.bg} flex items-center justify-center flex-shrink-0 transition-all hover:scale-105 disabled:opacity-50`}
                     >
                       {updating === todo.id ? (
@@ -184,27 +185,25 @@ export function TodoList({ todos, currentUserId, userRole }: TodoListProps) {
                     </Link>
 
                     {/* Priority Badge — center-aligned with status */}
-                    <span className={`px-2 sm:px-2.5 py-0.5 sm:py-1 text-xs font-medium rounded-full flex-shrink-0 ${priority.bg} ${priority.color}`}>
-                      {priority.label}
-                    </span>
+                    <TodoPriorityPill priority={todo.priority} className="flex-shrink-0" />
 
                     {/* Status Dropdown (desktop) — interactive, kept outside the link */}
                     <div className="relative z-10 hidden sm:block flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-                      <select
+                      <Select
                         value={todo.status}
                         onChange={(e) => updateStatus(todo.id, e.target.value as TodoStatus)}
                         disabled={updating === todo.id}
-                        className="appearance-none pl-3 pr-8 py-2 text-xs font-medium rounded-lg border border-off-white dark:border-medium-gray/20 bg-white dark:bg-charcoal text-dark-gray dark:text-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange/20 disabled:opacity-50"
+                        aria-label={`Status of "${todo.title}"`}
+                        className="pl-3 pr-8 py-2 text-xs font-medium rounded-lg cursor-pointer"
                       >
                         <option value="NOT_STARTED">Not Started</option>
                         <option value="IN_PROGRESS">In Progress</option>
                         <option value="DONE">Done</option>
-                      </select>
-                      <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3 h-3 text-medium-gray pointer-events-none" />
+                      </Select>
                     </div>
 
                     {/* Chevron indicator — clickable link to detail */}
-                    <Link href={`/todos/${todo.id}`} title="View task details" className="hidden sm:flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 hover:bg-off-white dark:hover:bg-charcoal transition-colors">
+                    <Link href={`/todos/${todo.id}`} title="View task details" aria-label={`View details for "${todo.title}"`} className="hidden sm:flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0 hover:bg-off-white dark:hover:bg-charcoal transition-colors">
                       <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-light-gray" />
                     </Link>
                   </div>
@@ -213,33 +212,14 @@ export function TodoList({ todos, currentUserId, userRole }: TodoListProps) {
             })
           )}
         </div>
-        {/* Pagination */}
-        {totalPages > 1 && (
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-2 px-4 py-3 border-t border-off-white dark:border-medium-gray/20">
-            <p className="text-xs sm:text-sm text-medium-gray">
-              Showing {startIndex + 1}-{Math.min(endIndex, filteredTodos.length)} of {filteredTodos.length} tasks
-            </p>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1}
-                className="px-3 py-2 text-xs sm:text-sm rounded-lg border border-off-white dark:border-medium-gray/20 disabled:opacity-40 hover:bg-off-white dark:hover:bg-dark-gray transition-colors min-h-[44px] flex items-center justify-center"
-              >
-                Prev
-              </button>
-              <span className="text-xs sm:text-sm text-medium-gray px-1 sm:px-2">
-                {currentPage} / {totalPages}
-              </span>
-              <button
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages}
-                className="px-3 py-2 text-xs sm:text-sm rounded-lg border border-off-white dark:border-medium-gray/20 disabled:opacity-40 hover:bg-off-white dark:hover:bg-dark-gray transition-colors min-h-[44px] flex items-center justify-center"
-              >
-                Next
-              </button>
-            </div>
-          </div>
-        )}
+        <Pagination
+          offset={startIndex}
+          limit={ITEMS_PER_PAGE}
+          total={filteredTodos.length}
+          onChange={(offset) => setCurrentPage(Math.floor(offset / ITEMS_PER_PAGE) + 1)}
+          noun="tasks"
+          className="px-4 py-3 border-t border-off-white dark:border-medium-gray/20"
+        />
       </div>
     </div>
   )
