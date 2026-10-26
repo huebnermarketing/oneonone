@@ -201,7 +201,7 @@ describe('runJob', () => {
     expect(s3.downloadFromS3).toHaveBeenCalledTimes(1)
     expect(s3.downloadFromS3).toHaveBeenCalledWith(FINAL)
     expect(s3.uploadToS3).not.toHaveBeenCalled()
-    expect(openai.transcribeAudio).toHaveBeenCalledWith(expect.any(Buffer), 'recording.webm', 'hi')
+    expect(openai.transcribeAudio).toHaveBeenCalledWith(expect.any(Buffer), 'recording.webm', 'hi', { participantNames: ['Emp', 'Rep'] })
   })
 
   it('silent audio completes without analysis', async () => {

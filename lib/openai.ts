@@ -4,6 +4,15 @@
  */
 import OpenAI from 'openai'
 import { getAiClient, chatJson, type AiConfig } from './ai'
+import {
+  TranscriptionContext,
+  buildTranscriptionPrompt,
+  collapseRepetitions,
+  detectLanguageByScript,
+  isGpt4oTranscribe,
+  modelSegmentCap,
+  preferredResponseFormat,
+} from './transcription-quality'
 
 async function getOpenAIClient(): Promise<OpenAI> {
   return (await getAiClient()).client
@@ -194,8 +203,9 @@ async function transcribeWhisperFile(
   whisperModel: string,
   filePath: string,
   uploadFilename: string,
-  language?: string
-): Promise<TranscriptionResult> {
+  language?: string,
+  prompt?: string
+): Promise<TranscriptionResult & { detected: boolean }> {
   const fs = await import('fs')
   const fileStream = fs.createReadStream(filePath)
 
@@ -204,14 +214,22 @@ async function transcribeWhisperFile(
     model: string
     response_format: 'verbose_json' | 'json'
     language?: string
+    prompt?: string
+    temperature?: number
   } = {
     file: fileStream,
     model: whisperModel,
-    response_format: 'verbose_json',
+    response_format: preferredResponseFormat(whisperModel),
+    temperature: 0,
   }
+  if (prompt) transcriptionOptions.prompt = prompt
 
-  if (language && language !== 'auto' && WHISPER_SUPPORTED_LANGUAGES.includes(language)) {
-    transcriptionOptions.language = language
+  // whisper-1 400s on codes outside its documented list (notably "gu" — Gujarati); gpt-4o-transcribe takes any ISO code.
+  // Dropping the code here (rather than failing) keeps auto-detect as the fallback, and the prompt still steers the script.
+  if (language && language !== 'auto') {
+    const accepted = isGpt4oTranscribe(whisperModel) ? /^[a-z]{2}$/.test(language) : WHISPER_SUPPORTED_LANGUAGES.includes(language)
+    if (accepted) transcriptionOptions.language = language
+    else console.warn(`[OpenAI] ${whisperModel} does not accept language="${language}"; relying on auto-detect + prompt`)
   }
 
   type SttResponse = { text: string; language?: string; duration?: number; usage?: { seconds?: number } }
@@ -233,10 +251,32 @@ async function transcribeWhisperFile(
     `[OpenAI] Segment transcribed (${uploadFilename}): text length ${response.text?.length || 0}`
   )
 
+  const reported = normalizeLanguage(response.language)
   return {
     text: response.text,
-    language: normalizeLanguage(response.language) || language || 'en',
+    language: reported || language || '',
+    detected: !!reported,
     duration: response.duration || 0,
+  }
+}
+
+/** Ask the fast model for an ISO-639-1 code when the script heuristic cannot decide. Never throws. */
+async function classifyLanguage(openai: OpenAI, fastModel: string, text: string): Promise<string | undefined> {
+  const sample = text.slice(0, 1500)
+  if (!sample.trim()) return undefined
+  try {
+    const r = await chatJson<{ language?: string }>(openai, {
+      model: fastModel,
+      system: 'You identify the dominant spoken language of a meeting transcript. Reply with JSON {"language": "<ISO 639-1 code>"} only.',
+      user: sample,
+      temperature: 0,
+      maxTokens: 20,
+    })
+    const code = normalizeLanguage(r.language)
+    return code && code.length === 2 ? code : undefined
+  } catch (err) {
+    console.warn('[OpenAI] Language classification failed:', err instanceof Error ? err.message : err)
+    return undefined
   }
 }
 
@@ -286,7 +326,12 @@ async function prepareAudioForWhisper(
   return lastCompressed
 }
 
-export async function transcribeAudio(audioBuffer: Buffer, filename: string, language?: string): Promise<TranscriptionResult> {
+export async function transcribeAudio(
+  audioBuffer: Buffer,
+  filename: string,
+  language?: string,
+  context?: TranscriptionContext
+): Promise<TranscriptionResult> {
   const fs = await import('fs')
   const path = await import('path')
   const os = await import('os')
@@ -323,27 +368,33 @@ export async function transcribeAudio(audioBuffer: Buffer, filename: string, lan
 
     let result: TranscriptionResult
 
-    // Split when the file is too big, or when the provider caps per-request audio length (OpenRouter: 60 s processing timeout)
+    // Per-request cap: the provider's (OpenRouter: 60 s processing timeout) or the model's (gpt-4o-transcribe: ~25 min)
+    const segmentSeconds = Math.min(models.sttSegmentSeconds, modelSegmentCap(models.whisperModel) ?? Infinity)
     const needsSplit =
       whisperStats.size > WHISPER_MAX_SIZE ||
-      (models.sttSegmentSeconds < DEFAULT_SEGMENT_SECONDS && (await probeDurationSeconds(whisperPath)) > models.sttSegmentSeconds)
+      (segmentSeconds < DEFAULT_SEGMENT_SECONDS && (await probeDurationSeconds(whisperPath)) > segmentSeconds)
+
+    const requested = language && language !== 'auto' ? language : undefined
 
     if (!needsSplit) {
-      result = await transcribeWhisperFile(
+      const r = await transcribeWhisperFile(
         openai,
         models.whisperModel,
         whisperPath,
         path.basename(whisperPath),
-        language
+        requested,
+        buildTranscriptionPrompt(requested, context)
       )
+      result = { text: r.text, language: r.language, duration: r.duration }
     } else {
-      console.log(`[OpenAI] Splitting audio into ${models.sttSegmentSeconds}s segments for transcription`)
-      const segments = await splitAudioForWhisper(whisperPath, models.sttSegmentSeconds)
+      console.log(`[OpenAI] Splitting audio into ${segmentSeconds}s segments for transcription`)
+      const segments = await splitAudioForWhisper(whisperPath, segmentSeconds)
       tempFiles.push(...segments)
 
       const texts: string[] = []
       let totalDuration = 0
-      let detectedLanguage = language || 'en'
+      // Language is pinned after the first segment so later segments can't switch script mid-recording
+      let pinned = requested
 
       for (let i = 0; i < segments.length; i++) {
         const segmentResult = await transcribeWhisperFile(
@@ -351,18 +402,31 @@ export async function transcribeAudio(audioBuffer: Buffer, filename: string, lan
           models.whisperModel,
           segments[i],
           `segment_${i}.mp3`,
-          language
+          pinned,
+          buildTranscriptionPrompt(pinned, context)
         )
         texts.push(segmentResult.text)
         totalDuration += segmentResult.duration
-        if (segmentResult.language) detectedLanguage = segmentResult.language
+        if (!pinned && segmentResult.detected && segmentResult.language) {
+          pinned = segmentResult.language
+          console.log(`[OpenAI] Language pinned to "${pinned}" from segment ${i}`)
+        }
       }
 
-      result = {
-        text: texts.join(' '),
-        language: detectedLanguage,
-        duration: totalDuration,
-      }
+      result = { text: texts.join(' '), language: pinned || '', duration: totalDuration }
+    }
+
+    // Hallucination guard: collapse "phrase phrase phrase…" loops
+    const cleaned = collapseRepetitions(result.text)
+    if (cleaned.removed > 0) {
+      console.warn(`[OpenAI] Removed ${cleaned.removed} words of repeated phrases from the transcript`)
+      result.text = cleaned.text
+    }
+
+    // Language fallback when the model reports none (gpt-4o-transcribe): script heuristic, then the fast model
+    if (!result.language) {
+      result.language = detectLanguageByScript(result.text) || (await classifyLanguage(openai, models.fastModel, result.text)) || requested || 'en'
+      console.log(`[OpenAI] Language inferred as "${result.language}"`)
     }
 
     console.log(`[OpenAI] Transcription successful. Text length: ${result.text?.length || 0}`)
