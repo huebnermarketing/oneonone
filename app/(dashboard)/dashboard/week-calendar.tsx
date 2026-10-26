@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { Calendar, Clock, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface CalendarMeeting {
   id: string
@@ -45,6 +46,11 @@ function getWeekDays(weekStart: Date): Date[] {
 
 function isSameDay(a: Date, b: Date) {
   return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+}
+
+/** "YYYY-MM-DD" of a grid cell built from local Y/M/D parts — a calendar day, compared against `f.dateKey(instant)`. */
+function gridDayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 function isSameWeek(a: Date, b: Date) {
@@ -111,6 +117,7 @@ function WeekView({ meetings, days, today, userRole }: {
   today: Date
   userRole: string
 }) {
+  const f = useFormat()
   return (
     <>
       {/* Desktop: 7-column grid */}
@@ -119,7 +126,7 @@ function WeekView({ meetings, days, today, userRole }: {
           {days.map((day, idx) => {
             const isToday = isSameDay(day, today)
             const dayMeetings = meetings
-              .filter((m) => isSameDay(new Date(m.meetingDate), day))
+              .filter((m) => f.dateKey(m.meetingDate) === gridDayKey(day))
               .sort((a, b) => new Date(a.meetingDate).getTime() - new Date(b.meetingDate).getTime())
 
             return (
@@ -135,7 +142,7 @@ function WeekView({ meetings, days, today, userRole }: {
                     <p className="text-[10px] text-light-gray text-center pt-2">—</p>
                   )}
                   {dayMeetings.map((m) => {
-                    const time = new Date(m.meetingDate).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+                    const time = f.time(m.meetingDate)
                     const name = userRole === 'EMPLOYEE' ? m.reporter?.name : m.employee?.name
                     const badge = statusBadge[m.status] ?? statusBadge.SCHEDULED
 
@@ -163,7 +170,7 @@ function WeekView({ meetings, days, today, userRole }: {
         {days.map((day, idx) => {
           const isToday = isSameDay(day, today)
           const dayMeetings = meetings
-            .filter((m) => isSameDay(new Date(m.meetingDate), day))
+            .filter((m) => f.dateKey(m.meetingDate) === gridDayKey(day))
             .sort((a, b) => new Date(a.meetingDate).getTime() - new Date(b.meetingDate).getTime())
 
           if (dayMeetings.length === 0 && !isToday) return null
@@ -183,7 +190,7 @@ function WeekView({ meetings, days, today, userRole }: {
               ) : (
                 <div className="space-y-2">
                   {dayMeetings.map((m) => {
-                    const time = new Date(m.meetingDate).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+                    const time = f.time(m.meetingDate)
                     const name = userRole === 'EMPLOYEE' ? m.reporter?.name : m.employee?.name
                     const badge = statusBadge[m.status] ?? statusBadge.SCHEDULED
 
@@ -208,7 +215,7 @@ function WeekView({ meetings, days, today, userRole }: {
           )
         })}
         {days.every((day) => {
-          const dayMeetings = meetings.filter((m) => isSameDay(new Date(m.meetingDate), day))
+          const dayMeetings = meetings.filter((m) => f.dateKey(m.meetingDate) === gridDayKey(day))
           return dayMeetings.length === 0 && !isSameDay(day, today)
         }) && (
           <div className="px-4 py-8 text-center">
@@ -228,13 +235,14 @@ function MonthView({ meetings, monthDate, today, userRole }: {
   today: Date
   userRole: string
 }) {
+  const f = useFormat()
   const gridDays = getMonthGridDays(monthDate.getFullYear(), monthDate.getMonth())
   const currentMonth = monthDate.getMonth()
   const [selectedDay, setSelectedDay] = useState<Date | null>(null)
 
   const selectedMeetings = selectedDay
     ? meetings
-        .filter((m) => isSameDay(new Date(m.meetingDate), selectedDay))
+        .filter((m) => f.dateKey(m.meetingDate) === gridDayKey(selectedDay))
         .sort((a, b) => new Date(a.meetingDate).getTime() - new Date(b.meetingDate).getTime())
     : []
 
@@ -257,7 +265,7 @@ function MonthView({ meetings, monthDate, today, userRole }: {
             const isToday = isSameDay(day, today)
             const isCurrentMonth = day.getMonth() === currentMonth
             const isSelected = selectedDay && isSameDay(day, selectedDay)
-            const dayMeetings = meetings.filter((m) => isSameDay(new Date(m.meetingDate), day))
+            const dayMeetings = meetings.filter((m) => f.dateKey(m.meetingDate) === gridDayKey(day))
             const uniqueStatuses = [...new Set(dayMeetings.map((m) => m.status))]
 
             return (
@@ -324,7 +332,7 @@ function MonthView({ meetings, monthDate, today, userRole }: {
             const isToday = isSameDay(day, today)
             const isCurrentMonth = day.getMonth() === currentMonth
             const isSelected = selectedDay && isSameDay(day, selectedDay)
-            const dayMeetings = meetings.filter((m) => isSameDay(new Date(m.meetingDate), day))
+            const dayMeetings = meetings.filter((m) => f.dateKey(m.meetingDate) === gridDayKey(day))
 
             return (
               <button
@@ -360,7 +368,7 @@ function MonthView({ meetings, monthDate, today, userRole }: {
       {selectedDay && (
         <div className="border-t border-off-white dark:border-medium-gray/20 px-4 sm:px-6 py-4">
           <h3 className="text-sm font-semibold text-dark-gray dark:text-white mb-3">
-            {selectedDay.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+            {f.dateOnly(gridDayKey(selectedDay), 'weekday')}
             {isSameDay(selectedDay, today) && (
               <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium align-middle">Today</span>
             )}
@@ -370,7 +378,7 @@ function MonthView({ meetings, monthDate, today, userRole }: {
           ) : (
             <div className="space-y-2">
               {selectedMeetings.map((m) => {
-                const time = new Date(m.meetingDate).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+                const time = f.time(m.meetingDate)
                 const name = userRole === 'EMPLOYEE' ? m.reporter?.name : m.employee?.name
                 const badge = statusBadge[m.status] ?? statusBadge.SCHEDULED
 

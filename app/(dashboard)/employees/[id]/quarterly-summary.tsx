@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import { Download, TrendingUp, Smile, Meh, Frown, Calendar, CheckSquare, Target, Award, HelpCircle } from 'lucide-react'
 import { useToast } from '@/components/ui/toast'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface QuarterlyGoal {
   date: string
@@ -40,6 +41,7 @@ interface QuarterlySummaryProps {
 
 export function QuarterlySummary({ userId, userName }: QuarterlySummaryProps) {
   const { toastError } = useToast()
+  const f = useFormat()
   const [loading, setLoading] = useState(false)
   const [summary, setSummary] = useState<QuarterlySummaryData | null>(null)
   const [isOpen, setIsOpen] = useState(false)
@@ -181,7 +183,7 @@ export function QuarterlySummary({ userId, userName }: QuarterlySummaryProps) {
                     {summary.goals.map((goal, i) => (
                       <div key={i} className="p-4 rounded-lg bg-off-white dark:bg-charcoal">
                         <p className="text-xs text-medium-gray mb-2">
-                          {new Date(goal.date).toLocaleDateString()}
+                          {f.date(goal.date, 'short')}
                         </p>
                         {goal.professional && (
                           <div className="mb-2">
@@ -221,7 +223,7 @@ export function QuarterlySummary({ userId, userName }: QuarterlySummaryProps) {
                         <div>
                           <p className="text-sm text-dark-gray dark:text-white">{item.text}</p>
                           <p className="text-xs text-medium-gray mt-1">
-                            {new Date(item.date).toLocaleDateString()}
+                            {f.date(item.date, 'short')}
                           </p>
                         </div>
                       </div>
@@ -244,7 +246,7 @@ export function QuarterlySummary({ userId, userName }: QuarterlySummaryProps) {
                         <div>
                           <p className="text-sm text-dark-gray dark:text-white">{item.text}</p>
                           <p className="text-xs text-medium-gray mt-1">
-                            {new Date(item.date).toLocaleDateString()}
+                            {f.date(item.date, 'short')}
                           </p>
                         </div>
                       </div>

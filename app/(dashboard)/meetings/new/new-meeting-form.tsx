@@ -8,6 +8,8 @@ import { useRouter } from 'next/navigation'
 import { Calendar, Clock, User, ArrowLeft, Check, Search, Loader2, AlertCircle, Video, MapPin } from 'lucide-react'
 import { DatePicker } from '@/components/ui/date-picker'
 import { useToast } from '@/components/ui/toast'
+import { useFormat } from '@/components/providers/timezone-provider'
+import { startOfDayInTz } from '@/lib/dates'
 
 const formSchema = z.object({
   employeeId: z.string().min(1, 'Please select a team member'),
@@ -30,6 +32,7 @@ interface NewMeetingFormProps {
 export function NewMeetingForm({ employees, currentUserId }: NewMeetingFormProps) {
   const router = useRouter()
   const { toastError, toastSuccess } = useToast()
+  const f = useFormat()
   const [isLoading, setIsLoading] = useState(false)
   const [employeeSearch, setEmployeeSearch] = useState('')
 
@@ -72,9 +75,8 @@ export function NewMeetingForm({ employees, currentUserId }: NewMeetingFormProps
 
   const formattedDateForSlots = useMemo(() => {
     if (!watchedDate) return ''
-    const [y, m, d] = watchedDate.split('-').map(Number)
-    return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })
-  }, [watchedDate])
+    return f.dateOnly(watchedDate, 'weekday')
+  }, [watchedDate, f])
 
   const filteredEmployees = useMemo(() => {
     const q = employeeSearch.trim().toLowerCase()
@@ -190,17 +192,9 @@ export function NewMeetingForm({ employees, currentUserId }: NewMeetingFormProps
   }
 
   const today = new Date()
-  const minDate = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0')
+  const minDate = f.dateKey(today)
 
   const isToday = watchedDate === minDate
-
-  function formatSlotTime(isoString: string) {
-    return new Date(isoString).toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    })
-  }
 
   function isSlotInPast(slotDate: Date) {
     return slotDate.getTime() <= Date.now()
@@ -380,10 +374,10 @@ export function NewMeetingForm({ employees, currentUserId }: NewMeetingFormProps
                             const hour = 9 + Math.floor(i / 2)
                             const min = i % 2 === 0 ? '00' : '30'
                             const time = `${String(hour).padStart(2, '0')}:${min}`
-                            const [year, month, day] = watchedDate.split('-').map(Number)
-                            const dt = new Date(year, month - 1, day, hour, parseInt(min))
+                            // Slot is HH:mm on the chosen day in the VIEWER's timezone (profile), not the browser's
+                            const dt = new Date(startOfDayInTz(watchedDate, f.timeZone).getTime() + (hour * 60 + parseInt(min)) * 60_000)
                             const iso = dt.toISOString()
-                            const display = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
+                            const display = f.time(dt)
                             const past = isToday && isSlotInPast(dt)
                             return (
                               <button
@@ -430,7 +424,7 @@ export function NewMeetingForm({ employees, currentUserId }: NewMeetingFormProps
                                   : 'bg-off-white dark:bg-dark-gray text-dark-gray dark:text-white hover:bg-dark-gray/10 dark:hover:bg-white/10'
                             }`}
                           >
-                            {formatSlotTime(slot.start)}
+                            {f.time(slot.start)}
                           </button>
                         )
                       })}

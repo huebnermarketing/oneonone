@@ -14,6 +14,7 @@ import {
   Clock
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface Notification {
   id: string
@@ -55,6 +56,7 @@ const VIEWPORT_PADDING = 12
 
 export function NotificationCenter() {
   const router = useRouter()
+  const f = useFormat()
   const [isOpen, setIsOpen] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
@@ -218,7 +220,7 @@ export function NotificationCenter() {
     if (minutes < 60) return `${minutes}m ago`
     if (hours < 24) return `${hours}h ago`
     if (days < 7) return `${days}d ago`
-    return date.toLocaleDateString()
+    return f.date(date, 'short')
   }
 
   return (

@@ -153,7 +153,7 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
     const [hh, mm] = newTime.split(':').map(Number)
     const displayTime = `${hh % 12 || 12}:${String(mm).padStart(2, '0')} ${hh >= 12 ? 'PM' : 'AM'}`
     await Promise.all([
-      sendRecurringScheduleUpdatedEmail(existing.employee.email, existing.employee.name, user.name, newDay, newTime, newFreq).catch((e) =>
+      sendRecurringScheduleUpdatedEmail(existing.employee.email, existing.employee.name, user.name, newDay, newTime, newFreq, reporterTz).catch((e) =>
         console.error('Failed to send schedule update email:', e)
       ),
       createNotification({

@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { HardDrive, Trash2, Loader2, ArrowLeft, FileAudio } from 'lucide-react'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 type StorageStats = {
   storageType: 's3' | 'local'
@@ -38,6 +39,7 @@ export function StorageClient() {
   const router = useRouter()
   const { toastError } = useToast()
   const confirm = useConfirm()
+  const f = useFormat()
   const [stats, setStats] = useState<StorageStats | null>(null)
   const [recordings, setRecordings] = useState<RecordingRow[]>([])
   const [loading, setLoading] = useState(true)
@@ -92,8 +94,7 @@ export function StorageClient() {
     return `${(n / (1024 * 1024)).toFixed(2)} MB`
   }
 
-  const formatDate = (d: string | null) =>
-    d ? new Date(d).toLocaleDateString(undefined, { dateStyle: 'medium' }) : '–'
+  const formatDate = (d: string | null) => (d ? f.date(d, 'short') : '–')
 
   if (loading) {
     return (
@@ -212,7 +213,7 @@ export function StorageClient() {
                     </td>
                     <td className="px-6 py-3 text-medium-gray">{formatBytes(r.fileSize)}</td>
                     <td className="px-6 py-3 text-medium-gray">
-                      {r.recordedAt ? new Date(r.recordedAt).toLocaleString() : '–'}
+                      {r.recordedAt ? f.dateTime(r.recordedAt, 'short') : '–'}
                     </td>
                     <td className="px-6 py-3 text-right">
                       <Link

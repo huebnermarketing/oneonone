@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useConfirm } from '@/components/ui/confirm-modal'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface Notification {
   id: string
@@ -86,6 +87,7 @@ const typeLabels: Record<string, string> = {
 export function NotificationsClient() {
   const router = useRouter()
   const confirm = useConfirm()
+  const f = useFormat()
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [unreadCount, setUnreadCount] = useState(0)
   const [total, setTotal] = useState(0)
@@ -218,11 +220,8 @@ export function NotificationsClient() {
     if (minutes < 60) return `${minutes}m ago`
     if (hours < 24) return `${hours}h ago`
     if (days < 7) return `${days}d ago`
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: date.getFullYear() !== now.getFullYear() ? 'numeric' : undefined,
-    })
+    const sameYear = f.dateKey(date).slice(0, 4) === f.dateKey(now).slice(0, 4)
+    return sameYear ? f.monthDay(date) : f.date(date, 'short')
   }
 
   const totalPages = Math.ceil(total / pageSize)

@@ -13,12 +13,14 @@ import {
   AlertTriangle
 } from 'lucide-react'
 import { BackupHistory, BackupStatus, BackupType } from '@prisma/client'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface BackupClientProps {
   initialBackups: BackupHistory[]
 }
 
 export function BackupClient({ initialBackups }: BackupClientProps) {
+  const f = useFormat()
   const [backups, setBackups] = useState<BackupHistory[]>(initialBackups)
   const [creating, setCreating] = useState(false)
   const [restoring, setRestoring] = useState(false)
@@ -108,10 +110,6 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
     if (bytes < 1024) return `${bytes} B`
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
-  }
-
-  const formatDate = (date: Date | string) => {
-    return new Date(date).toLocaleString()
   }
 
   const statusIcons: Record<BackupStatus, typeof Clock> = {
@@ -253,7 +251,7 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
                       {backup.fileName || 'Backup'}
                     </p>
                     <p className="text-sm text-medium-gray">
-                      {formatDate(backup.startedAt)} • {formatFileSize(backup.fileSize)}
+                      {f.dateTime(backup.startedAt, 'short')} • {formatFileSize(backup.fileSize)}
                     </p>
                   </div>
                   <div className="flex items-center gap-2">

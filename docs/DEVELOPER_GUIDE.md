@@ -171,6 +171,7 @@ Cascade summary: `Account`, `Session`, `Notification`, `AuditLog`, `RecurringSch
 | `encryption.ts` | AES-256-GCM; v2 key = HKDF(`ENCRYPTION_SECRET`), legacy scrypt format still readable; `isEncrypted`/`isLegacyCiphertext`; `ENCRYPTION_SECRET_PREVIOUS` for rotation; `scripts/reencrypt-secrets.ts` | Secrets, rotation |
 | `ai.ts` | Provider registry (`PROVIDERS`), `getAiConfig()`/`getAiClient()` (settings → baseURL, key, chat/fast/stt models), `normalizeModelId` (`gpt-4o` ⇄ `openai/gpt-4o`), `chatJson()` (JSON mode with fence-stripping fallback for models that reject `response_format`), `listModels(kind)` for the Settings pickers | Any AI call |
 | `transcription-quality.ts` | Pure helpers: `buildTranscriptionPrompt()` (native-script primer + participant names), `collapseRepetitions()` (hallucination-loop guard), `detectLanguageByScript()`, `isGpt4oTranscribe()` / `modelSegmentCap()` / `preferredResponseFormat()` | `openai.ts` |
+| `dates.ts` | The only date formatter: `formatDate/DateTime/Time/MeetingShort/MeetingLong/DayHeading/MonthDay(d, tz)`, `formatDateOnly` (calendar dates, UTC-safe), `toDateKey`, `startOfDayInTz/endOfDayInTz`, `isTodoOverdue(due, now, status, tz)`, `timeZoneAbbrev`, `formattersFor(tz)` (what `useFormat()` returns) | everything that shows a date |
 | `recording-pipeline.ts` | `startJob()`, `runJob()` (resumable COMBINE→TRANSCRIBE→ANALYZE), `recoverStaleJobs()` (cron), `resolveStartStage()`, `latestJob()` | `recording/process`, `recording/reprocess`, `recording` GET, cron |
 | `openai.ts` | `transcribeAudio()` (temp file → ffmpeg compress → segment when >24 MB or longer than the provider's per-request limit → `verbose_json`, `json` fallback, language-name → ISO normalisation), `analyzeTranscript()`, `searchTranscripts()` (fast model), `generateOrganizationInsights()` — all via `lib/ai.ts` | Recording pipeline, insights |
 | `s3.ts` | Settings-driven S3 client, `uploadToS3`, signed GET/PUT URLs, `deleteS3Prefix`, key helpers `recordings/<meetingId>/<ts>/chunk_NNNN.webm` + `final.webm` | Storage |
@@ -236,6 +237,10 @@ Alternate ingress: Fathom webhook writes transcript/summary straight to `Meeting
 ### Cron (`POST /api/cron/meetings`, header `x-cron-secret`)
 
 1. Generate due recurring occurrences. 2. First reminder (`reminderHoursBefore`, email + in-app) and short-notice reminder (`shortReminderHoursBefore`, in-app; 0 disables) for SCHEDULED meetings. 3. Form reminders to employees. 4. `recoverStaleJobs()` — resume or fail interrupted recording jobs. Email copies obey `enableEmailReminders`. `CRON_SECRET` is required in every environment (503 if unset, 401 on mismatch). Nothing in the repo schedules it — set up an external hourly caller (see `DEPLOYMENT.md`).
+
+### Timezones
+
+Every instant is stored in UTC and rendered in the **viewer's** `User.timeZone`. `app/(dashboard)/layout.tsx` mounts `TimeZoneProvider` with the session user's zone; when it is unset the provider writes the browser's zone to the profile once (`PATCH /api/profile`) and refreshes. Server components pass `user.timeZone` to `lib/dates`; client components use `useFormat()`. Meeting times shown to a party who may be in another zone carry the abbreviation (`Wed, Feb 18, 11:30 AM IST`). Calendar dates — todo due dates (stored 00:00 UTC from the picker), report ranges — use `formatDateOnly` and never shift. `isTodoOverdue` turns over at the viewer's local end of day. Emails look up the recipient's zone by address (`recipientTimeZone`, cached 60 s); in-app notification text is rendered in the recipient's zone at creation. Subjects are forced to ASCII (`asciiSubject`) so mail clients never show `=?UTF-8?Q?…?=`; every email also carries a plain-text part (`htmlToText`).
 
 ### Onboarding
 

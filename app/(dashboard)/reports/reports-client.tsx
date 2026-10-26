@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Download, TrendingUp, AlertTriangle, Smile, Meh, Frown, Calendar, Users, CheckSquare, FileText, Building2, Loader2, Sparkles, BarChart3 } from 'lucide-react'
 import { DatePicker } from '@/components/ui/date-picker'
 import { useToast } from '@/components/ui/toast'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface Department {
   id: string
@@ -51,6 +52,7 @@ interface ReportsClientProps {
 
 export function ReportsClient({ departments }: ReportsClientProps) {
   const { toastError } = useToast()
+  const f = useFormat()
   const [selectedDepartment, setSelectedDepartment] = useState<string>('all')
   const [startDate, setStartDate] = useState<string>('')
   const [endDate, setEndDate] = useState<string>('')
@@ -139,8 +141,8 @@ export function ReportsClient({ departments }: ReportsClientProps) {
         return
     }
     
-    setStartDate(start.toISOString().split('T')[0])
-    setEndDate(today.toISOString().split('T')[0])
+    setStartDate(f.dateKey(start))
+    setEndDate(f.dateKey(today))
   }
 
   return (
@@ -255,7 +257,7 @@ export function ReportsClient({ departments }: ReportsClientProps) {
           <div className="flex items-center justify-between pt-2">
             <p className="text-sm text-medium-gray">
               {startDate && endDate ? (
-                <>Showing data from <span className="font-medium text-dark-gray dark:text-white">{new Date(startDate).toLocaleDateString()}</span> to <span className="font-medium text-dark-gray dark:text-white">{new Date(endDate).toLocaleDateString()}</span></>
+                <>Showing data from <span className="font-medium text-dark-gray dark:text-white">{f.dateOnly(startDate, 'short')}</span> to <span className="font-medium text-dark-gray dark:text-white">{f.dateOnly(endDate, 'short')}</span></>
               ) : (
                 'Select a date range to generate report'
               )}
@@ -476,7 +478,7 @@ export function ReportsClient({ departments }: ReportsClientProps) {
                       className="border-b border-off-white/50 dark:border-medium-gray/10 even:bg-off-white/40 dark:even:bg-charcoal/40 hover:bg-off-white/70 dark:hover:bg-charcoal/60 transition-colors"
                     >
                       <td className="py-3 px-6 text-sm text-dark-gray dark:text-white">
-                        {new Date(meeting.date).toLocaleDateString()}
+                        {f.date(meeting.date, 'short')}
                       </td>
                       <td className="py-3 px-6 text-sm text-dark-gray dark:text-white">{meeting.employee}</td>
                       <td className="py-3 px-6 text-sm text-medium-gray">{meeting.department}</td>
@@ -512,7 +514,7 @@ export function ReportsClient({ departments }: ReportsClientProps) {
                   <div className="flex items-center justify-between">
                     <span className="font-medium text-dark-gray dark:text-white">{meeting.employee}</span>
                     <span className="text-sm text-medium-gray">
-                      {new Date(meeting.date).toLocaleDateString()}
+                      {f.date(meeting.date, 'short')}
                     </span>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
