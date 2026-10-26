@@ -31,6 +31,7 @@ model User {
   kekaEmployeeId               String?
   accounts                     Account[]
   auditLogs                    AuditLog[]
+  recordingJobsTriggered       RecordingJob[]      @relation("RecordingJobTrigger")
   meetingsAsEmployee           Meeting[]           @relation("EmployeeMeetings")
   meetingsAsReporter           Meeting[]           @relation("ReporterMeetings")
   notifications                Notification[]
@@ -197,10 +198,40 @@ model MeetingRecording {
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
   meeting        Meeting         @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  jobs           RecordingJob[]
 
   @@index([meetingId])
   @@index([status])
   @@index([language])
+}
+
+/// One row per pipeline run (initial processing or a reprocess). `MeetingRecording.status` stays the
+/// user-facing status; this table is the audit trail + the lock that stops two runs on one recording.
+model RecordingJob {
+  id            String             @id @default(uuid())
+  recordingId   String
+  meetingId     String
+  kind          RecordingJobKind
+  /// Stage to start from; the pipeline skips earlier stages whose output already exists.
+  fromStage     RecordingStage
+  stage         RecordingStage     @default(COMBINE)
+  status        RecordingJobStatus @default(QUEUED)
+  attempt       Int                @default(1)
+  error         String?
+  totalChunks   Int?
+  language      String?
+  triggeredById String?
+  startedAt     DateTime?
+  heartbeatAt   DateTime?
+  finishedAt    DateTime?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  recording     MeetingRecording   @relation(fields: [recordingId], references: [id], onDelete: Cascade)
+  triggeredBy   User?              @relation("RecordingJobTrigger", fields: [triggeredById], references: [id], onDelete: SetNull)
+
+  @@index([recordingId])
+  @@index([meetingId])
+  @@index([status])
 }
 
 model SystemSettings {
@@ -377,6 +408,25 @@ enum RecordingStatus {
   TRANSCRIBING
   ANALYZING
   COMPLETED
+  FAILED
+}
+
+enum RecordingJobKind {
+  PROCESS
+  REPROCESS
+}
+
+enum RecordingStage {
+  COMBINE
+  TRANSCRIBE
+  ANALYZE
+  DONE
+}
+
+enum RecordingJobStatus {
+  QUEUED
+  RUNNING
+  DONE
   FAILED
 }
 
