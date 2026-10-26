@@ -216,7 +216,9 @@ export async function runJob(jobId: string): Promise<void> {
       log('downloading final audio')
       const audio = await downloadFromS3(audioKey!)
       log(`transcribing ${(audio.length / 1024 / 1024).toFixed(2)} MB (lang=${job.language || 'auto'})`)
-      const t = await transcribeAudio(audio, 'recording.webm', job.language ?? undefined)
+      const t = await transcribeAudio(audio, 'recording.webm', job.language ?? undefined, {
+        participantNames: [rec.meeting.employee.name, rec.meeting.reporter.name],
+      })
       transcript = t.text
       durationSeconds = Math.round(t.duration)
       log(`transcribed: lang=${t.language} dur=${durationSeconds}s len=${t.text.length}`)
