@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import { 
-  Key, 
   Cloud, 
   Mic, 
   Save, 
@@ -13,7 +12,6 @@ import {
   Eye,
   EyeOff,
   TestTube,
-  RefreshCw,
   Trash2,
   AlertTriangle,
   Database,
@@ -23,12 +21,9 @@ import {
   Building2
 } from 'lucide-react'
 import { PoliciesSection, type Policies } from './policies-section'
+import { AiProviderSection, type AiSettings } from './ai-provider-section'
 
-interface Settings extends Policies {
-  openaiApiKey: string
-  openaiApiKeySet: boolean
-  openaiModel: string
-  whisperModel: string
+interface Settings extends Policies, AiSettings {
   awsRegion: string
   awsAccessKeyId: string
   awsAccessKeyIdSet: boolean
@@ -38,26 +33,15 @@ interface Settings extends Policies {
   maxRecordingMins: number
 }
 
-interface OpenAIModel {
-  id: string
-  name: string
-  description: string
-}
-
 export function SettingsClient() {
   const [settings, setSettings] = useState<Settings | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [testing, setTesting] = useState(false)
   const [testingS3, setTestingS3] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
-  const [openaiMessage, setOpenaiMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [awsMessage, setAwsMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   // Form state
-  const [openaiApiKey, setOpenaiApiKey] = useState('')
-  const [openaiModel, setOpenaiModel] = useState('gpt-4o')
-  const [whisperModel, setWhisperModel] = useState('whisper-1')
   const [awsRegion, setAwsRegion] = useState('')
   const [awsAccessKeyId, setAwsAccessKeyId] = useState('')
   const [awsSecretKey, setAwsSecretKey] = useState('')
@@ -65,12 +49,7 @@ export function SettingsClient() {
   const [maxRecordingMins, setMaxRecordingMins] = useState(25)
 
   // Show/hide sensitive fields
-  const [showOpenaiKey, setShowOpenaiKey] = useState(false)
   const [showAwsSecret, setShowAwsSecret] = useState(false)
-
-  // Available models
-  const [availableModels, setAvailableModels] = useState<OpenAIModel[]>([])
-  const [loadingModels, setLoadingModels] = useState(false)
 
   // Clear data state
   const [dataCounts, setDataCounts] = useState<{
@@ -91,28 +70,6 @@ export function SettingsClient() {
     fetchSettings()
     fetchDataCounts()
   }, [])
-
-  // Fetch available models when API key is set
-  useEffect(() => {
-    if (settings?.openaiApiKeySet) {
-      fetchAvailableModels()
-    }
-  }, [settings?.openaiApiKeySet])
-
-  const fetchAvailableModels = async () => {
-    setLoadingModels(true)
-    try {
-      const response = await fetch('/api/settings/models')
-      if (response.ok) {
-        const data = await response.json()
-        setAvailableModels(data.models)
-      }
-    } catch (error) {
-      // Error handled by toast
-    } finally {
-      setLoadingModels(false)
-    }
-  }
 
   const fetchDataCounts = async () => {
     try {
@@ -164,8 +121,6 @@ export function SettingsClient() {
       if (response.ok) {
         const data = await response.json()
         setSettings(data)
-        setOpenaiModel(data.openaiModel || 'gpt-4o')
-        setWhisperModel(data.whisperModel || 'whisper-1')
         setAwsRegion(data.awsRegion || '')
         setAwsS3Bucket(data.awsS3Bucket || '')
         setMaxRecordingMins(data.maxRecordingMins || 25)
@@ -177,26 +132,16 @@ export function SettingsClient() {
     }
   }
 
-  const handleSave = async (section: 'openai' | 'aws' | 'recording') => {
+  const handleSave = async (section: 'aws' | 'recording') => {
     setSaving(true)
     // Clear section-specific messages
-    if (section === 'openai') setOpenaiMessage(null)
     if (section === 'aws') setAwsMessage(null)
     setMessage(null)
 
     try {
       let updates: Record<string, string | number | null> = {}
 
-      if (section === 'openai') {
-        updates = {
-          openaiModel,
-          whisperModel,
-        }
-        // Only include API key if it was changed (not empty and different from masked value)
-        if (openaiApiKey && !openaiApiKey.includes('****')) {
-          updates.openaiApiKey = openaiApiKey
-        }
-      } else if (section === 'aws') {
+      if (section === 'aws') {
         // Always include region and bucket (even if empty to allow clearing)
         updates = {
           awsRegion: awsRegion || null,
@@ -225,10 +170,7 @@ export function SettingsClient() {
         
         // Set section-specific success message
         const successMsg = { type: 'success' as const, text: 'Settings saved successfully' }
-        if (section === 'openai') {
-          setOpenaiMessage(successMsg)
-          setOpenaiApiKey('')
-        } else if (section === 'aws') {
+        if (section === 'aws') {
           setAwsMessage(successMsg)
           setAwsAccessKeyId('')
           setAwsSecretKey('')
@@ -238,42 +180,15 @@ export function SettingsClient() {
       } else {
         const error = await response.json()
         const errorMsg = { type: 'error' as const, text: error.error || 'Failed to save settings' }
-        if (section === 'openai') setOpenaiMessage(errorMsg)
-        else if (section === 'aws') setAwsMessage(errorMsg)
+        if (section === 'aws') setAwsMessage(errorMsg)
         else setMessage(errorMsg)
       }
     } catch (error) {
       const errorMsg = { type: 'error' as const, text: 'Failed to save settings' }
-      if (section === 'openai') setOpenaiMessage(errorMsg)
-      else if (section === 'aws') setAwsMessage(errorMsg)
+      if (section === 'aws') setAwsMessage(errorMsg)
       else setMessage(errorMsg)
     } finally {
       setSaving(false)
-    }
-  }
-
-  const handleTestOpenAI = async () => {
-    setTesting(true)
-    setOpenaiMessage(null)
-
-    try {
-      const response = await fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'test-openai' }),
-      })
-
-      const data = await response.json()
-
-      if (response.ok) {
-        setOpenaiMessage({ type: 'success', text: data.message })
-      } else {
-        setOpenaiMessage({ type: 'error', text: data.error })
-      }
-    } catch (error) {
-      setOpenaiMessage({ type: 'error', text: 'Failed to test connection' })
-    } finally {
-      setTesting(false)
     }
   }
 
@@ -330,183 +245,8 @@ export function SettingsClient() {
         </div>
       )}
 
-      {/* OpenAI Configuration */}
-      <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">
-        <div className="p-5 border-b border-off-white dark:border-medium-gray/20 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center">
-            <Key className="w-5 h-5 text-green-500" />
-          </div>
-          <div>
-            <h3 className="font-semibold text-dark-gray dark:text-white">OpenAI Configuration</h3>
-            <p className="text-sm text-medium-gray">Configure OpenAI API for transcription and analysis</p>
-          </div>
-        </div>
-
-        <div className="p-5 space-y-4">
-          {/* OpenAI Message */}
-          {openaiMessage && (
-            <div className={`rounded-xl p-3 flex items-center gap-3 ${
-              openaiMessage.type === 'success' 
-                ? 'bg-green-500/10 border border-green-500/20' 
-                : 'bg-red-500/10 border border-red-500/20'
-            }`}>
-              {openaiMessage.type === 'success' ? (
-                <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
-              ) : (
-                <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
-              )}
-              <p className={`text-sm ${openaiMessage.type === 'success' ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
-                {openaiMessage.text}
-              </p>
-            </div>
-          )}
-
-          {/* API Key Status */}
-          <div className="flex items-center gap-2 text-sm">
-            <span className={`w-2 h-2 rounded-full ${settings?.openaiApiKeySet ? 'bg-green-500' : 'bg-red-500'}`} />
-            <span className="text-medium-gray">
-              API Key: {settings?.openaiApiKeySet ? (
-                <span className="text-green-600 dark:text-green-400">Configured ({settings.openaiApiKey})</span>
-              ) : (
-                <span className="text-red-600 dark:text-red-400">Not configured</span>
-              )}
-            </span>
-          </div>
-
-          {/* API Key Input */}
-          <div>
-            <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
-              OpenAI API Key
-            </label>
-            <div className="relative">
-              <input
-                type={showOpenaiKey ? 'text' : 'password'}
-                value={openaiApiKey}
-                onChange={(e) => setOpenaiApiKey(e.target.value)}
-                placeholder={settings?.openaiApiKeySet ? 'Enter new key to update' : 'sk-...'}
-                className="w-full px-4 py-3 pr-12 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-charcoal text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-dark-gray/20 dark:focus:ring-white/20"
-              />
-              <button
-                type="button"
-                onClick={() => setShowOpenaiKey(!showOpenaiKey)}
-                className="absolute right-4 top-1/2 -translate-y-1/2 text-medium-gray hover:text-dark-gray dark:hover:text-white"
-              >
-                {showOpenaiKey ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-              </button>
-            </div>
-            <p className="text-xs text-medium-gray mt-1">
-              Get your API key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">platform.openai.com</a>
-            </p>
-          </div>
-
-          {/* Model Selection */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <label className="text-sm font-medium text-dark-gray dark:text-white">
-                GPT Model (Analysis)
-              </label>
-              {settings?.openaiApiKeySet && (
-                <button
-                  onClick={fetchAvailableModels}
-                  disabled={loadingModels}
-                  className="flex items-center gap-1.5 text-xs text-dark-gray dark:text-white hover:text-medium-gray disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${loadingModels ? 'animate-spin' : ''}`} />
-                  Refresh Models
-                </button>
-              )}
-            </div>
-            
-            {availableModels.length > 0 ? (
-              <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                {availableModels.map((model) => (
-                  <button
-                    key={model.id}
-                    onClick={() => setOpenaiModel(model.id)}
-                    className={`p-3 rounded-xl border text-left transition-all ${
-                      openaiModel === model.id
-                        ? 'border-dark-gray dark:border-white bg-dark-gray/5 dark:bg-white/5 ring-2 ring-dark-gray/10 dark:ring-white/10'
-                        : 'border-off-white dark:border-medium-gray/20 hover:border-medium-gray/50'
-                    }`}
-                  >
-                    <p className={`font-medium text-sm ${
-                      openaiModel === model.id ? 'text-dark-gray dark:text-white' : 'text-dark-gray dark:text-white'
-                    }`}>
-                      {model.name}
-                    </p>
-                    <p className="text-xs text-medium-gray mt-0.5">{model.description}</p>
-                  </button>
-                ))}
-              </div>
-            ) : (
-              <select
-                value={openaiModel}
-                onChange={(e) => setOpenaiModel(e.target.value)}
-                className="w-full px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-charcoal text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-dark-gray/20 dark:focus:ring-white/20"
-              >
-                <optgroup label="Latest Models">
-                  <option value="gpt-4.5-preview">GPT-4.5 Preview (Newest)</option>
-                  <option value="gpt-4o">GPT-4o (Recommended)</option>
-                  <option value="gpt-4o-mini">GPT-4o Mini (Fast & Affordable)</option>
-                </optgroup>
-                <optgroup label="Reasoning Models">
-                  <option value="o1">o1 (Advanced Reasoning)</option>
-                  <option value="o1-mini">o1-mini (Fast Reasoning)</option>
-                  <option value="o1-preview">o1 Preview</option>
-                </optgroup>
-                <optgroup label="Previous Generation">
-                  <option value="gpt-4-turbo">GPT-4 Turbo</option>
-                  <option value="gpt-4">GPT-4</option>
-                  <option value="gpt-3.5-turbo">GPT-3.5 Turbo (Budget)</option>
-                </optgroup>
-              </select>
-            )}
-            
-            <p className="text-xs text-medium-gray">
-              Selected: <span className="font-medium text-dark-gray dark:text-white">{openaiModel}</span>
-              {!settings?.openaiApiKeySet && ' • Add API key to fetch latest available models'}
-            </p>
-          </div>
-
-          {/* Whisper Model */}
-          <div>
-            <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
-              Whisper Model (Transcription)
-            </label>
-            <select
-              value={whisperModel}
-              onChange={(e) => setWhisperModel(e.target.value)}
-              className="w-full sm:w-64 px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-charcoal text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-dark-gray/20 dark:focus:ring-white/20"
-            >
-              <option value="whisper-1">Whisper-1 (Multilingual)</option>
-            </select>
-            <p className="text-xs text-medium-gray mt-1">Whisper supports 50+ languages including Hindi, Gujarati, English</p>
-          </div>
-
-          {/* Actions */}
-          <div className="flex items-center gap-3 pt-2">
-            <button
-              onClick={() => handleSave('openai')}
-              disabled={saving}
-              className="flex items-center gap-2 px-5 py-2.5 bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white disabled:opacity-50 transition-colors"
-            >
-              {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-              Save OpenAI Settings
-            </button>
-
-            {settings?.openaiApiKeySet && (
-              <button
-                onClick={handleTestOpenAI}
-                disabled={testing}
-                className="flex items-center gap-2 px-5 py-2.5 border border-off-white dark:border-medium-gray/20 text-dark-gray dark:text-white rounded-xl font-medium hover:bg-off-white dark:hover:bg-charcoal disabled:opacity-50 transition-colors"
-              >
-                {testing ? <Loader2 className="w-4 h-4 animate-spin" /> : <TestTube className="w-4 h-4" />}
-                Test Connection
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
+      {/* AI Provider */}
+      <AiProviderSection initial={settings} onSaved={(data) => setSettings((prev) => ({ ...(prev as Settings), ...data }))} />
 
       {/* AWS S3 Configuration */}
       <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">

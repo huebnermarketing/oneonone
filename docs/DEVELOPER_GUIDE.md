@@ -17,7 +17,7 @@ Baseline: `npm run check` (typecheck + lint + 106 unit tests) clean, `next build
 | Auth | NextAuth 4, Google provider only, `PrismaAdapter`, database sessions (30d) | Requests `calendar` scope at sign-in |
 | Styling | Tailwind 3.4, class-based dark mode, lucide-react icons | Brand tokens in `tailwind.config.ts` (`orange #F37022`, `charcoal`, `dark-gray`, `medium-gray`, `light-gray`, `off-white`) |
 | Forms / validation | react-hook-form + zod in 2 components, otherwise `useState` + `fetch` | Every API route validates body/query with zod schemas in `lib/validation/*.ts` |
-| AI | `openai` v6 — Whisper (`whisper-1`) + chat (`gpt-4o` default, `gpt-4o-mini` for search) | ffmpeg (`ffmpeg-static`) for compressing/segmenting audio >24 MB |
+| AI | `openai` SDK v6 against a selectable provider (`lib/ai.ts`): **OpenAI** or **OpenRouter** (one key for OpenAI/Anthropic/Google/… incl. Whisper). Three models chosen in Admin → Settings: analysis, fast (search), transcription | ffmpeg (`ffmpeg-static`) compresses and segments audio (>24 MB, or >10 min on OpenRouter because of its 60 s per-request limit) |
 | Storage | AWS S3 (recordings, attachments) | Local `uploads/` fallback exists in `lib/s3.ts` but is **not wired** — recording returns 503 without S3 |
 | Email | nodemailer SMTP (preferred) → AWS SES (fallback) | Env-only config; 11 HTML templates in `lib/email.ts` |
 | Calendar | googleapis v144 | Per-user OAuth token from `Account` table; Google Meet link auto-added |
@@ -69,7 +69,7 @@ Verified behaviour on the local run (useful when reading the backlog): unauthent
 | Feature | Needs |
 |---|---|
 | Google sign-in, Calendar events, free/busy slots | Real `GOOGLE_CLIENT_ID/SECRET` with Calendar API enabled; redirect URI `${NEXTAUTH_URL}/api/auth/callback/google`; user must re-login after scope changes |
-| Recording / transcription / insights | `OPENAI_API_KEY` **and** S3 (`AWS_*`) — set via env or Admin → Settings (DB wins over env) |
+| Recording / transcription / insights | an AI provider key (OpenAI **or** OpenRouter — one OpenRouter key covers transcription too) **and** S3 (`AWS_*`) — set via env or Admin → Settings (DB wins over env) |
 | Email | `SMTP_*` + `EMAIL_FROM`, or `AWS_SES_FROM_EMAIL` + AWS keys |
 | Cron (reminders, recurring generation) | `CRON_SECRET` + an external scheduler calling `POST /api/cron/meetings` hourly with header `x-cron-secret` |
 | Keka leave/holidays | `KEKA_*` vars (see `docs/KEKA_INTEGRATION.md`) |
@@ -88,7 +88,7 @@ Mic recording requires a secure context (`localhost` counts; LAN IPs do not).
 | Unit (vitest) | `tests/unit/*.test.ts` — meeting state machine, access predicates, conflict check, team scoping, recurring-date math, encryption, Fathom signature, API wrapper/error mapping, every zod schema | `npm test`; no DB, `@/lib/prisma` is replaced by `tests/helpers/prisma-mock.ts` |
 | API smoke (bash) | `scripts/smoke-api.sh` — logs in as seeded users by inserting `Session` rows, exercises auth mapping, validation, scoping, cancel policy, recording visibility, cron, pages; restores fixtures afterwards | `npm run test:smoke` against `http://localhost:3000` (override `BASE_URL`) |
 | CI | `.github/workflows/ci.yml` | PRs/pushes to `stage` and `main` |
-| Deploy gate | `deploy.sh` runs typecheck + unit tests before building (`SKIP_CHECKS=1` to bypass in an emergency) | on the server |
+| Deploy gate | opt-in: `RUN_CHECKS=1 bash deploy.sh` runs typecheck + unit tests before building (off by default — CI is the gate; `tsc` OOMs on small servers) | on the server |
 
 Conventions: one test file per `lib/` module; program `prismaMock.<model>.<method>.mockResolvedValue(...)` per test; pass mock implementations to `vi.fn(impl)` (the config restores mocks between tests); spy on `console.error` when a test exercises a logged failure path.
 
@@ -169,7 +169,8 @@ Cascade summary: `Account`, `Session`, `Notification`, `AuditLog`, `RecurringSch
 | `auth-helpers.ts` | `getCurrentUser()`, `requireAuth()` (redirects — **page use only**), `requireRole`/`requireAdmin` (throw), `canAccessEmployeeData` (legacy; pages still use it) | Pages |
 | `settings.ts` | `getSettings()` / `getPolicies()` — DB `SystemSettings` row wins over env, per field; 5-min cache (defaults cached too); `updateSettings()` encrypts secrets; `safeDecrypt` logs instead of throwing when the encryption secret changed | OpenAI/S3 config, policies |
 | `encryption.ts` | AES-256-GCM; v2 key = HKDF(`ENCRYPTION_SECRET`), legacy scrypt format still readable; `isEncrypted`/`isLegacyCiphertext`; `ENCRYPTION_SECRET_PREVIOUS` for rotation; `scripts/reencrypt-secrets.ts` | Secrets, rotation |
-| `openai.ts` | `transcribeAudio()` (temp file → ffmpeg compress 48/32/24k mono MP3 if >24 MB → segment 40-min pieces if still too big → Whisper verbose_json), `analyzeTranscript()` (JSON-mode GPT → summary/keyPoints/suggestedTodos/sentiment/qualityScore/qualityDetails/commonThemes), `searchTranscripts()`, `generateOrganizationInsights()` | Recording pipeline, insights |
+| `ai.ts` | Provider registry (`PROVIDERS`), `getAiConfig()`/`getAiClient()` (settings → baseURL, key, chat/fast/stt models), `normalizeModelId` (`gpt-4o` ⇄ `openai/gpt-4o`), `chatJson()` (JSON mode with fence-stripping fallback for models that reject `response_format`), `listModels(kind)` for the Settings pickers | Any AI call |
+| `openai.ts` | `transcribeAudio()` (temp file → ffmpeg compress → segment when >24 MB or longer than the provider's per-request limit → `verbose_json`, `json` fallback, language-name → ISO normalisation), `analyzeTranscript()`, `searchTranscripts()` (fast model), `generateOrganizationInsights()` — all via `lib/ai.ts` | Recording pipeline, insights |
 | `s3.ts` | Settings-driven S3 client, `uploadToS3`, signed GET/PUT URLs, `deleteS3Prefix`, key helpers `recordings/<meetingId>/<ts>/chunk_NNNN.webm` + `final.webm` | Storage |
 | `google-calendar.ts` | Per-user OAuth2 client with auto token refresh → `Account`; `createCalendarEvent` (30-min, Meet link, attendees both), `createRecurringCalendarEvent` (1-year RRULE), `updateCalendarEvent`, `deleteCalendarEvent`, `getMutualFreeSlots` (free/busy ∩ both users' work hours in their TZs) | Scheduling / availability |
 | `email.ts` | Transport pick (SMTP → SES → throw), 11 templates. All times rendered in `Asia/Kolkata`; links from `NEXTAUTH_URL` | Notifications |

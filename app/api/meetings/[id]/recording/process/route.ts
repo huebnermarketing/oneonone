@@ -25,7 +25,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
   const { totalChunks, duration, language } = await parseBody(req, processRecordingSchema)
 
   const settings = await getSettings()
-  if (!settings.openaiApiKey) throw badRequest('OpenAI API key not configured. Set it in Admin → Settings.')
+  if (!settings.openaiApiKey) throw badRequest('AI provider API key not configured. Set it in Admin → Settings.')
 
   const meeting = await prisma.meeting.findUnique({
     where: { id: params.id },

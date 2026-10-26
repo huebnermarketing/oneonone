@@ -1,27 +1,25 @@
+/**
+ * Transcription + analysis on top of the provider-aware client in lib/ai.ts.
+ * The file keeps its historical name; it is not OpenAI-specific any more.
+ */
 import OpenAI from 'openai'
-import { getSettings } from './settings'
+import { getAiClient, chatJson, type AiConfig } from './ai'
 
-// Create OpenAI client with settings from database
 async function getOpenAIClient(): Promise<OpenAI> {
-  const settings = await getSettings()
-  
-  if (!settings.openaiApiKey) {
-    throw new Error('OpenAI API key not configured. Please configure it in Admin > Settings.')
-  }
-  
-  return new OpenAI({
-    apiKey: settings.openaiApiKey,
-  })
+  return (await getAiClient()).client
 }
 
-// Get the model from settings
-async function getModels(): Promise<{ gptModel: string; whisperModel: string }> {
-  const settings = await getSettings()
+async function getModels(): Promise<{ gptModel: string; fastModel: string; whisperModel: string; sttSegmentSeconds: number }> {
+  const { config } = await getAiClient()
   return {
-    gptModel: settings.openaiModel || 'gpt-4o',
-    whisperModel: settings.whisperModel || 'whisper-1',
+    gptModel: config.chatModel,
+    fastModel: config.fastModel,
+    whisperModel: config.sttModel,
+    sttSegmentSeconds: config.sttSegmentSeconds,
   }
 }
+
+export type { AiConfig }
 
 export interface TranscriptionResult {
   text: string
@@ -58,8 +56,8 @@ export interface AnalysisResult {
 }
 
 const WHISPER_MAX_SIZE = 24 * 1024 * 1024 // 24 MB (Whisper limit is 25 MB, leave buffer)
-// ~40 min at 48 kbps mono — keeps each Whisper segment safely under 25 MB
-const WHISPER_SEGMENT_SECONDS = 40 * 60
+// Default ~40 min at 48 kbps mono keeps each segment under 25 MB; OpenRouter needs shorter segments (60 s upstream timeout)
+const DEFAULT_SEGMENT_SECONDS = 40 * 60
 
 const WHISPER_SUPPORTED_LANGUAGES = [
   'af','ar','hy','az','be','bs','bg','ca','zh','hr','cs','da','nl','en','et',
@@ -107,6 +105,19 @@ async function runFfmpeg(args: string[], timeoutMs = 180_000): Promise<void> {
   await promisify(execFile)(ffmpegPath, args, { timeout: timeoutMs })
 }
 
+/** Audio duration in seconds via ffmpeg (parses the "Duration:" line); 0 if unavailable. */
+async function probeDurationSeconds(inputPath: string): Promise<number> {
+  const ffmpegPath = await resolveFfmpegPath()
+  if (!ffmpegPath) return 0
+  const { execFile } = await import('child_process')
+  return new Promise((resolve) => {
+    execFile(ffmpegPath, ['-i', inputPath, '-f', 'null', '-'], { timeout: 60_000 }, (_err, _stdout, stderr) => {
+      const m = String(stderr).match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/)
+      resolve(m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0)
+    })
+  })
+}
+
 /**
  * Compress audio to MP3 via ffmpeg (mono, 16 kHz) for Whisper.
  * Returns the path to the compressed file, or null if compression is unavailable.
@@ -143,7 +154,7 @@ async function compressAudioForWhisper(
 }
 
 /** Split a large MP3 into time-based segments for multi-part Whisper transcription. */
-async function splitAudioForWhisper(inputPath: string): Promise<string[]> {
+async function splitAudioForWhisper(inputPath: string, segmentSeconds = DEFAULT_SEGMENT_SECONDS): Promise<string[]> {
   const fs = await import('fs')
   const path = await import('path')
 
@@ -153,11 +164,12 @@ async function splitAudioForWhisper(inputPath: string): Promise<string[]> {
   await runFfmpeg([
     '-i', inputPath,
     '-f', 'segment',
-    '-segment_time', String(WHISPER_SEGMENT_SECONDS),
+    '-segment_time', String(segmentSeconds),
+    '-segment_format', 'mp3',
+    '-reset_timestamps', '1',
     '-ac', '1',
     '-ar', '16000',
     '-b:a', '48k',
-    '-f', 'mp3',
     '-y',
     outputPattern,
   ], 300_000)
@@ -190,7 +202,7 @@ async function transcribeWhisperFile(
   const transcriptionOptions: {
     file: typeof fileStream
     model: string
-    response_format: 'verbose_json'
+    response_format: 'verbose_json' | 'json'
     language?: string
   } = {
     file: fileStream,
@@ -202,11 +214,20 @@ async function transcribeWhisperFile(
     transcriptionOptions.language = language
   }
 
-  const response = await openai.audio.transcriptions.create(transcriptionOptions) as {
-    text: string
-    language?: string
-    duration?: number
+  type SttResponse = { text: string; language?: string; duration?: number; usage?: { seconds?: number } }
+  let response: SttResponse
+  try {
+    response = (await openai.audio.transcriptions.create(transcriptionOptions)) as SttResponse
+  } catch (err) {
+    // Some providers behind OpenRouter (gpt-4o-transcribe, MAI) reject verbose_json with a 400 — fall back to json
+    const e = err as { status?: number; message?: string }
+    if (e?.status !== 400 || !/verbose_json|response_format/i.test(e.message || '')) throw err
+    console.warn(`[OpenAI] ${whisperModel} rejected verbose_json; retrying with json`)
+    const retryStream = fs.createReadStream(filePath)
+    response = (await openai.audio.transcriptions.create({ ...transcriptionOptions, file: retryStream, response_format: 'json' })) as SttResponse
   }
+  // OpenRouter's plain json shape carries duration under usage.seconds
+  if (response.duration === undefined && response.usage?.seconds !== undefined) response.duration = response.usage.seconds
 
   console.log(
     `[OpenAI] Segment transcribed (${uploadFilename}): text length ${response.text?.length || 0}`
@@ -214,9 +235,23 @@ async function transcribeWhisperFile(
 
   return {
     text: response.text,
-    language: response.language || language || 'en',
+    language: normalizeLanguage(response.language) || language || 'en',
     duration: response.duration || 0,
   }
+}
+
+const LANGUAGE_NAMES: Record<string, string> = {
+  english: 'en', hindi: 'hi', gujarati: 'gu', marathi: 'mr', tamil: 'ta', telugu: 'te', kannada: 'kn', malayalam: 'ml',
+  bengali: 'bn', punjabi: 'pa', urdu: 'ur', spanish: 'es', french: 'fr', german: 'de', portuguese: 'pt', italian: 'it',
+  dutch: 'nl', russian: 'ru', japanese: 'ja', chinese: 'zh', korean: 'ko', arabic: 'ar', turkish: 'tr', indonesian: 'id',
+}
+
+/** OpenAI returns ISO-639-1 codes; some providers behind OpenRouter return full names ("english"). Store codes. */
+export function normalizeLanguage(value: string | undefined | null): string | undefined {
+  if (!value) return undefined
+  const v = value.trim().toLowerCase()
+  if (v.length <= 3) return v
+  return LANGUAGE_NAMES[v] || v
 }
 
 /** Prepare a Whisper-ready MP3 from any input; compresses and retries at lower bitrates. */
@@ -288,7 +323,12 @@ export async function transcribeAudio(audioBuffer: Buffer, filename: string, lan
 
     let result: TranscriptionResult
 
-    if (whisperStats.size <= WHISPER_MAX_SIZE) {
+    // Split when the file is too big, or when the provider caps per-request audio length (OpenRouter: 60 s processing timeout)
+    const needsSplit =
+      whisperStats.size > WHISPER_MAX_SIZE ||
+      (models.sttSegmentSeconds < DEFAULT_SEGMENT_SECONDS && (await probeDurationSeconds(whisperPath)) > models.sttSegmentSeconds)
+
+    if (!needsSplit) {
       result = await transcribeWhisperFile(
         openai,
         models.whisperModel,
@@ -297,9 +337,8 @@ export async function transcribeAudio(audioBuffer: Buffer, filename: string, lan
         language
       )
     } else {
-      // Still too large after compression — split and transcribe each segment
-      console.log('[OpenAI] File still exceeds 25 MB after compression — splitting into segments')
-      const segments = await splitAudioForWhisper(whisperPath)
+      console.log(`[OpenAI] Splitting audio into ${models.sttSegmentSeconds}s segments for transcription`)
+      const segments = await splitAudioForWhisper(whisperPath, models.sttSegmentSeconds)
       tempFiles.push(...segments)
 
       const texts: string[] = []
@@ -339,13 +378,13 @@ export async function transcribeAudio(audioBuffer: Buffer, filename: string, lan
     }))
 
     if (err.message?.includes('API key')) {
-      throw new Error('OpenAI API key is invalid or not configured. Please check Admin > Settings.')
+      throw new Error('AI provider API key is invalid or not configured. Please check Admin > Settings.')
     }
     if (err.status === 401) {
-      throw new Error('OpenAI API authentication failed. Please verify your API key in Admin > Settings.')
+      throw new Error('AI provider authentication failed. Please verify your API key in Admin > Settings.')
     }
     if (err.status === 429) {
-      throw new Error('OpenAI rate limit exceeded. Please try again later.')
+      throw new Error('AI provider rate limit exceeded. Please try again later.')
     }
     if (err.status === 413 || err.message?.includes('size') || err.message?.includes('large')) {
       throw new Error(
@@ -433,23 +472,7 @@ Only respond with valid JSON, no additional text.`
 
   const openai = await getOpenAIClient()
   const models = await getModels()
-
-  const response = await openai.chat.completions.create({
-    model: models.gptModel,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    temperature: 0.3,
-    response_format: { type: 'json_object' },
-  })
-
-  const content = response.choices[0].message.content
-  if (!content) {
-    throw new Error('No response from OpenAI')
-  }
-
-  return JSON.parse(content) as AnalysisResult
+  return chatJson<AnalysisResult>(openai, { model: models.gptModel, system: systemPrompt, user: userPrompt, temperature: 0.3 })
 }
 
 export async function searchTranscripts(
@@ -476,26 +499,16 @@ Return results as JSON array:
 Only include transcripts with relevance > 30. Sort by relevance descending.`
 
   const openai = await getOpenAIClient()
-
-  const response = await openai.chat.completions.create({
-    model: 'gpt-4o-mini',
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
+  const models = await getModels()
+  const parsed = await chatJson<{ results?: unknown[] } | unknown[]>(openai, {
+    model: models.fastModel,
+    system: systemPrompt,
+    user: userPrompt,
     temperature: 0.1,
-    response_format: { type: 'json_object' },
   })
+  const results = (Array.isArray(parsed) ? parsed : parsed.results || []) as Array<{ index: number; relevance: number; snippet: string }>
 
-  const content = response.choices[0].message.content
-  if (!content) {
-    return []
-  }
-
-  const parsed = JSON.parse(content)
-  const results = parsed.results || parsed || []
-
-  return results.map((r: { index: number; relevance: number; snippet: string }) => ({
+  return results.map((r) => ({
     id: transcripts[r.index]?.id,
     meetingId: transcripts[r.index]?.meetingId,
     relevance: r.relevance,
@@ -540,21 +553,5 @@ Only respond with valid JSON.`
 
   const openai = await getOpenAIClient()
   const models = await getModels()
-
-  const response = await openai.chat.completions.create({
-    model: models.gptModel,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userPrompt },
-    ],
-    temperature: 0.3,
-    response_format: { type: 'json_object' },
-  })
-
-  const content = response.choices[0].message.content
-  if (!content) {
-    throw new Error('No response from OpenAI')
-  }
-
-  return JSON.parse(content)
+  return chatJson(openai, { model: models.gptModel, system: systemPrompt, user: userPrompt, temperature: 0.3 })
 }
