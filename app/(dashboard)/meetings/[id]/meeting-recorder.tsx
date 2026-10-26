@@ -13,7 +13,10 @@ import {
   RefreshCw,
   Globe,
   CloudUpload,
+  Sparkles,
 } from 'lucide-react'
+import { useToast } from '@/components/ui/toast'
+import { useConfirm } from '@/components/ui/confirm-modal'
 
 // ---------------------------------------------------------------------------
 // Types & Constants
@@ -26,6 +29,19 @@ interface MeetingRecorderProps {
   errorMessage?: string | null
   meetingStatus?: string
   maxRecordingMins?: number
+  /** Combined audio file exists in S3 (reprocess can re-transcribe without re-recording) */
+  hasAudio?: boolean
+  /** Transcript exists (reprocess can re-run analysis only) */
+  hasTranscript?: boolean
+}
+
+interface PipelineJob {
+  id: string
+  kind: 'PROCESS' | 'REPROCESS'
+  stage: string
+  status: 'QUEUED' | 'RUNNING' | 'DONE' | 'FAILED'
+  attempt: number
+  error: string | null
 }
 
 const PROCESSING_STAGES = [
@@ -65,6 +81,8 @@ export function MeetingRecorder({
   errorMessage: initialError,
   meetingStatus,
   maxRecordingMins = DEFAULT_MAX_MINS,
+  hasAudio = false,
+  hasTranscript = false,
 }: MeetingRecorderProps) {
   const MAX_DURATION = maxRecordingMins * 60
   const router = useRouter()
@@ -99,6 +117,11 @@ export function MeetingRecorder({
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const chunkUploadIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
+  const [job, setJob] = useState<PipelineJob | null>(null)
+  const [isReprocessing, setIsReprocessing] = useState(false)
+  const { toastError, toastSuccess } = useToast()
+  const confirm = useConfirm()
+
   // Chunk tracking refs (avoid stale closures)
   const sessionKeyRef = useRef<string | null>(null)
   const chunkSequenceRef = useRef(0)
@@ -131,6 +154,7 @@ export function MeetingRecorder({
       if (!rec) return
       setCurrentStatus(rec.status)
       setCurrentError(rec.errorMessage)
+      setJob(data.job ?? null)
       if (rec.status === 'COMPLETED' || rec.status === 'FAILED') {
         if (pollingRef.current) {
           clearInterval(pollingRef.current)
@@ -450,6 +474,60 @@ export function MeetingRecorder({
     router.refresh()
   }
 
+  /** Re-run the pipeline on the stored audio/transcript — no re-recording. */
+  const handleReprocess = async (from: 'TRANSCRIBE' | 'ANALYZE') => {
+    const ok = await confirm(
+      from === 'TRANSCRIBE'
+        ? 'Re-transcribe the stored audio and regenerate the analysis? The current transcript and analysis will be replaced.'
+        : 'Regenerate the summary, key points, to-dos and quality score from the existing transcript?',
+      { title: from === 'TRANSCRIBE' ? 'Re-transcribe recording' : 'Re-run analysis', confirmText: 'Reprocess' }
+    )
+    if (!ok) return
+    setIsReprocessing(true)
+    try {
+      const res = await fetch(`/api/meetings/${meetingId}/recording/reprocess`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error || 'Failed to start reprocessing')
+      setDidStartUpload(true)
+      setCurrentError(null)
+      setCurrentStatus(from === 'TRANSCRIBE' ? 'TRANSCRIBING' : 'ANALYZING')
+      toastSuccess(body.message || 'Reprocessing started')
+    } catch (err) {
+      toastError(err instanceof Error ? err.message : 'Failed to start reprocessing')
+    } finally {
+      setIsReprocessing(false)
+    }
+  }
+
+  const reprocessButtons = (
+    <div className="flex flex-wrap items-center gap-2">
+      {hasAudio && (
+        <button
+          onClick={() => handleReprocess('TRANSCRIBE')}
+          disabled={isReprocessing}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-orange hover:bg-orange/10 rounded-xl transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`w-4 h-4 ${isReprocessing ? 'animate-spin' : ''}`} />
+          Re-transcribe
+        </button>
+      )}
+      {hasTranscript && (
+        <button
+          onClick={() => handleReprocess('ANALYZE')}
+          disabled={isReprocessing}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-orange hover:bg-orange/10 rounded-xl transition-colors disabled:opacity-50"
+        >
+          <Sparkles className="w-4 h-4" />
+          Re-run analysis
+        </button>
+      )}
+    </div>
+  )
+
   // ---------------------------------------------------------------------------
   // Render: stale UPLOADING state (recording was interrupted by navigating away)
   // ---------------------------------------------------------------------------
@@ -500,8 +578,13 @@ export function MeetingRecorder({
             <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
           </div>
           <div className="flex-1">
-            <p className="font-medium text-dark-gray dark:text-white">Processing Recording</p>
-            <p className="text-sm text-medium-gray">{progress.label}</p>
+            <p className="font-medium text-dark-gray dark:text-white">
+              {job?.kind === 'REPROCESS' ? 'Reprocessing Recording' : 'Processing Recording'}
+            </p>
+            <p className="text-sm text-medium-gray">
+              {progress.label}
+              {job && job.attempt > 1 && ` (attempt ${job.attempt})`}
+            </p>
           </div>
           <p className="text-2xl font-bold text-blue-500">{progress.progress}%</p>
         </div>
@@ -560,10 +643,11 @@ export function MeetingRecorder({
           <div className="w-12 h-12 rounded-full bg-green-500/10 flex items-center justify-center">
             <CheckCircle2 className="w-6 h-6 text-green-500" />
           </div>
-          <div>
+          <div className="flex-1">
             <p className="font-medium text-dark-gray dark:text-white">Recording Complete</p>
             <p className="text-sm text-medium-gray">Transcript and analysis available below</p>
           </div>
+          {reprocessButtons}
         </div>
       </div>
     )
@@ -597,15 +681,21 @@ export function MeetingRecorder({
               )}
             </div>
           </div>
-          <button
-            onClick={handleRetry}
-            aria-label="Retry recording"
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-orange hover:bg-orange/10 rounded-xl transition-colors"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Try Again
-          </button>
+          <div className="flex flex-col items-end gap-1">
+            {reprocessButtons}
+            <button
+              onClick={handleRetry}
+              aria-label="Discard and record again"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-medium-gray hover:bg-red-500/10 hover:text-red-500 rounded-xl transition-colors"
+            >
+              <Mic className="w-4 h-4" />
+              {hasAudio || hasTranscript ? 'Discard & record again' : 'Try Again'}
+            </button>
+          </div>
         </div>
+        {job?.status === 'FAILED' && job.attempt > 1 && (
+          <p className="text-xs text-medium-gray mt-3">Failed after {job.attempt} attempts at stage {job.stage.toLowerCase()}.</p>
+        )}
       </div>
     )
   }

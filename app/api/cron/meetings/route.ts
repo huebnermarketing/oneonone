@@ -7,6 +7,7 @@ import { advanceToNextOccurrence } from '@/lib/recurring-dates'
 import { getPolicies } from '@/lib/settings'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
+import { recoverStaleJobs } from '@/lib/recording-pipeline'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,6 +35,8 @@ export async function POST(request: NextRequest) {
       reminders24hSent: 0,
       reminders1hSent: 0,
       formRemindersSent: 0,
+      recordingJobsResumed: 0,
+      recordingJobsFailed: 0,
       errors: [] as string[],
     }
 
@@ -45,6 +48,15 @@ export async function POST(request: NextRequest) {
 
     // 3. Send form reminders for meetings within 24h where form is not submitted
     await sendFormReminders(results)
+
+    // 4. Resume recording pipeline runs that a restart/crash interrupted
+    try {
+      const { resumed, failed } = await recoverStaleJobs()
+      results.recordingJobsResumed = resumed.length
+      results.recordingJobsFailed = failed.length
+    } catch (err) {
+      results.errors.push(`recording job recovery: ${err instanceof Error ? err.message : String(err)}`)
+    }
 
     return NextResponse.json({
       success: true,

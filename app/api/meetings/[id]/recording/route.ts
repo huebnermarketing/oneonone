@@ -4,10 +4,11 @@ import { prisma } from '@/lib/prisma'
 import { getSignedDownloadUrl, deleteS3Prefix, isS3Configured } from '@/lib/s3'
 import { assertAccess, canManageMeeting, canViewRecording } from '@/lib/meeting-access'
 import { createAuditLog } from '@/lib/audit'
+import { latestJob } from '@/lib/recording-pipeline'
 
 export const dynamic = 'force-dynamic'
 
-/** GET — recording status + signed playback URL. Reporter/admin always; employee when the policy allows. */
+/** GET — recording status, latest pipeline job + signed playback URL. Reporter/admin always; employee when the policy allows. */
 export const GET = withApiAuth(async (_req: NextRequest, { user, params }) => {
   const meeting = await prisma.meeting.findUnique({
     where: { id: params.id },
@@ -23,7 +24,10 @@ export const GET = withApiAuth(async (_req: NextRequest, { user, params }) => {
     audioPlaybackUrl = await getSignedDownloadUrl(meeting.recording.audioKey).catch(() => null)
   }
 
-  return NextResponse.json({ recording: { ...meeting.recording, audioPlaybackUrl } })
+  // Latest pipeline run (stage/attempt/error) — reporter/admin only; employees get the recording status alone
+  const job = canManageMeeting(user, meeting) ? await latestJob(meeting.recording.id) : null
+
+  return NextResponse.json({ recording: { ...meeting.recording, audioPlaybackUrl }, job })
 })
 
 /** DELETE — remove S3 objects (chunks + final) and the DB row. Reporter/admin only. */

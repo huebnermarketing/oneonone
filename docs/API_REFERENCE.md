@@ -47,11 +47,12 @@ All handlers live under `app/api/**/route.ts`, export `dynamic = 'force-dynamic'
 
 | Method | Path | Body | Effect | Response |
 |---|---|---|---|---|
-| GET | `/api/meetings/[id]/recording` | — | Row + signed `audioPlaybackUrl` when COMPLETED | `{recording}` |
+| GET | `/api/meetings/[id]/recording` | — | Row + signed `audioPlaybackUrl` when COMPLETED; `job` = latest `RecordingJob` (kind/stage/status/attempt/error) for reporter/admin, `null` for employees | `{recording, job}` |
 | DELETE | `/api/meetings/[id]/recording` | — | `deleteS3Prefix` + row delete | `{message}` |
 | POST | `/api/meetings/[id]/recording/presign` | — | Upsert `MeetingRecording` UPLOADING with session prefix; 503 without S3; 400 if COMPLETED exists | `{sessionKey}` |
 | POST | `/api/meetings/[id]/recording/upload` | multipart `file`, `sequence` | Server-side PutObject `chunk_NNNN.webm`; `fileSize +=` (non-atomic) | `{success, chunkKey, sequence}` |
-| POST | `/api/meetings/[id]/recording/process` | `{totalChunks*, duration, language}` | 400 without OpenAI key. Sets UPLOADED, runs `processRecording()` detached: concat → final.webm → Whisper → GPT → COMPLETED/FAILED, notif both | `{message, recordingId}` |
+| POST | `/api/meetings/[id]/recording/process` | `{totalChunks*, duration, language}` | 400 without AI key. Sets UPLOADED, creates a `RecordingJob` (kind PROCESS) and runs it detached via `lib/recording-pipeline.ts`: COMBINE → TRANSCRIBE → ANALYZE → COMPLETED/FAILED, notif both. 409 while a job is already active | `{message, recordingId, jobId}` |
+| POST | `/api/meetings/[id]/recording/reprocess` | `{from?: TRANSCRIBE\|ANALYZE, language?}` | Re-run the pipeline on stored audio/transcript without re-recording (kind REPROCESS, no notification). Omitted `from` = earliest stage whose output is missing. 400 when the needed input is absent or no AI key; 409 while a job is active. Reporter of the meeting or admin | `{message, jobId, fromStage}` |
 | GET | `/api/meetings/[id]/recording/stream` | — | 302 to signed URL; plain-text errors | redirect |
 
 ## Cross-meeting AI (REPORTER = own `reporterId` meetings; ADMIN = all)
@@ -118,7 +119,7 @@ All handlers live under `app/api/**/route.ts`, export `dynamic = 'force-dynamic'
 | GET / PATCH / DELETE | `/api/dashboard/widgets` | any | Per-user widgets (seeded by role); **UI (`dashboard-widgets.tsx`) is not mounted anywhere** |
 | POST | `/api/onboarding` | EMPLOYEE/REPORTER | `{departmentId, reportsToId*}` sets own manager/dept |
 | GET / PATCH | `/api/profile` | any | Edit own profile incl. `reportsToId` and `departmentId` (user can change their own manager) |
-| POST | `/api/cron/meetings` | `x-cron-secret` (open in dev when unset) | Generate recurring occurrences; 24h/1h reminders; form reminders |
+| POST | `/api/cron/meetings` | `x-cron-secret` (required everywhere) | Generate recurring occurrences; reminders; form reminders; resume/fail interrupted `RecordingJob`s (`recordingJobsResumed/Failed` in response) |
 | POST | `/api/integrations/fathom/webhook` | HMAC (`FATHOM_WEBHOOK_SECRET`) | Match ZOOM meeting, upsert `MeetingRecording` COMPLETED, notify |
 | GET | `/api/health` | public | `SELECT 1` → `{status, timestamp}` 200/503 |
 
@@ -134,7 +135,7 @@ No route uses zod. Routes that accept unvalidated enums/dates/ids and will 500 o
 | `POST /api/meetings/[id]/cancel` | **New.** `{reason?}`. PROPOSED/SCHEDULED → CANCELLED; allowed per `cancelPolicy` (admin always). Deletes calendar event, notifies + emails other party. |
 | `PATCH /api/meetings/[id]` | `status` accepts only `COMPLETED` (→ `lib/meeting-state.completeMeeting`, SCHEDULED only). `CANCELLED` is rejected by the schema — use `/cancel`. |
 | `POST /api/meetings/[id]/suggest` | Now runs the same 30-min conflict check as create (409). |
-| `GET /api/meetings/[id]/recording`, `/recording/stream` | Employee of the meeting may read when `employeeCanViewRecording` is on. DELETE/presign/upload/process stay reporter/admin. |
+| `GET /api/meetings/[id]/recording`, `/recording/stream` | Employee of the meeting may read when `employeeCanViewRecording` is on. DELETE/presign/upload/process/reprocess stay reporter/admin. |
 | `GET /api/meetings/[id]/notes` | Employee may read when `employeeCanViewNotes` is on (default on). |
 | `GET /api/todos` | REPORTER: assigned to / created by self or direct reports (was: all todos). |
 | `POST /api/todos` | `assignedToId` must be self, a direct report, or own manager; `meetingId` must be a meeting you can view. |

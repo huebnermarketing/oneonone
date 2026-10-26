@@ -19,6 +19,7 @@ const MODELS = [
   'session',
   'account',
   'backupHistory',
+  'recordingJob',
 ] as const
 
 const METHODS = [
