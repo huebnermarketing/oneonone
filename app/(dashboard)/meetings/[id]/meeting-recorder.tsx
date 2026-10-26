@@ -410,7 +410,9 @@ export function MeetingRecorder({
     await new Promise((r) => setTimeout(r, 500))
     await uploadPendingChunks()
   }
-  stopRecordingRef.current = stopRecording
+  useEffect(() => {
+    stopRecordingRef.current = stopRecording
+  })
 
   const discardRecording = async () => {
     setAudioBlob(null)

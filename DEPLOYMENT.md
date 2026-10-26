@@ -14,6 +14,7 @@ Browser ──443──▶ Nginx (TLS, 50 MB uploads, 1800 s proxy timeout) ─�
 
 - Ubuntu 22.04+, Node 20 LTS or newer, `npm`, `pm2` (`npm i -g pm2`), Nginx, Certbot, `ffmpeg` (optional — `ffmpeg-static` is bundled, system ffmpeg is the fallback).
 - PostgreSQL reachable from the host (local Postgres or RDS). Database `ami_oneonone`, user with full rights on it.
+- Node.js ≥ 20.9 (`node -v`). Next 16 and nodemailer 10 refuse older versions.
 - App checked out at `/var/www/oneonone` (`deploy.sh` checks out and pulls `main`, or `stage` when `DEPLOY_BRANCH=stage`).
 - `.env` in the app root — see "Environment" below. `deploy.sh` writes a placeholder and exits if it is missing.
 - Security group: inbound 80 + 443. Port 3000 must **not** be public.

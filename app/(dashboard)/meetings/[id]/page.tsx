@@ -19,10 +19,11 @@ import { canCancel, canManageMeeting, canViewMeeting, canViewNotes, canViewRecor
 import { MeetingStatusPill, Pill, TodoPriorityPill, TodoStatusPill } from '@/components/ui/pill'
 
 export default async function MeetingDetailPage({
-  params,
+  params: paramsPromise,
 }: {
-  params: { id: string }
+  params: Promise<{ id: string }>
 }) {
+  const params = await paramsPromise
   const user = await getCurrentUser()
   if (!user) return notFound()
 

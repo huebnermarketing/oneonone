@@ -14,7 +14,7 @@ export function MeetingNotes({ meetingId, initialNotes, canEdit }: MeetingNotesP
   const [notes, setNotes] = useState(initialNotes || '')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
-  const timeoutRef = useRef<NodeJS.Timeout>()
+  const timeoutRef = useRef<NodeJS.Timeout | undefined>(undefined)
   const { toastError } = useToast()
 
   const saveNotes = useCallback(async () => {

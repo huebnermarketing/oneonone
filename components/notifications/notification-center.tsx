@@ -43,7 +43,9 @@ export function useNotifications(): NotificationStore {
   const pollFailedRef = useRef(false)
   // Keep the poller's effect deps empty even if the toast fn identity changes
   const toastRef = useRef(toastError)
-  toastRef.current = toastError
+  useEffect(() => {
+    toastRef.current = toastError
+  }, [toastError])
 
   const fetchNotifications = useCallback(async () => {
     try {

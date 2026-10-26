@@ -4,7 +4,7 @@ A web application to manage bi-weekly one-on-one meetings following the AMI Agen
 
 ## Tech Stack
 
-- **Frontend**: Next.js 14 (App Router) + Tailwind CSS
+- **Frontend**: Next.js 16 (App Router, React 19) + Tailwind CSS
 - **Backend**: Next.js API Routes
 - **Database**: PostgreSQL (AWS RDS)
 - **ORM**: Prisma
