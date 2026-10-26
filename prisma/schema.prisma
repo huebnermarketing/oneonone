@@ -205,8 +205,15 @@ model MeetingRecording {
 
 model SystemSettings {
   id                        String       @id @default("system")
+  // ---- AI provider (Admin -> Settings -> AI Provider). One key; a model per job. ----
+  aiProvider                AiProvider   @default(OPENAI)
+  // API key for the selected provider (encrypted). Column keeps its historical name.
   openaiApiKey              String?
+  // Model for analysis / insights (e.g. gpt-4o, or openai/gpt-4o on OpenRouter)
   openaiModel               String       @default("gpt-4o")
+  // Cheaper model for high-volume, low-stakes calls (transcript search)
+  aiFastModel               String       @default("gpt-4o-mini")
+  // Speech-to-text model (whisper-1, or openai/whisper-1 on OpenRouter)
   whisperModel              String       @default("whisper-1")
   awsRegion                 String?
   awsAccessKeyId            String?
@@ -327,6 +334,11 @@ enum UserRole {
   EMPLOYEE
   REPORTER
   SUPER_ADMIN
+}
+
+enum AiProvider {
+  OPENAI
+  OPENROUTER
 }
 
 enum CancelPolicy {

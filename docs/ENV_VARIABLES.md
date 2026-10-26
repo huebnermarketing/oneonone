@@ -69,6 +69,8 @@ Can be set in Admin → Settings (stored encrypted). Fallback from env if not in
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `OPENAI_API_KEY` | OpenAI API key | `sk-...` |
+| `AI_PROVIDER` | `openai` (default) or `openrouter`. Only used until a provider is saved in Admin → Settings → AI Provider. |
+| `OPENROUTER_API_KEY` | Env fallback key when the provider is OpenRouter (Admin → Settings overrides). One key covers chat and transcription. |
 
 (Models like `gpt-4o` / `whisper-1` are configurable in Admin → Settings.)
 

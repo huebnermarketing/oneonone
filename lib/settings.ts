@@ -1,11 +1,13 @@
-import { CancelPolicy } from '@prisma/client'
+import { AiProvider, CancelPolicy } from '@prisma/client'
 import { prisma } from './prisma'
 import { encrypt, decrypt, isEncrypted, isLegacyCiphertext } from './encryption'
 
 export interface SystemSettings {
-  // AI
+  // AI (one key for the selected provider; a model per job)
+  aiProvider: AiProvider
   openaiApiKey: string | null
   openaiModel: string
+  aiFastModel: string
   whisperModel: string
   // Storage
   awsRegion: string | null
@@ -56,11 +58,19 @@ let cachedSettings: SystemSettings | null = null
 let cacheTimestamp = 0
 const CACHE_TTL = 5 * 60 * 1000
 
-function envDefaults(): SystemSettings {
+/** Env-only API key for a provider (used when no key is saved in Admin → Settings). */
+function envApiKey(provider: AiProvider): string | null {
+  return (provider === 'OPENROUTER' ? process.env.OPENROUTER_API_KEY : process.env.OPENAI_API_KEY) || null
+}
+
+function envDefaults(provider?: AiProvider): SystemSettings {
+  const envProvider: AiProvider = provider ?? ((process.env.AI_PROVIDER || '').toUpperCase() === 'OPENROUTER' ? 'OPENROUTER' : 'OPENAI')
   return {
-    openaiApiKey: process.env.OPENAI_API_KEY || null,
-    openaiModel: 'gpt-4o',
-    whisperModel: 'whisper-1',
+    aiProvider: envProvider,
+    openaiApiKey: envApiKey(envProvider),
+    openaiModel: envProvider === 'OPENROUTER' ? 'openai/gpt-4o' : 'gpt-4o',
+    aiFastModel: envProvider === 'OPENROUTER' ? 'openai/gpt-4o-mini' : 'gpt-4o-mini',
+    whisperModel: envProvider === 'OPENROUTER' ? 'openai/whisper-1' : 'whisper-1',
     awsRegion: process.env.AWS_REGION || null,
     awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || null,
     awsSecretKey: process.env.AWS_SECRET_ACCESS_KEY || null,
@@ -98,13 +108,16 @@ export async function getSettings(): Promise<SystemSettings> {
   }
 
   const row = await prisma.systemSettings.findUnique({ where: { id: 'system' } })
-  const defaults = envDefaults()
+  // The saved provider decides which env key is the fallback (an OpenRouter key must never go to OpenAI)
+  const defaults = envDefaults(row?.aiProvider)
 
   // Precedence: DB value wins over env, per field.
   const resolved: SystemSettings = row
     ? {
         openaiApiKey: safeDecrypt('openaiApiKey', row.openaiApiKey, defaults.openaiApiKey),
+        aiProvider: row.aiProvider,
         openaiModel: row.openaiModel,
+        aiFastModel: row.aiFastModel,
         whisperModel: row.whisperModel,
         awsRegion: row.awsRegion || defaults.awsRegion,
         awsAccessKeyId: safeDecrypt('awsAccessKeyId', row.awsAccessKeyId, defaults.awsAccessKeyId),

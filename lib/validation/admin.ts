@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { AuditAction, BackupType, CancelPolicy } from '@prisma/client'
+import { AiProvider, AuditAction, BackupType, CancelPolicy } from '@prisma/client'
 import { isoDate, pagination, uuid } from './common'
 
 export const auditLogsQuery = pagination(50, 200).extend({
@@ -43,9 +43,11 @@ const nullableString = (max: number) => z.string().trim().max(max).nullish()
 
 export const updateSettingsSchema = z.object({
   // AI
-  openaiApiKey: nullableString(200),
-  openaiModel: z.string().trim().min(1).max(60).optional(),
-  whisperModel: z.string().trim().min(1).max(60).optional(),
+  aiProvider: z.nativeEnum(AiProvider).optional(),
+  openaiApiKey: nullableString(300),
+  openaiModel: z.string().trim().min(1).max(100).optional(),
+  aiFastModel: z.string().trim().min(1).max(100).optional(),
+  whisperModel: z.string().trim().min(1).max(100).optional(),
   // Storage
   awsRegion: nullableString(40),
   awsAccessKeyId: nullableString(128),
