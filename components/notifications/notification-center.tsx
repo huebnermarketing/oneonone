@@ -115,7 +115,9 @@ export function NotificationCenter({ store }: { store: NotificationStore }) {
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
-  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({})
+  // Fixed + hidden until measured: an unpositioned panel would render inside the sidebar footer for a frame,
+  // push the bell up, and the first measurement would anchor to that shifted spot
+  const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({ position: 'fixed', visibility: 'hidden' })
 
   const computePosition = useCallback(() => {
     if (!buttonRef.current) return
@@ -228,7 +230,10 @@ export function NotificationCenter({ store }: { store: NotificationStore }) {
       <button
         ref={buttonRef}
         type="button"
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          if (!isOpen) computePosition()
+          setIsOpen(!isOpen)
+        }}
         aria-label="Notifications"
         aria-expanded={isOpen}
         className="relative w-10 h-10 flex items-center justify-center rounded-xl hover:bg-off-white dark:hover:bg-dark-gray transition-colors"
@@ -247,7 +252,7 @@ export function NotificationCenter({ store }: { store: NotificationStore }) {
           role="dialog"
           aria-label="Notifications"
           style={dropdownStyle}
-          className="bg-white dark:bg-charcoal rounded-2xl border border-off-white dark:border-medium-gray/20 shadow-2xl overflow-hidden z-[100] animate-in fade-in-0 zoom-in-95 duration-200 flex flex-col"
+          className="fixed bg-white dark:bg-charcoal rounded-2xl border border-off-white dark:border-medium-gray/20 shadow-2xl overflow-hidden z-[100] animate-in fade-in-0 zoom-in-95 duration-200 flex flex-col"
         >
           {/* Header */}
           <div className="px-4 py-3 border-b border-off-white dark:border-medium-gray/20 flex items-center justify-between shrink-0">
