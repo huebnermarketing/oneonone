@@ -3,8 +3,7 @@ import { badRequest, forbidden, notFound, parseBody, withApiAuth } from '@/lib/a
 import { prisma } from '@/lib/prisma'
 import { createAuditLog } from '@/lib/audit'
 import { assertAccess, canFillForm } from '@/lib/meeting-access'
-import { sendFormSubmittedEmail } from '@/lib/email'
-import { notifyFormSubmitted } from '@/lib/notifications'
+import * as notify from '@/lib/notify'
 import { meetingFormSchema } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
@@ -69,14 +68,7 @@ export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
   })
 
   if (!wasAlreadySubmitted) {
-    await Promise.all([
-      sendFormSubmittedEmail(updated.reporter.email, updated.reporter.name, updated.employee.name, updated.meetingDate, updated.id).catch(
-        (e) => console.error('Failed to send email notification:', e)
-      ),
-      notifyFormSubmitted(meeting.reporterId, updated.employee.name, updated.id).catch((e) =>
-        console.error('Failed to create notification:', e)
-      ),
-    ])
+    await notify.formSubmitted({ meetingId: updated.id, date: updated.meetingDate, reporter: { ...updated.reporter, id: meeting.reporterId }, employeeName: updated.employee.name })
   }
 
   return NextResponse.json(updated)

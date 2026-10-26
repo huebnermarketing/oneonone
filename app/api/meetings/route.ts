@@ -5,8 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { logMeetingCreated } from '@/lib/audit'
 import { parseZoomMeetingId } from '@/lib/zoom'
 import { assertNoConflict } from '@/lib/meeting-conflicts'
-import { sendMeetingProposalEmail, sendProposalConfirmationEmail } from '@/lib/email'
-import { notifyMeetingProposed } from '@/lib/notifications'
+import * as notify from '@/lib/notify'
 import { createMeetingSchema, listMeetingsQuery } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
@@ -80,17 +79,13 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
   })
 
   // No calendar event at proposal stage — created when accepted. Notifications are best effort.
-  await Promise.all([
-    sendMeetingProposalEmail(meeting.employee.email, meeting.employee.name, meeting.reporter.name, meetingDate, meeting.id).catch(
-      (e) => console.error('Failed to send proposal email to employee:', e)
-    ),
-    sendProposalConfirmationEmail(meeting.reporter.email, meeting.reporter.name, meeting.employee.name, meetingDate, meeting.id).catch(
-      (e) => console.error('Failed to send confirmation email to reporter:', e)
-    ),
-    notifyMeetingProposed(employeeId, meeting.reporter.name, meetingDate, meeting.id).catch((e) =>
-      console.error('Failed to create notification:', e)
-    ),
-  ])
+  await notify.meetingProposed({
+    meetingId: meeting.id,
+    date: meetingDate,
+    employee: meeting.employee,
+    reporter: meeting.reporter,
+    confirmToReporter: true,
+  })
 
   return NextResponse.json(meeting, { status: 201 })
 })

@@ -5,8 +5,7 @@ import { logMeetingUpdated } from '@/lib/audit'
 import { assertAccess, canSuggest, isReceiver } from '@/lib/meeting-access'
 import { loadMeeting } from '@/lib/meeting-state'
 import { assertNoConflict } from '@/lib/meeting-conflicts'
-import { sendMeetingProposalEmail, sendMeetingSuggestionEmail } from '@/lib/email'
-import { notifyMeetingSuggested } from '@/lib/notifications'
+import * as notify from '@/lib/notify'
 import { suggestMeetingSchema } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
@@ -42,15 +41,9 @@ export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
 
   const otherParty = user.id === meeting.employeeId ? meeting.reporter : meeting.employee
   const suggestor = user.id === meeting.employeeId ? meeting.employee : meeting.reporter
-  const sendEmail = isProposer ? sendMeetingProposalEmail : sendMeetingSuggestionEmail
 
   await Promise.all([
-    sendEmail(otherParty.email, otherParty.name, suggestor.name, meetingDate, meeting.id).catch((e) =>
-      console.error('Failed to send time change email:', e)
-    ),
-    notifyMeetingSuggested(otherParty.id, suggestor.name, meetingDate, meeting.id).catch((e) =>
-      console.error('Failed to create suggestion notification:', e)
-    ),
+    notify.meetingTimeSuggested({ meetingId: meeting.id, date: meetingDate, to: otherParty, from: suggestor, isProposer }),
     logMeetingUpdated(user.id, meeting.id, {
       action: isProposer ? 'updated_proposal' : 'suggested_new_time',
       newMeetingDate: meetingDate.toISOString(),

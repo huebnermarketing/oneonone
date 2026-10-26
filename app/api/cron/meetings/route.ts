@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
-import { notifyMeetingProposed, notifyMeetingReminder, notifyFormReminder, notifyMeetingAccepted } from '@/lib/notifications'
-import { sendMeetingProposalEmail, sendMeetingReminderEmail, sendFormReminderEmail, sendMeetingAcceptedEmail } from '@/lib/email'
+import * as notify from '@/lib/notify'
 import { createCalendarEvent, isCalendarEnabled } from '@/lib/google-calendar'
 import { advanceToNextOccurrence } from '@/lib/recurring-dates'
 import { getPolicies } from '@/lib/settings'
@@ -173,53 +172,22 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
           }
         }
 
-        // Notify employee about the scheduled meeting
-        try {
-          await sendMeetingAcceptedEmail(
-            schedule.employee.email,
-            schedule.employee.name,
-            schedule.reporter.name,
-            meetingDate,
-            meeting.id
-          )
-        } catch (emailError) {
-          console.error('Failed to send scheduled email for recurring meeting:', emailError)
-        }
-
-        try {
-          await notifyMeetingAccepted(
-            schedule.employeeId,
-            schedule.reporter.name || 'Your manager',
-            meetingDate,
-            meeting.id
-          )
-        } catch (notifError) {
-          console.error('Failed to send scheduled notification:', notifError)
-        }
+        // Next occurrence of an accepted series is confirmed straight away
+        await notify.meetingAccepted({
+          meetingId: meeting.id,
+          date: meetingDate,
+          to: { id: schedule.employeeId, email: schedule.employee.email, name: schedule.employee.name },
+          acceptorName: schedule.reporter.name,
+          acceptorFallback: 'Your manager',
+        })
       } else {
-        // First-time proposal — send proposal email
-        try {
-          await sendMeetingProposalEmail(
-            schedule.employee.email,
-            schedule.employee.name,
-            schedule.reporter.name,
-            meetingDate,
-            meeting.id
-          )
-        } catch (emailError) {
-          console.error('Failed to send proposal email for recurring meeting:', emailError)
-        }
-
-        try {
-          await notifyMeetingProposed(
-            schedule.employeeId,
-            schedule.reporter.name || 'Your manager',
-            meetingDate,
-            meeting.id
-          )
-        } catch (notifError) {
-          console.error('Failed to send proposal notification:', notifError)
-        }
+        // First-time proposal
+        await notify.meetingProposed({
+          meetingId: meeting.id,
+          date: meetingDate,
+          employee: { id: schedule.employeeId, email: schedule.employee.email, name: schedule.employee.name },
+          reporter: schedule.reporter,
+        })
       }
 
       results.recurringMeetingsCreated++
@@ -256,49 +224,15 @@ async function sendMeetingReminders(results: { recurringMeetingsCreated: number;
 
   for (const meeting of meetings24h) {
     try {
-      // Notify both parties
-      await notifyMeetingReminder(
-        meeting.employeeId,
-        meeting.reporter.name || 'your manager',
-        meeting.meetingDate,
-        meeting.id,
-        reminderHoursBefore
-      )
-      await notifyMeetingReminder(
-        meeting.reporterId,
-        meeting.employee.name || 'your team member',
-        meeting.meetingDate,
-        meeting.id,
-        reminderHoursBefore
-      )
-
-      // Send reminder emails to both parties (unless disabled by policy)
-      if (!enableEmailReminders) {
-        // fallthrough to marking as sent
-      } else {
-      try {
-        await sendMeetingReminderEmail(
-          meeting.employee.email,
-          meeting.employee.name,
-          meeting.reporter.name,
-          meeting.meetingDate,
-          meeting.id
-        )
-      } catch (emailError) {
-        console.error('Failed to send reminder email to employee:', emailError)
-      }
-      try {
-        await sendMeetingReminderEmail(
-          meeting.reporter.email,
-          meeting.reporter.name,
-          meeting.employee.name,
-          meeting.meetingDate,
-          meeting.id
-        )
-      } catch (emailError) {
-        console.error('Failed to send reminder email to reporter:', emailError)
-      }
-      }
+      const sent = await notify.meetingReminder({
+        meetingId: meeting.id,
+        date: meeting.meetingDate,
+        employee: meeting.employee,
+        reporter: meeting.reporter,
+        hoursBefore: reminderHoursBefore,
+        email: enableEmailReminders,
+      })
+      if (!sent.ok) results.errors.push(`24h reminder for meeting ${meeting.id}: ${sent.failures.join(', ')} failed`)
 
       // Mark as sent
       await prisma.meeting.update({
@@ -332,21 +266,15 @@ async function sendMeetingReminders(results: { recurringMeetingsCreated: number;
 
   for (const meeting of meetings1h) {
     try {
-      // Notify both parties
-      await notifyMeetingReminder(
-        meeting.employeeId,
-        meeting.reporter.name || 'your manager',
-        meeting.meetingDate,
-        meeting.id,
-        shortReminderHoursBefore
-      )
-      await notifyMeetingReminder(
-        meeting.reporterId,
-        meeting.employee.name || 'your team member',
-        meeting.meetingDate,
-        meeting.id,
-        shortReminderHoursBefore
-      )
+      const sent = await notify.meetingReminder({
+        meetingId: meeting.id,
+        date: meeting.meetingDate,
+        employee: meeting.employee,
+        reporter: meeting.reporter,
+        hoursBefore: shortReminderHoursBefore,
+        email: false,
+      })
+      if (!sent.ok) results.errors.push(`1h reminder for meeting ${meeting.id}: ${sent.failures.join(', ')} failed`)
 
       // Mark as sent
       await prisma.meeting.update({
@@ -385,30 +313,14 @@ async function sendFormReminders(results: { formRemindersSent: number; errors: s
 
   for (const meeting of meetings) {
     try {
-      // Send form reminder email to the employee
-      if (enableEmailReminders) try {
-        await sendFormReminderEmail(
-          meeting.employee.email,
-          meeting.employee.name,
-          meeting.reporter.name,
-          meeting.meetingDate,
-          meeting.id
-        )
-      } catch (emailError) {
-        console.error('Failed to send form reminder email:', emailError)
-      }
-
-      // In-app notification
-      try {
-        await notifyFormReminder(
-          meeting.employeeId,
-          meeting.reporter.name || 'your manager',
-          meeting.meetingDate,
-          meeting.id
-        )
-      } catch (notifError) {
-        console.error('Failed to send form reminder notification:', notifError)
-      }
+      const sent = await notify.formReminder({
+        meetingId: meeting.id,
+        date: meeting.meetingDate,
+        employee: meeting.employee,
+        reporterName: meeting.reporter.name,
+        email: enableEmailReminders,
+      })
+      if (!sent.ok) results.errors.push(`Form reminder for meeting ${meeting.id}: ${sent.failures.join(', ')} failed`)
 
       await prisma.meeting.update({
         where: { id: meeting.id },

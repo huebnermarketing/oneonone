@@ -5,8 +5,7 @@ import { logMeetingUpdated } from '@/lib/audit'
 import { assertAccess, canAccept } from '@/lib/meeting-access'
 import { assertTransition, loadMeeting } from '@/lib/meeting-state'
 import { createCalendarEvent, createRecurringCalendarEvent, isCalendarEnabled } from '@/lib/google-calendar'
-import { sendMeetingAcceptedEmail } from '@/lib/email'
-import { notifyMeetingAccepted } from '@/lib/notifications'
+import * as notify from '@/lib/notify'
 import { advanceToNextOccurrence } from '@/lib/recurring-dates'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
 
@@ -120,12 +119,7 @@ export const POST = withApiAuth(async (_req: NextRequest, { user, params }) => {
   const acceptor = user.id === meeting.employeeId ? meeting.employee : meeting.reporter
 
   await Promise.all([
-    sendMeetingAcceptedEmail(proposer.email, proposer.name, acceptor.name, meeting.meetingDate, meeting.id).catch((e) =>
-      console.error('Failed to send acceptance email:', e)
-    ),
-    notifyMeetingAccepted(proposer.id, acceptor.name, meeting.meetingDate, meeting.id).catch((e) =>
-      console.error('Failed to create acceptance notification:', e)
-    ),
+    notify.meetingAccepted({ meetingId: meeting.id, date: meeting.meetingDate, to: proposer, acceptorName: acceptor.name }),
     logMeetingUpdated(user.id, params.id, { action: 'accepted', acceptedBy: acceptor.name, status: 'SCHEDULED' }),
   ])
 

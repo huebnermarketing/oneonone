@@ -12,8 +12,7 @@ import { prisma } from './prisma'
 import { badRequest } from './api'
 import { getPolicies } from './settings'
 import { logMeetingUpdated } from './audit'
-import { notifyMeetingCancelled, notifyMeetingCompleted } from './notifications'
-import { sendMeetingCancelledEmail } from './email'
+import * as notify from './notify'
 import { deleteCalendarEvent } from './google-calendar'
 
 const TRANSITIONS: Record<MeetingStatus, MeetingStatus[]> = {
@@ -59,9 +58,7 @@ export async function completeMeeting(meeting: MeetingWithParties, actorId: stri
   })
 
   await logMeetingUpdated(actorId, meeting.id, { status: 'COMPLETED', employeeName: meeting.employee.name })
-  await notifyMeetingCompleted(meeting.employeeId, meeting.reporter.name, meeting.id).catch((e) =>
-    console.error('[meeting-state] notifyMeetingCompleted failed', e)
-  )
+  await notify.meetingCompleted({ meetingId: meeting.id, employeeId: meeting.employeeId, reporterName: meeting.reporter.name })
   return updated
 }
 
@@ -97,16 +94,7 @@ export async function cancelMeeting(
   // Notify everyone who is not the actor (admin cancelling → both parties hear about it)
   const actorName = actor.name || 'An administrator'
   const recipients = [meeting.employee, meeting.reporter].filter((p) => p.id !== actor.id)
-  await Promise.all(
-    recipients.flatMap((p) => [
-      notifyMeetingCancelled(p.id, actorName, meeting.meetingDate, meeting.id).catch((e) =>
-        console.error('[meeting-state] notifyMeetingCancelled failed', e)
-      ),
-      sendMeetingCancelledEmail(p.email, p.name, actorName, meeting.meetingDate, reason).catch((e) =>
-        console.error('[meeting-state] sendMeetingCancelledEmail failed', e)
-      ),
-    ])
-  )
+  await notify.meetingCancelled({ meetingId: meeting.id, date: meeting.meetingDate, recipients, actorName, reason })
 
   return updated
 }
