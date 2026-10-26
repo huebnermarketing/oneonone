@@ -282,6 +282,8 @@ export default async function MeetingDetailPage({
               errorMessage={meeting.recording?.errorMessage}
               meetingStatus={meeting.status}
               maxRecordingMins={settings?.maxRecordingMins ?? 25}
+              hasAudio={!!meeting.recording?.audioKey?.endsWith('/final.webm')}
+              hasTranscript={!!meeting.recording?.transcript?.trim()}
             />
           )}
 

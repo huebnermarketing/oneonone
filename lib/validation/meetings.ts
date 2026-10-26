@@ -85,3 +85,9 @@ export const processRecordingSchema = z.object({
   duration: z.number().int().min(0).max(24 * 60 * 60).optional().default(0),
   language: z.string().trim().min(2).max(10).optional(),
 })
+
+export const reprocessRecordingSchema = z.object({
+  /** Stage to restart from. Omit to redo the earliest stage whose output is missing. */
+  from: z.enum(['TRANSCRIBE', 'ANALYZE']).optional(),
+  language: z.string().trim().min(2).max(10).optional(),
+})

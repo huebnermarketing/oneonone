@@ -106,6 +106,23 @@ check "employee cannot delete recording" 403 $(code -b "$EMPC" -X DELETE $B/api/
 check "employee meeting page renders" 200 $(code -b "$EMPC" $B/meetings/$RMID)
 grep -q "Meeting Recording" /tmp/body && echo "  ok   recording section visible to employee" || { echo "  FAIL section hidden"; fail=$((fail+1)); }
 
+echo "## recording pipeline"
+RREP=$(mksess "$($PSQL -c "select email from \"User\" where id=(select \"reporterId\" from \"Meeting\" where id='$RMID')")")
+RRID=$($PSQL -c "select id from \"MeetingRecording\" where \"meetingId\"='$RMID'")
+check "employee cannot reprocess" 403 $(code -b "$EMPC" -X POST $B/api/meetings/$RMID/recording/reprocess -H 'content-type: application/json' -d '{}')
+check "reprocess bad stage 400" 400 $(code -b "$RREP" -X POST $B/api/meetings/$RMID/recording/reprocess -H 'content-type: application/json' -d '{"from":"COMBINE"}')
+# sandbox has no AI key configured: the route must say so before touching the pipeline
+check "reprocess without AI key 400" 400 $(code -b "$RREP" -X POST $B/api/meetings/$RMID/recording/reprocess -H 'content-type: application/json' -d '{"from":"ANALYZE"}')
+grep -q "API key not configured" /tmp/body && echo "  ok   reprocess error names the AI key" || { echo "  FAIL unexpected body: $(body)"; fail=$((fail+1)); }
+# simulate a run that a restart killed 2h ago on its last allowed attempt; cron must fail it and surface the error
+JID=$($PSQL -c "insert into \"RecordingJob\"(id,\"recordingId\",\"meetingId\",kind,\"fromStage\",stage,status,attempt,\"heartbeatAt\",\"createdAt\",\"updatedAt\") values (gen_random_uuid()::text,'$RRID','$RMID','REPROCESS','ANALYZE','ANALYZE','RUNNING',3,now()-interval '2 hours',now()-interval '2 hours',now()) returning id" | head -1)
+check "reporter sees the running job" RUNNING "$(code -b "$RREP" $B/api/meetings/$RMID/recording >/dev/null; python3 -c "import json;print(json.load(open('/tmp/body'))['job']['status'])")"
+check "employee does not see job details" null "$(code -b "$EMPC" $B/api/meetings/$RMID/recording >/dev/null; python3 -c "import json;print(json.dumps(json.load(open('/tmp/body'))['job']))")"
+check "cron recovers stale job" 1 "$(code -X POST $B/api/cron/meetings -H "x-cron-secret: $CRON" >/dev/null; python3 -c "import json;print(json.load(open('/tmp/body'))['recordingJobsFailed'])")"
+check "job marked FAILED" FAILED "$($PSQL -c "select status from \"RecordingJob\" where id='$JID'")"
+check "recording marked FAILED with reason" 1 "$($PSQL -c "select count(*) from \"MeetingRecording\" where id='$RRID' and status='FAILED' and \"errorMessage\" like '%interrupted 3 times%'")"
+$PSQL -c "delete from \"RecordingJob\" where id='$JID'; update \"MeetingRecording\" set status='COMPLETED', \"errorMessage\"=null where id='$RRID'" >/dev/null
+
 echo "## cron"
 check "cron no secret 401" 401 $(code -X POST $B/api/cron/meetings)
 check "cron with secret 200" 200 $(code -X POST $B/api/cron/meetings -H "x-cron-secret: $CRON")
@@ -115,7 +132,7 @@ for p in /dashboard /meetings /todos /employees /admin /admin/settings /insights
 check "employee /admin -> error boundary (200)" 200 $(code -b "$ALEX" $B/admin)
 
 # cleanup: restore cancelled fixtures, remove temp rows, reset policies
-$PSQL -c "update \"Meeting\" set status='SCHEDULED' where id in ('$MID','$MID2'); delete from \"Notification\" where link in ('/meetings/$MID','/meetings/$MID2') and type='MEETING_CANCELLED'; update \"User\" set title=null where id='$ALEX_ID'; delete from \"Todo\" where id='$TODO_ID'; delete from \"Session\" where expires < now()+interval '2 days';" >/dev/null
+$PSQL -c "update \"Meeting\" set status='SCHEDULED' where id in ('$MID','$MID2'); delete from \"Notification\" where link in ('/meetings/$MID','/meetings/$MID2') and type='MEETING_CANCELLED'; update \"User\" set title=null where id='$ALEX_ID'; delete from \"Todo\" where id='$TODO_ID'; delete from \"AuditLog\" where \"entityId\" in ('$MID','$MID2') and action='UPDATE' and details->>'status'='CANCELLED'; delete from \"Session\" where expires < now()+interval '2 days';" >/dev/null
 curl -s -o /dev/null -b "$ADMIN" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"cancelPolicy":"REPORTER_AND_ADMIN","employeeCanViewRecording":false}'
 echo; echo "PASS=$pass FAIL=$fail"
 [ "$fail" -eq 0 ]
