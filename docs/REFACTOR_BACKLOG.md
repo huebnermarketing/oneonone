@@ -49,6 +49,10 @@ Findings from a full read of the codebase at commit `a26e431` (2026-10-23). Grou
 | 34 | `npm audit`: 30 → 19 after non-breaking fixes. Remaining all require majors: **next 14→16** (self-hosted DoS, critical), **nodemailer 7→10** (SMTP command injection, high), tailwind 3→4, googleapis 144→188, eslint-config-next 16. Prisma 5→6 also pending. | `package.json` | Separate upgrade PR per major; nodemailer first (small API surface), then Next (needs the App Router 15/16 migration guide). |
 | 35 | New admins required a manual SQL `UPDATE` | — | **Done**: `INITIAL_ADMIN_EMAILS` env (promotes on sign-in via `events.createUser`/`events.signIn` in `lib/auth.ts`). |
 
+### Dependency upgrades (status)
+- Done in `chore/upgrade-mail-calendar`: nodemailer 7 → 10.2.1 (Node ≥20; `next-auth` optional peer pinned via `overrides`), googleapis 144 → 188, `engines.node >=20.9.0`. Prod audit 10 → 3.
+- Next: Next 14 → 16 (clears the `next` critical + `postcss` high), Tailwind 3 → 4, Prisma 5 → 6, **zod 3 → 4** (`zod` high: memory exhaustion on oversized constrained collections; v4 changes `nativeEnum`, error shapes used by `lib/api.ts` → separate PR).
+
 ## P2 — Structure, duplication, dead code
 
 ### Server
