@@ -3,6 +3,7 @@
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
+import '@/lib/zod-messages'
 import { useState, useMemo, useEffect, useCallback, useId } from 'react'
 import { useRouter } from 'next/navigation'
 import { Calendar, User, ArrowLeft, Check, Loader2, AlertCircle, Video, MapPin } from 'lucide-react'
