@@ -16,7 +16,7 @@ import {
   ChevronRight,
   X,
 } from 'lucide-react'
-import { formatMeetingDateShort } from '@/lib/utils'
+import { useFormat } from '@/components/providers/timezone-provider'
 import { UserRole, RecurringFrequency } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
@@ -69,6 +69,7 @@ export function MeetingsClient({
   const router = useRouter()
   const { toastError } = useToast()
   const confirm = useConfirm()
+  const f = useFormat()
   const [activeTab, setActiveTab] = useState<'all' | 'one-time' | 'recurring'>('all')
   const [isDeleting, setIsDeleting] = useState<string | null>(null)
   const [isToggling, setIsToggling] = useState<string | null>(null)
@@ -488,7 +489,7 @@ export function MeetingsClient({
                       )}
                     </div>
                     <p className="text-xs sm:text-sm text-medium-gray">
-                      {formatMeetingDateShort(meetingDate)}
+                      {f.meetingShort(meetingDate)}
                     </p>
                   </div>
                   <span

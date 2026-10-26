@@ -6,7 +6,7 @@ import Link from 'next/link'
 import { CheckSquare, AlertTriangle, Circle, CheckCircle2, Clock, Calendar, ChevronDown, ChevronRight } from 'lucide-react'
 import { UserRole, TodoStatus, TodoPriority } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
-import { isTodoOverdue } from '@/lib/utils'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface Todo {
   id: string
@@ -41,6 +41,7 @@ const priorityConfig = {
 export function TodoList({ todos, currentUserId, userRole }: TodoListProps) {
   const router = useRouter()
   const { toastError } = useToast()
+  const f = useFormat()
   const [filter, setFilter] = useState<'all' | 'active' | 'completed'>('all')
   const [updating, setUpdating] = useState<string | null>(null)
   const [currentPage, setCurrentPage] = useState(1)
@@ -119,7 +120,7 @@ export function TodoList({ todos, currentUserId, userRole }: TodoListProps) {
             paginatedTodos.map((todo) => {
               const status = statusConfig[todo.status]
               const priority = priorityConfig[todo.priority]
-              const isOverdue = isTodoOverdue(todo.dueDate, now, todo.status)
+              const isOverdue = f.isTodoOverdue(todo.dueDate, todo.status, now)
               const StatusIcon = status.icon
 
               const nextStatus: TodoStatus =
@@ -176,10 +177,7 @@ export function TodoList({ todos, currentUserId, userRole }: TodoListProps) {
                           <span className={`flex items-center gap-1 ${isOverdue ? 'text-red-500 font-medium' : ''}`}>
                             <Calendar className="w-3 h-3" />
                             {isOverdue && <AlertTriangle className="w-3 h-3" />}
-                            {new Date(todo.dueDate).toLocaleDateString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                            })}
+                            {f.dateOnly(todo.dueDate, 'weekday')}
                           </span>
                         )}
                       </div>

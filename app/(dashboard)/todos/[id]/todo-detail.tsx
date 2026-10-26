@@ -19,7 +19,7 @@ import {
 import { UserRole, TodoStatus, TodoPriority } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
-import { isTodoOverdue } from '@/lib/utils'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface Todo {
   id: string
@@ -63,6 +63,7 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
   const router = useRouter()
   const { toastError } = useToast()
   const confirm = useConfirm()
+  const f = useFormat()
   const [updating, setUpdating] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [currentStatus, setCurrentStatus] = useState(todo.status)
@@ -71,7 +72,7 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
   const priority = priorityConfig[todo.priority]
   const StatusIcon = status.icon
   const now = new Date()
-  const isOverdue = isTodoOverdue(todo.dueDate, now, currentStatus)
+  const isOverdue = f.isTodoOverdue(todo.dueDate, currentStatus, now)
   const canEdit = todo.assignedTo.id === currentUserId || userRole === 'SUPER_ADMIN'
   const canDelete = todo.createdBy.id === currentUserId || userRole === 'SUPER_ADMIN'
 
@@ -106,24 +107,6 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
       setDeleting(false)
     }
   }
-
-  const formatDate = (date: Date) =>
-    new Date(date).toLocaleDateString('en-US', {
-      weekday: 'short',
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
-
-  const formatDateTime = (date: Date) =>
-    new Date(date).toLocaleDateString('en-US', {
-      weekday: 'short',
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-    })
 
   return (
     <div className="w-full max-w-4xl mx-auto min-w-0 space-y-5">
@@ -210,7 +193,7 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
         {todo.dueDate && (
           <FieldRow icon={Calendar} label="Due Date">
             <p className={`text-sm font-medium ${isOverdue ? 'text-red-600 dark:text-red-400' : 'text-dark-gray dark:text-white'}`}>
-              {formatDate(todo.dueDate)}
+              {f.dateOnly(todo.dueDate, 'short')}
               {isOverdue && <span className="ml-2 text-xs font-normal text-red-500">(Overdue)</span>}
             </p>
           </FieldRow>
@@ -219,13 +202,13 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
         {/* Completed At */}
         {todo.completedAt && (
           <FieldRow icon={CheckCircle2} label="Completed">
-            <p className="text-sm font-medium text-green-600 dark:text-green-400">{formatDateTime(todo.completedAt)}</p>
+            <p className="text-sm font-medium text-green-600 dark:text-green-400">{f.dateTime(todo.completedAt, 'short')}</p>
           </FieldRow>
         )}
 
         {/* Created At */}
         <FieldRow icon={Clock} label="Created">
-          <p className="text-sm font-medium text-dark-gray dark:text-white">{formatDateTime(todo.createdAt)}</p>
+          <p className="text-sm font-medium text-dark-gray dark:text-white">{f.dateTime(todo.createdAt, 'short')}</p>
         </FieldRow>
 
         {/* Linked Meeting */}
@@ -236,7 +219,7 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
               className="text-sm font-medium text-blue-600 dark:text-blue-400 hover:underline"
             >
               {todo.meeting.employee?.name ?? 'Unknown'} &amp; {todo.meeting.reporter?.name ?? 'Unknown'} &middot;{' '}
-              {new Date(todo.meeting.meetingDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+              {f.monthDay(todo.meeting.meetingDate)}
             </Link>
           </FieldRow>
         )}

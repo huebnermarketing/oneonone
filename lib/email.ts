@@ -1,6 +1,8 @@
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses'
 import nodemailer from 'nodemailer'
-import { APP_NAME, DEFAULT_TIMEZONE } from './constants'
+import { APP_NAME } from './constants'
+import { prisma } from './prisma'
+import { formatDateOnly, formatMeetingLong, resolveTimeZone, timeZoneAbbrev } from './dates'
 
 // --- Transport: SMTP or AWS SES ---
 
@@ -77,9 +79,49 @@ export function isEmailConfigured(): boolean {
   return isSmtpConfigured() || isSesConfigured()
 }
 
-export async function sendEmail({ to, subject, html, text }: EmailOptions): Promise<string | null> {
+/**
+ * Keep subjects plain ASCII. Non-ASCII characters (en dashes, middle dots, curly quotes) force the
+ * mailer to RFC 2047-encode the header ("=?UTF-8?Q?...?=") which some clients, notification previews
+ * and logs show raw. Names with genuinely non-Latin letters are left alone — encoding is then correct.
+ */
+export function asciiSubject(subject: string): string {
+  return subject
+    .replace(/[\u2013\u2014\u2212]/g, '-')
+    .replace(/\u00b7|\u2022/g, '-')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"')
+    .replace(/\u2026/g, '...')
+    .replace(/\u00a0/g, ' ')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/** Plain-text alternative derived from the HTML body (spam filters score multipart/alternative better). */
+export function htmlToText(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<a [^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi, (_m, href, label) => `${label.trim()} (${href})`)
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr|h1|h2|h3|li|table)>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+export async function sendEmail({ to, subject: rawSubject, html, text: rawText }: EmailOptions): Promise<string | null> {
   const recipients = Array.isArray(to) ? to : [to]
   const from = getFromEmail()
+  const subject = asciiSubject(rawSubject)
+  const text = rawText || htmlToText(html)
 
   // Prefer SMTP if configured
   if (isSmtpConfigured()) {
@@ -90,7 +132,7 @@ export async function sendEmail({ to, subject, html, text }: EmailOptions): Prom
         to: recipients,
         subject,
         html,
-        text: text || undefined,
+        text,
       })
       console.log(`Email sent via SMTP to ${recipients.join(', ')} [${info.messageId}]`)
       return info.messageId || null
@@ -111,7 +153,7 @@ export async function sendEmail({ to, subject, html, text }: EmailOptions): Prom
           Subject: { Data: subject, Charset: 'UTF-8' },
           Body: {
             Html: { Data: html, Charset: 'UTF-8' },
-            ...(text && { Text: { Data: text, Charset: 'UTF-8' } }),
+            Text: { Data: text, Charset: 'UTF-8' },
           },
         },
       })
@@ -138,8 +180,31 @@ const baseUrl = () => {
   if (!url) console.warn('[email] NEXTAUTH_URL is not set; links in emails will be relative')
   return url || ''
 }
-/** Timezone for all email date/time (match app/calendar: IST) */
-const EMAIL_TIMEZONE = DEFAULT_TIMEZONE
+// ---------------------------------------------------------------------------
+// Recipient timezone — every date in an email is rendered in the RECIPIENT's zone
+// ---------------------------------------------------------------------------
+
+const tzCache = new Map<string, { tz: string; at: number }>()
+const TZ_CACHE_MS = 60_000
+
+/** Timezone of the user behind an email address (app default when unknown). Cached for a minute. */
+export async function recipientTimeZone(email: string): Promise<string> {
+  const key = email.toLowerCase()
+  const hit = tzCache.get(key)
+  if (hit && Date.now() - hit.at < TZ_CACHE_MS) return hit.tz
+  let tz: string | null | undefined
+  try {
+    tz = (await prisma.user.findUnique({ where: { email: key }, select: { timeZone: true } }))?.timeZone
+  } catch (err) {
+    console.warn('[email] timezone lookup failed:', err instanceof Error ? err.message : err)
+  }
+  const resolved = resolveTimeZone(tz)
+  tzCache.set(key, { tz: resolved, at: Date.now() })
+  return resolved
+}
+
+/** "Thursday, October 29, 2026 at 9:30 AM IST" — always with the zone, since the two parties may differ. */
+const whenFor = (date: Date, tz: string) => `${formatMeetingLong(date, tz)} ${timeZoneAbbrev(date, tz)}`
 
 /** Escape user-controlled text before interpolating it into HTML templates. */
 function esc(value: string | null | undefined): string {
@@ -252,6 +317,8 @@ function detailRow(label: string, value: string): string {
 
 // ---------------------------------------------------------------------------
 // Email senders
+// Conventions: raw names go to subjects and detailRow() (which escapes); esc() only when a
+// name is interpolated directly into HTML prose.
 // ---------------------------------------------------------------------------
 
 export async function sendMeetingScheduledEmail(
@@ -262,56 +329,41 @@ export async function sendMeetingScheduledEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const formattedDate = new Intl.DateTimeFormat('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: EMAIL_TIMEZONE,
-  }).format(meetingDate)
-
-  const empName = esc(employeeName || 'Team Member')
-  const mgrName = esc(reporterName || 'Your Manager')
+  const empName = employeeName || 'Team Member'
+  const mgrName = reporterName || 'Your Manager'
+  const [empTz, mgrTz] = await Promise.all([recipientTimeZone(employeeEmail), recipientTimeZone(reporterEmail)])
+  const empWhen = whenFor(meetingDate, empTz)
+  const mgrWhen = whenFor(meetingDate, mgrTz)
 
   const employeeHtml = emailLayout({
-    preheader: `Your one-on-one with ${mgrName} is scheduled for ${formattedDate}`,
+    preheader: `Your one-on-one with ${esc(mgrName)} is scheduled for ${empWhen}`,
     heading: 'Meeting Scheduled',
     body: `
-      <p style="margin:0 0 16px;">Hi ${empName},</p>
+      <p style="margin:0 0 16px;">Hi ${esc(empName)},</p>
       <p style="margin:0 0 20px;">A one-on-one meeting has been scheduled. Please review the details below and prepare your check-in form before the meeting.</p>
       ${detailRow('With', mgrName)}
-      ${detailRow('Date & Time', formattedDate)}
+      ${detailRow('Date & Time', empWhen)}
     `,
     ctaText: 'View Meeting Details',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
   })
 
   const reporterHtml = emailLayout({
-    preheader: `Your one-on-one with ${empName} is scheduled for ${formattedDate}`,
+    preheader: `Your one-on-one with ${esc(empName)} is scheduled for ${mgrWhen}`,
     heading: 'Meeting Scheduled',
     body: `
-      <p style="margin:0 0 16px;">Hi ${mgrName},</p>
+      <p style="margin:0 0 16px;">Hi ${esc(mgrName)},</p>
       <p style="margin:0 0 20px;">A one-on-one meeting has been scheduled with your direct report. Here are the details:</p>
       ${detailRow('With', empName)}
-      ${detailRow('Date & Time', formattedDate)}
+      ${detailRow('Date & Time', mgrWhen)}
     `,
     ctaText: 'View Meeting Details',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
   })
 
   await Promise.all([
-    sendEmail({
-      to: employeeEmail,
-      subject: `Meeting Scheduled – ${mgrName} · ${formattedDate}`,
-      html: employeeHtml,
-    }),
-    sendEmail({
-      to: reporterEmail,
-      subject: `Meeting Scheduled – ${empName} · ${formattedDate}`,
-      html: reporterHtml,
-    }),
+    sendEmail({ to: employeeEmail, subject: `Meeting Scheduled - ${mgrName}, ${empWhen}`, html: employeeHtml }),
+    sendEmail({ to: reporterEmail, subject: `Meeting Scheduled - ${empName}, ${mgrWhen}`, html: reporterHtml }),
   ])
 }
 
@@ -324,38 +376,27 @@ export async function sendTodoAssignedEmail(
   createdByName: string | null,
   todoId: string
 ) {
-  const formattedDueDate = dueDate
-    ? new Intl.DateTimeFormat('en-US', {
-        year: 'numeric',
-        month: 'long',
-        day: 'numeric',
-        timeZone: EMAIL_TIMEZONE,
-      }).format(dueDate)
-    : 'No due date'
-
-  const name = esc(assigneeName || 'Team Member')
-  const creator = esc(createdByName || 'Your Manager')
+  // Due dates are calendar dates (stored at 00:00 UTC) — never shift them by timezone
+  const formattedDueDate = dueDate ? formatDateOnly(dueDate) : 'No due date'
+  const name = assigneeName || 'Team Member'
+  const creator = createdByName || 'Your Manager'
 
   const html = emailLayout({
-    preheader: `${creator} assigned you a new task: ${esc(todoTitle)}`,
+    preheader: `${esc(creator)} assigned you a new task: ${esc(todoTitle)}`,
     heading: 'New Task Assigned',
     body: `
-      <p style="margin:0 0 16px;">Hi ${name},</p>
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
       <p style="margin:0 0 20px;">A new task has been assigned to you. Please review the details below.</p>
       ${detailRow('Task', todoTitle)}
       ${todoDescription ? detailRow('Description', todoDescription) : ''}
       ${detailRow('Due Date', formattedDueDate)}
       ${detailRow('Assigned By', creator)}
     `,
-    ctaText: 'View Tasks',
-    ctaUrl: `${baseUrl()}/todos`,
+    ctaText: 'View Task',
+    ctaUrl: `${baseUrl()}/todos/${todoId}`,
   })
 
-  await sendEmail({
-    to: assigneeEmail,
-    subject: `New Task – ${todoTitle}`,
-    html,
-  })
+  await sendEmail({ to: assigneeEmail, subject: `New Task - ${todoTitle}`, html })
 }
 
 export async function sendTodoDueReminderEmail(
@@ -365,33 +406,23 @@ export async function sendTodoDueReminderEmail(
   dueDate: Date,
   todoId: string
 ) {
-  const formattedDueDate = new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    timeZone: EMAIL_TIMEZONE,
-  }).format(dueDate)
-
-  const name = esc(assigneeName || 'Team Member')
+  const formattedDueDate = formatDateOnly(dueDate)
+  const name = assigneeName || 'Team Member'
 
   const html = emailLayout({
     preheader: `Reminder: "${esc(todoTitle)}" is due on ${formattedDueDate}`,
     heading: 'Task Due Soon',
     body: `
-      <p style="margin:0 0 16px;">Hi ${name},</p>
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
       <p style="margin:0 0 20px;">This is a friendly reminder that one of your tasks is due soon. Please make sure to complete it on time.</p>
       ${detailRow('Task', todoTitle)}
       ${detailRow('Due Date', formattedDueDate)}
     `,
-    ctaText: 'View Tasks',
-    ctaUrl: `${baseUrl()}/todos`,
+    ctaText: 'View Task',
+    ctaUrl: `${baseUrl()}/todos/${todoId}`,
   })
 
-  await sendEmail({
-    to: assigneeEmail,
-    subject: `Reminder – ${todoTitle} due ${formattedDueDate}`,
-    html,
-  })
+  await sendEmail({ to: assigneeEmail, subject: `Reminder - ${todoTitle} due ${formattedDueDate}`, html })
 }
 
 export async function sendFormSubmittedEmail(
@@ -401,52 +432,30 @@ export async function sendFormSubmittedEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const formattedDate = new Intl.DateTimeFormat('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    timeZone: EMAIL_TIMEZONE,
-  }).format(meetingDate)
-
-  const mgrName = esc(reporterName || 'Manager')
-  const empName = esc(employeeName || 'Team Member')
+  const tz = await recipientTimeZone(reporterEmail)
+  const when = whenFor(meetingDate, tz)
+  const mgrName = reporterName || 'Manager'
+  const empName = employeeName || 'Team Member'
 
   const html = emailLayout({
-    preheader: `${empName} submitted their one-on-one form for ${formattedDate}`,
+    preheader: `${esc(empName)} submitted their one-on-one form for ${when}`,
     heading: 'Check-in Form Submitted',
     body: `
-      <p style="margin:0 0 16px;">Hi ${mgrName},</p>
-      <p style="margin:0 0 20px;"><strong>${empName}</strong> has submitted their one-on-one check-in form for the meeting on <strong>${formattedDate}</strong>. Please review their responses before the meeting.</p>
+      <p style="margin:0 0 16px;">Hi ${esc(mgrName)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(empName)}</strong> has submitted their one-on-one check-in form for the meeting on <strong>${when}</strong>. Please review their responses before the meeting.</p>
       ${detailRow('Submitted By', empName)}
-      ${detailRow('Meeting Date', formattedDate)}
+      ${detailRow('Meeting Date', when)}
     `,
     ctaText: 'Review Form',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
   })
 
-  await sendEmail({
-    to: reporterEmail,
-    subject: `Form Submitted – ${empName} · ${formattedDate}`,
-    html,
-  })
+  await sendEmail({ to: reporterEmail, subject: `Form Submitted - ${empName}, ${when}`, html })
 }
 
 // ---------------------------------------------------------------------------
 // Proposal-based scheduling emails
 // ---------------------------------------------------------------------------
-
-function formatDateFull(date: Date): string {
-  return new Intl.DateTimeFormat('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: EMAIL_TIMEZONE,
-  }).format(date)
-}
 
 /** Email sent to the employee when a reporter proposes a meeting time. */
 export async function sendMeetingProposalEmail(
@@ -456,28 +465,24 @@ export async function sendMeetingProposalEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const empName = esc(employeeName || 'Team Member')
-  const mgrName = esc(reporterName || 'Your Manager')
-  const formattedDate = formatDateFull(meetingDate)
+  const empName = employeeName || 'Team Member'
+  const mgrName = reporterName || 'Your Manager'
+  const when = whenFor(meetingDate, await recipientTimeZone(employeeEmail))
 
   const html = emailLayout({
-    preheader: `${mgrName} has proposed a one-on-one meeting for ${formattedDate}`,
+    preheader: `${esc(mgrName)} has proposed a one-on-one meeting for ${when}`,
     heading: 'Meeting Request',
     body: `
-      <p style="margin:0 0 16px;">Hi ${empName},</p>
-      <p style="margin:0 0 20px;"><strong>${mgrName}</strong> has proposed a one-on-one meeting with you. Please review the details and either accept the proposed time or suggest an alternative.</p>
+      <p style="margin:0 0 16px;">Hi ${esc(empName)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(mgrName)}</strong> has proposed a one-on-one meeting with you. Please review the details and either accept the proposed time or suggest an alternative.</p>
       ${detailRow('Proposed By', mgrName)}
-      ${detailRow('Date & Time', formattedDate)}
+      ${detailRow('Date & Time', when)}
     `,
     ctaText: 'Accept or Suggest New Time',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
   })
 
-  await sendEmail({
-    to: employeeEmail,
-    subject: `Meeting Request – ${mgrName} · ${formattedDate}`,
-    html,
-  })
+  await sendEmail({ to: employeeEmail, subject: `Meeting Request - ${mgrName}, ${when}`, html })
 }
 
 /** Email sent to the proposer when the receiver accepts. */
@@ -488,28 +493,24 @@ export async function sendMeetingAcceptedEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const pName = esc(proposerName || 'Manager')
-  const aName = esc(acceptorName || 'Team Member')
-  const formattedDate = formatDateFull(meetingDate)
+  const pName = proposerName || 'Manager'
+  const aName = acceptorName || 'Team Member'
+  const when = whenFor(meetingDate, await recipientTimeZone(proposerEmail))
 
   const html = emailLayout({
-    preheader: `${aName} accepted the one-on-one for ${formattedDate}`,
+    preheader: `${esc(aName)} accepted the one-on-one for ${when}`,
     heading: 'Meeting Confirmed',
     body: `
-      <p style="margin:0 0 16px;">Hi ${pName},</p>
-      <p style="margin:0 0 20px;"><strong>${aName}</strong> has accepted the proposed one-on-one meeting. The meeting has been added to your calendar.</p>
+      <p style="margin:0 0 16px;">Hi ${esc(pName)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(aName)}</strong> has accepted the proposed one-on-one meeting. The meeting has been added to your calendar.</p>
       ${detailRow('Accepted By', aName)}
-      ${detailRow('Date & Time', formattedDate)}
+      ${detailRow('Date & Time', when)}
     `,
     ctaText: 'View Meeting',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
   })
 
-  await sendEmail({
-    to: proposerEmail,
-    subject: `Meeting Confirmed – ${aName} · ${formattedDate}`,
-    html,
-  })
+  await sendEmail({ to: proposerEmail, subject: `Meeting Confirmed - ${aName}, ${when}`, html })
 }
 
 /** Confirmation email to the reporter after they propose a meeting. */
@@ -520,31 +521,27 @@ export async function sendProposalConfirmationEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const mgrName = esc(reporterName || 'Manager')
-  const empName = esc(employeeName || 'Team Member')
-  const formattedDate = formatDateFull(meetingDate)
+  const mgrName = reporterName || 'Manager'
+  const empName = employeeName || 'Team Member'
+  const when = whenFor(meetingDate, await recipientTimeZone(reporterEmail))
 
   const html = emailLayout({
-    preheader: `Your proposal to ${empName} for ${formattedDate} has been sent`,
+    preheader: `Your proposal to ${esc(empName)} for ${when} has been sent`,
     heading: 'Meeting Proposed',
     body: `
-      <p style="margin:0 0 16px;">Hi ${mgrName},</p>
-      <p style="margin:0 0 20px;">Your one-on-one meeting proposal with <strong>${empName}</strong> has been sent. You'll be notified when they accept or suggest a new time.</p>
+      <p style="margin:0 0 16px;">Hi ${esc(mgrName)},</p>
+      <p style="margin:0 0 20px;">Your one-on-one meeting proposal with <strong>${esc(empName)}</strong> has been sent. You'll be notified when they accept or suggest a new time.</p>
       ${detailRow('Proposed To', empName)}
-      ${detailRow('Date & Time', formattedDate)}
+      ${detailRow('Date & Time', when)}
     `,
     ctaText: 'View Meeting',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
   })
 
-  await sendEmail({
-    to: reporterEmail,
-    subject: `Meeting Proposed – ${empName} · ${formattedDate}`,
-    html,
-  })
+  await sendEmail({ to: reporterEmail, subject: `Meeting Proposed - ${empName}, ${when}`, html })
 }
 
-/** Reminder email sent ~24h before a meeting. */
+/** Reminder email sent before a meeting (window = reminderHoursBefore policy). */
 export async function sendMeetingReminderEmail(
   recipientEmail: string,
   recipientName: string | null,
@@ -552,31 +549,27 @@ export async function sendMeetingReminderEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const name = esc(recipientName || 'Team Member')
-  const otherName = esc(otherPartyName || 'your colleague')
-  const formattedDate = formatDateFull(meetingDate)
+  const name = recipientName || 'Team Member'
+  const otherName = otherPartyName || 'your colleague'
+  const when = whenFor(meetingDate, await recipientTimeZone(recipientEmail))
 
   const html = emailLayout({
-    preheader: `Reminder: one-on-one with ${otherName} tomorrow`,
-    heading: 'Meeting Tomorrow',
+    preheader: `Reminder: one-on-one with ${esc(otherName)} on ${when}`,
+    heading: 'Upcoming Meeting',
     body: `
-      <p style="margin:0 0 16px;">Hi ${name},</p>
-      <p style="margin:0 0 20px;">This is a friendly reminder that you have a one-on-one meeting scheduled for tomorrow. Please prepare any topics you'd like to discuss.</p>
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
+      <p style="margin:0 0 20px;">This is a friendly reminder about your upcoming one-on-one meeting. Please prepare any topics you'd like to discuss.</p>
       ${detailRow('With', otherName)}
-      ${detailRow('Date & Time', formattedDate)}
+      ${detailRow('Date & Time', when)}
     `,
     ctaText: 'View Meeting',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
   })
 
-  await sendEmail({
-    to: recipientEmail,
-    subject: `Meeting Reminder – ${otherName} · ${formattedDate}`,
-    html,
-  })
+  await sendEmail({ to: recipientEmail, subject: `Meeting Reminder - ${otherName}, ${when}`, html })
 }
 
-/** Reminder email sent to the employee when their form is not yet submitted ~24h before a meeting. */
+/** Reminder email sent to the employee when their form is not yet submitted before a meeting. */
 export async function sendFormReminderEmail(
   employeeEmail: string,
   employeeName: string | null,
@@ -584,28 +577,24 @@ export async function sendFormReminderEmail(
   meetingDate: Date,
   meetingId: string
 ) {
-  const empName = esc(employeeName || 'Team Member')
-  const mgrName = esc(reporterName || 'your manager')
-  const formattedDate = formatDateFull(meetingDate)
+  const empName = employeeName || 'Team Member'
+  const mgrName = reporterName || 'your manager'
+  const when = whenFor(meetingDate, await recipientTimeZone(employeeEmail))
 
   const html = emailLayout({
-    preheader: `Reminder: Please complete your check-in form before your meeting with ${mgrName}`,
+    preheader: `Reminder: please complete your check-in form before your meeting with ${esc(mgrName)}`,
     heading: 'Form Not Yet Submitted',
     body: `
-      <p style="margin:0 0 16px;">Hi ${empName},</p>
-      <p style="margin:0 0 20px;">Your one-on-one meeting with <strong>${mgrName}</strong> is coming up soon, but you haven't submitted your check-in form yet. Please take a few minutes to fill it out so your manager can prepare for the meeting.</p>
+      <p style="margin:0 0 16px;">Hi ${esc(empName)},</p>
+      <p style="margin:0 0 20px;">Your one-on-one meeting with <strong>${esc(mgrName)}</strong> is coming up soon, but you haven't submitted your check-in form yet. Please take a few minutes to fill it out so your manager can prepare for the meeting.</p>
       ${detailRow('Meeting With', mgrName)}
-      ${detailRow('Date & Time', formattedDate)}
+      ${detailRow('Date & Time', when)}
     `,
     ctaText: 'Fill Out Form',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}/form`,
   })
 
-  await sendEmail({
-    to: employeeEmail,
-    subject: `Action Required – Submit your form before meeting with ${mgrName} · ${formattedDate}`,
-    html,
-  })
+  await sendEmail({ to: employeeEmail, subject: `Action Required - Submit your form before the meeting with ${mgrName}, ${when}`, html })
 }
 
 /** Email sent to the other party when the receiver suggests a new time. */
@@ -616,55 +605,57 @@ export async function sendMeetingSuggestionEmail(
   newDate: Date,
   meetingId: string
 ) {
-  const rName = esc(recipientName || 'Manager')
-  const sName = esc(suggestorName || 'Team Member')
-  const formattedDate = formatDateFull(newDate)
+  const rName = recipientName || 'Manager'
+  const sName = suggestorName || 'Team Member'
+  const when = whenFor(newDate, await recipientTimeZone(recipientEmail))
 
   const html = emailLayout({
-    preheader: `${sName} suggested a new time: ${formattedDate}`,
+    preheader: `${esc(sName)} suggested a new time: ${when}`,
     heading: 'New Time Suggested',
     body: `
-      <p style="margin:0 0 16px;">Hi ${rName},</p>
-      <p style="margin:0 0 20px;"><strong>${sName}</strong> has suggested a different time for the one-on-one meeting. Please review and either accept or propose another time.</p>
+      <p style="margin:0 0 16px;">Hi ${esc(rName)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(sName)}</strong> has suggested a different time for the one-on-one meeting. Please review and either accept or propose another time.</p>
       ${detailRow('Suggested By', sName)}
-      ${detailRow('New Date & Time', formattedDate)}
+      ${detailRow('New Date & Time', when)}
     `,
     ctaText: 'Accept or Suggest Another Time',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
   })
 
-  await sendEmail({
-    to: recipientEmail,
-    subject: `New Time Suggested – ${sName} · ${formattedDate}`,
-    html,
-  })
+  await sendEmail({ to: recipientEmail, subject: `New Time Suggested - ${sName}, ${when}`, html })
 }
 
-/** Email sent to the employee when their recurring schedule is updated. */
+/**
+ * Email sent to the employee when their recurring schedule is updated.
+ * `timeOfDay` is wall-clock time in the REPORTER's zone (`reporterTimeZone`); it is shown with that
+ * zone's abbreviation so an employee elsewhere is not misled.
+ */
 export async function sendRecurringScheduleUpdatedEmail(
   employeeEmail: string,
   employeeName: string | null,
   managerName: string | null,
   dayOfWeek: number,
   timeOfDay: string,
-  frequency: string
+  frequency: string,
+  reporterTimeZone?: string | null
 ) {
-  const empName = esc(employeeName || 'Team Member')
-  const mgrName = esc(managerName || 'Your manager')
+  const empName = employeeName || 'Team Member'
+  const mgrName = managerName || 'Your manager'
   const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
   const dayName = dayNames[dayOfWeek] || 'Unknown'
   const [hh, mm] = timeOfDay.split(':').map(Number)
   const period = hh >= 12 ? 'PM' : 'AM'
   const hour12 = hh % 12 || 12
-  const formattedTime = `${hour12}:${String(mm).padStart(2, '0')} ${period}`
+  const tz = resolveTimeZone(reporterTimeZone)
+  const formattedTime = `${hour12}:${String(mm).padStart(2, '0')} ${period} ${timeZoneAbbrev(new Date(), tz)}`
   const freqLabel = frequency === 'WEEKLY' ? 'Weekly' : frequency === 'BIWEEKLY' ? 'Every 2 Weeks' : 'Monthly'
 
   const html = emailLayout({
-    preheader: `${mgrName} updated your recurring one-on-one schedule`,
+    preheader: `${esc(mgrName)} updated your recurring one-on-one schedule`,
     heading: 'Recurring Schedule Updated',
     body: `
-      <p style="margin:0 0 16px;">Hi ${empName},</p>
-      <p style="margin:0 0 20px;"><strong>${mgrName}</strong> has updated the recurring one-on-one meeting schedule with you. Please review the new details below.</p>
+      <p style="margin:0 0 16px;">Hi ${esc(empName)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(mgrName)}</strong> has updated the recurring one-on-one meeting schedule with you. Please review the new details below.</p>
       ${detailRow('Frequency', freqLabel)}
       ${detailRow('Day', dayName)}
       ${detailRow('Time', formattedTime)}
@@ -673,11 +664,7 @@ export async function sendRecurringScheduleUpdatedEmail(
     ctaUrl: `${baseUrl()}/meetings`,
   })
 
-  await sendEmail({
-    to: employeeEmail,
-    subject: `Schedule Updated – ${freqLabel} on ${dayName}s at ${formattedTime}`,
-    html,
-  })
+  await sendEmail({ to: employeeEmail, subject: `Schedule Updated - ${freqLabel} on ${dayName}s at ${formattedTime}`, html })
 }
 
 /** Sent to the other party (or both, when an admin cancels) when a single meeting is cancelled. */
@@ -688,27 +675,23 @@ export async function sendMeetingCancelledEmail(
   meetingDate: Date,
   reason?: string | null
 ) {
-  const name = esc(recipientName || 'Team Member')
-  const byName = esc(cancelledByName || 'A colleague')
-  const formattedDate = formatDateFull(meetingDate)
+  const name = recipientName || 'Team Member'
+  const byName = cancelledByName || 'A colleague'
+  const when = whenFor(meetingDate, await recipientTimeZone(recipientEmail))
 
   const html = emailLayout({
-    preheader: `${byName} cancelled the one-on-one scheduled for ${formattedDate}`,
+    preheader: `${esc(byName)} cancelled the one-on-one scheduled for ${when}`,
     heading: 'Meeting Cancelled',
     body: `
-      <p style="margin:0 0 16px;">Hi ${name},</p>
-      <p style="margin:0 0 20px;"><strong>${byName}</strong> has cancelled the one-on-one meeting below. No further action is needed; a new meeting can be proposed at any time.</p>
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(byName)}</strong> has cancelled the one-on-one meeting below. No further action is needed; a new meeting can be proposed at any time.</p>
       ${detailRow('Cancelled By', byName)}
-      ${detailRow('Original Date & Time', formattedDate)}
+      ${detailRow('Original Date & Time', when)}
       ${reason ? detailRow('Reason', reason) : ''}
     `,
     ctaText: 'Open Meetings',
     ctaUrl: `${baseUrl()}/meetings`,
   })
 
-  await sendEmail({
-    to: recipientEmail,
-    subject: `Meeting Cancelled – ${formattedDate}`,
-    html,
-  })
+  await sendEmail({ to: recipientEmail, subject: `Meeting Cancelled - ${when}`, html })
 }

@@ -1,7 +1,8 @@
 import { getCurrentUser } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { UserRole } from '@prisma/client'
-import { formatMeetingDateShort, isTodoOverdue } from '@/lib/utils'
+import { formatMeetingShort, isTodoOverdue } from '@/lib/dates'
+import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import Link from 'next/link'
 import { Calendar, CheckSquare, Users, TrendingUp, Clock, AlertCircle, ChevronRight } from 'lucide-react'
 import { WeekCalendar } from './week-calendar'
@@ -10,6 +11,7 @@ import { PendingRequests } from './pending-requests'
 export default async function DashboardPage() {
   const user = await getCurrentUser()
   if (!user) return null
+  const tz = user.timeZone ?? DEFAULT_TIMEZONE
 
   const stats = {
     upcomingMeetings: 0,
@@ -52,7 +54,7 @@ export default async function DashboardPage() {
     } catch { /* PROPOSED enum not yet in DB */ }
     stats.upcomingMeetings = meetings + proposedCount
     stats.pendingTodos = todos.length
-    stats.overdueTodos = todos.filter(t => isTodoOverdue(t.dueDate, now, t.status)).length
+    stats.overdueTodos = todos.filter(t => isTodoOverdue(t.dueDate, now, t.status, tz)).length
     stats.completedMeetings = completedMeetings
   } else {
     const directReports = user.role === UserRole.SUPER_ADMIN
@@ -92,7 +94,7 @@ export default async function DashboardPage() {
     } catch { /* PROPOSED enum not yet in DB */ }
     stats.upcomingMeetings = meetings + proposedCount
     stats.pendingTodos = todos.length
-    stats.overdueTodos = todos.filter(t => isTodoOverdue(t.dueDate, now, t.status)).length
+    stats.overdueTodos = todos.filter(t => isTodoOverdue(t.dueDate, now, t.status, tz)).length
     stats.directReports = directReports
     stats.completedMeetings = completedMeetings
   }
@@ -352,7 +354,7 @@ export default async function DashboardPage() {
                       {user.role === UserRole.EMPLOYEE ? meeting.reporter.name : meeting.employee.name}
                     </p>
                     <p className="text-sm text-medium-gray">
-                      {formatMeetingDateShort(meeting.meetingDate)}
+                      {formatMeetingShort(meeting.meetingDate, tz)}
                     </p>
                   </div>
                   <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${

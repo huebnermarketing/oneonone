@@ -4,7 +4,8 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { Calendar, User, FileText, CheckSquare, Clock, ArrowLeft, Mic, Video, MapPin, ExternalLink } from 'lucide-react'
 import { UserRole } from '@prisma/client'
-import { formatMeetingDateLong } from '@/lib/utils'
+import { formatDateOnly, formatMeetingLong, timeZoneAbbrev } from '@/lib/dates'
+import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import { getSettings } from '@/lib/settings'
 import { AddTodoForm } from './add-todo-form'
 import { MeetingRecorder } from './meeting-recorder'
@@ -87,6 +88,8 @@ export default async function MeetingDetailPage({
     ? meeting.reporter.name
     : proposedById === meeting.reporterId ? meeting.reporter.name : meeting.employee.name
   const otherPartyName = user.id === meeting.employeeId ? meeting.reporter.name : meeting.employee.name
+  const tz = user.timeZone ?? DEFAULT_TIMEZONE
+  const meetingDateLabel = `${formatMeetingLong(meetingDate, tz)} ${timeZoneAbbrev(meetingDate, tz)}`
 
   const formSections = [
     { title: 'Check-In: Personal Best', content: meeting.checkInPersonal },
@@ -120,7 +123,7 @@ export default async function MeetingDetailPage({
           </h1>
           <p className="text-sm sm:text-base text-medium-gray flex items-center gap-2">
             <Calendar className="w-4 h-4 flex-shrink-0" />
-            {formatMeetingDateLong(meetingDate)}
+            {meetingDateLabel}
           </p>
           <div className="flex flex-wrap items-center gap-2 mt-2">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-off-white dark:bg-dark-gray text-medium-gray dark:text-light-gray">
@@ -194,7 +197,7 @@ export default async function MeetingDetailPage({
                 <p className="text-sm text-medium-gray mt-0.5">
                   {isPast
                     ? 'Please fill out the one-on-one form for this meeting. You can save a draft and finish later.'
-                    : `Please fill and submit this form before your meeting on ${formatMeetingDateLong(meetingDate)}. You can save a draft and finish later.`}
+                    : `Please fill and submit this form before your meeting on ${meetingDateLabel}. You can save a draft and finish later.`}
                 </p>
               </div>
             </div>
@@ -420,7 +423,7 @@ export default async function MeetingDetailPage({
                       <div className="flex flex-wrap items-center gap-2 sm:gap-4 mt-2 text-xs text-medium-gray">
                         <span>Assigned: {todo.assignedTo.name}</span>
                         {todo.dueDate && (
-                          <span>Due: {new Date(todo.dueDate).toLocaleDateString()}</span>
+                          <span>Due: {formatDateOnly(todo.dueDate, 'short')}</span>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 mt-2">

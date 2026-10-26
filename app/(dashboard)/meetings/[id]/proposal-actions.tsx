@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { Check, Clock, Calendar, Loader2, AlertCircle } from 'lucide-react'
 import { DatePicker } from '@/components/ui/date-picker'
 import { useToast } from '@/components/ui/toast'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface FreeSlot {
   start: string
@@ -30,6 +31,7 @@ export function ProposalActions({
 }: ProposalActionsProps) {
   const router = useRouter()
   const { toastSuccess, toastError } = useToast()
+  const f = useFormat()
   const [accepting, setAccepting] = useState(false)
   const [showSuggest, setShowSuggest] = useState(false)
   const [suggestDate, setSuggestDate] = useState('')
@@ -45,17 +47,10 @@ export function ProposalActions({
   const meetingDateObj = new Date(meetingDate)
   const isPast = meetingDateObj.getTime() < Date.now()
 
-  const formattedDate = meetingDateObj.toLocaleDateString('en-US', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
+  const formattedDate = `${f.meetingLong(meetingDateObj)} ${f.abbrev(meetingDateObj)}`
 
   const today = new Date()
-  const minDate = today.getFullYear() + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0')
+  const minDate = f.dateKey(today)
   const isSuggestDateToday = suggestDate === minDate
 
   const handleAccept = async () => {
@@ -134,14 +129,6 @@ export function ProposalActions({
     }
   }
 
-  function formatSlotTime(isoString: string) {
-    return new Date(isoString).toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    })
-  }
-
   function isSlotInPast(slotDate: Date) {
     return slotDate.getTime() <= Date.now()
   }
@@ -204,7 +191,7 @@ export function ProposalActions({
                           : 'bg-off-white dark:bg-dark-gray text-dark-gray dark:text-white hover:bg-dark-gray/10 dark:hover:bg-white/10'
                     }`}
                   >
-                    {formatSlotTime(slot.start)}
+                    {f.time(slot.start)}
                   </button>
                 )
               })}

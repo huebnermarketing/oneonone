@@ -17,6 +17,7 @@ import {
 import { UserRole } from '@prisma/client'
 import { QuarterlySummary } from './quarterly-summary'
 import { MeetingHistoryList } from './meeting-history-list'
+import { formatDateOnly } from '@/lib/dates'
 
 export default async function EmployeeDetailPage({
   params,
@@ -417,7 +418,7 @@ export default async function EmployeeDetailPage({
                       </p>
                       {todo.dueDate && (
                         <p className="text-xs text-medium-gray">
-                          Due: {new Date(todo.dueDate).toLocaleDateString()}
+                          Due: {formatDateOnly(todo.dueDate, 'short')}
                         </p>
                       )}
                     </div>

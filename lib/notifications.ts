@@ -1,6 +1,6 @@
 import { prisma } from './prisma'
 import { NotificationType, Prisma } from '@prisma/client'
-import { formatDateForNotification } from './utils'
+import { formatDateOnly, formatMeetingShort, resolveTimeZone, timeZoneAbbrev } from './dates'
 
 interface CreateNotificationParams {
   userId: string
@@ -9,6 +9,22 @@ interface CreateNotificationParams {
   message: string
   link?: string
   data?: Prisma.InputJsonValue
+}
+
+/** In-app notification text is stored, so dates are rendered once — in the RECIPIENT's timezone. */
+async function userTimeZone(userId: string): Promise<string> {
+  try {
+    const u = await prisma.user.findUnique({ where: { id: userId }, select: { timeZone: true } })
+    return resolveTimeZone(u?.timeZone)
+  } catch {
+    return resolveTimeZone(null)
+  }
+}
+
+/** "Wed, Feb 18, 11:30 AM IST" for the recipient. */
+async function whenFor(userId: string, date: Date): Promise<string> {
+  const tz = await userTimeZone(userId)
+  return `${formatMeetingShort(date, tz)} ${timeZoneAbbrev(date, tz)}`
 }
 
 export async function createNotification(params: CreateNotificationParams) {
@@ -149,7 +165,7 @@ export async function notifyMeetingScheduled(
     userId: employeeId,
     type: 'MEETING_SCHEDULED',
     title: 'New Meeting Scheduled',
-    message: `${reporterName} has scheduled a one-on-one meeting with you on ${formatDateForNotification(meetingDate)}`,
+    message: `${reporterName} has scheduled a one-on-one meeting with you on ${await whenFor(employeeId, meetingDate)}`,
     link: `/meetings/${meetingId}`,
   })
 }
@@ -221,7 +237,7 @@ export async function notifyMeetingCancelled(
     userId,
     type: 'MEETING_CANCELLED',
     title: 'Meeting Cancelled',
-    message: `${cancelledByName} cancelled the one-on-one meeting scheduled for ${formatDateForNotification(meetingDate)}`,
+    message: `${cancelledByName} cancelled the one-on-one meeting scheduled for ${await whenFor(userId, meetingDate)}`,
     link: `/meetings/${meetingId}`,
   })
 }
@@ -249,7 +265,7 @@ export async function notifyTodoDueSoon(
     userId,
     type: 'TODO_DUE_SOON',
     title: 'Task Due Soon',
-    message: `Your task "${todoTitle}" is due on ${formatDateForNotification(dueDate)}`,
+    message: `Your task "${todoTitle}" is due on ${formatDateOnly(dueDate)}`,
     link: `/todos`,
   })
 }
@@ -294,7 +310,7 @@ export async function notifyMeetingProposed(
     userId: employeeId,
     type: 'MEETING_SCHEDULED',
     title: 'Meeting Request',
-    message: `${reporterName} proposed a one-on-one for ${formatDateForNotification(meetingDate)}. Accept or suggest a new time.`,
+    message: `${reporterName} proposed a one-on-one for ${await whenFor(employeeId, meetingDate)}. Accept or suggest a new time.`,
     link: `/meetings/${meetingId}`,
   })
 }
@@ -309,7 +325,7 @@ export async function notifyMeetingAccepted(
     userId: proposerId,
     type: 'MEETING_SCHEDULED',
     title: 'Meeting Confirmed',
-    message: `${acceptorName} accepted the one-on-one for ${formatDateForNotification(meetingDate)}.`,
+    message: `${acceptorName} accepted the one-on-one for ${await whenFor(proposerId, meetingDate)}.`,
     link: `/meetings/${meetingId}`,
   })
 }
@@ -324,7 +340,7 @@ export async function notifyMeetingSuggested(
     userId: recipientId,
     type: 'MEETING_SCHEDULED',
     title: 'New Time Suggested',
-    message: `${suggestorName} suggested a new time for the one-on-one: ${formatDateForNotification(newDate)}. Accept or suggest another time.`,
+    message: `${suggestorName} suggested a new time for the one-on-one: ${await whenFor(recipientId, newDate)}. Accept or suggest another time.`,
     link: `/meetings/${meetingId}`,
   })
 }
