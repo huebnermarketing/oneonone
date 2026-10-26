@@ -3,6 +3,7 @@
 # AMI One-on-One Deployment Script
 # Run this on your AWS server: bash deploy.sh
 
+main() {
 echo "🚀 Starting deployment..."
 
 # Navigate to app directory
@@ -11,9 +12,18 @@ cd /var/www/oneonone || exit
 # Pull latest code (exit if pull fails so we don't build old code)
 # Branch flow: feature/* -> stage (test server) -> main (production). Override with DEPLOY_BRANCH=stage bash deploy.sh
 DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
-echo "📥 Pulling latest code from origin/$DEPLOY_BRANCH..."
-git checkout "$DEPLOY_BRANCH" 2>/dev/null || { echo "❌ Branch $DEPLOY_BRANCH not found locally. Run: git fetch origin && git checkout $DEPLOY_BRANCH"; exit 1; }
-git pull origin "$DEPLOY_BRANCH" || { echo "❌ git pull failed. Stash or discard local changes (e.g. git checkout -- package-lock.json) and try again."; exit 1; }
+if [ "${DEPLOY_PULLED:-0}" != "1" ]; then
+  echo "📥 Pulling latest code from origin/$DEPLOY_BRANCH..."
+  git checkout "$DEPLOY_BRANCH" 2>/dev/null || { echo "❌ Branch $DEPLOY_BRANCH not found locally. Run: git fetch origin && git checkout $DEPLOY_BRANCH"; exit 1; }
+  SCRIPT_BEFORE="$(git rev-parse HEAD:deploy.sh)"
+  git pull origin "$DEPLOY_BRANCH" || { echo "❌ git pull failed. Stash or discard local changes (e.g. git checkout -- package-lock.json) and try again."; exit 1; }
+  # Bash reads this file lazily, so if the pull just changed deploy.sh the rest of THIS run would still execute
+  # the old copy. Re-exec the fresh script (without pulling again) so the deploy uses the steps that match the code.
+  if [ "$(git rev-parse HEAD:deploy.sh)" != "$SCRIPT_BEFORE" ]; then
+    echo "🔁 deploy.sh changed in this pull — restarting with the new version..."
+    DEPLOY_PULLED=1 exec bash "$0" "$@"
+  fi
+fi
 
 # Check if .env exists, if not create from template
 if [ ! -f .env ]; then
@@ -88,3 +98,6 @@ echo "✅ Deployment complete!"
 echo "🌐 App URL: set NEXTAUTH_URL in .env (e.g. https://oneonone.wliq.ai)"
 echo "📋 SSL: see deploy/SSL-SETUP.md and use deploy/nginx-ssl.conf on this server"
 echo ""
+}
+
+main "$@"
