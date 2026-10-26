@@ -70,7 +70,7 @@ function envDefaults(provider?: AiProvider): SystemSettings {
     openaiApiKey: envApiKey(envProvider),
     openaiModel: envProvider === 'OPENROUTER' ? 'openai/gpt-4o' : 'gpt-4o',
     aiFastModel: envProvider === 'OPENROUTER' ? 'openai/gpt-4o-mini' : 'gpt-4o-mini',
-    whisperModel: envProvider === 'OPENROUTER' ? 'openai/whisper-1' : 'whisper-1',
+    whisperModel: envProvider === 'OPENROUTER' ? 'openai/gpt-4o-transcribe' : 'gpt-4o-transcribe',
     awsRegion: process.env.AWS_REGION || null,
     awsAccessKeyId: process.env.AWS_ACCESS_KEY_ID || null,
     awsSecretKey: process.env.AWS_SECRET_ACCESS_KEY || null,

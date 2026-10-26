@@ -16,6 +16,7 @@ describe('normalizeModelId', () => {
     ['OPENROUTER', 'openai/gpt-4o', 'openai/gpt-4o'],
     ['OPENROUTER', 'anthropic/claude-sonnet-4.5', 'anthropic/claude-sonnet-4.5'],
     ['OPENROUTER', 'whisper-1', 'openai/whisper-1'],
+    ['OPENROUTER', 'gpt-4o-transcribe', 'openai/gpt-4o-transcribe'],
     ['OPENAI', 'openai/gpt-4o', 'gpt-4o'],
     ['OPENAI', 'gpt-4o', 'gpt-4o'],
     ['OPENAI', 'anthropic/claude', 'anthropic/claude'],
@@ -50,7 +51,7 @@ describe('getAiConfig', () => {
     process.env.OPENAI_API_KEY = 'sk-env'
     prismaMock.systemSettings.findUnique.mockResolvedValue(null)
     const c = await getAiConfig()
-    expect(c).toMatchObject({ provider: 'OPENAI', apiKey: 'sk-env', baseURL: PROVIDERS.OPENAI.baseURL, chatModel: 'gpt-4o', fastModel: 'gpt-4o-mini', sttModel: 'whisper-1' })
+    expect(c).toMatchObject({ provider: 'OPENAI', apiKey: 'sk-env', baseURL: PROVIDERS.OPENAI.baseURL, chatModel: 'gpt-4o', fastModel: 'gpt-4o-mini', sttModel: 'gpt-4o-transcribe' })
     expect(c.sttSegmentSeconds).toBe(40 * 60)
   })
   it('AI_PROVIDER=openrouter env switches defaults and key source', async () => {
@@ -58,7 +59,7 @@ describe('getAiConfig', () => {
     process.env.OPENROUTER_API_KEY = 'sk-or-env'
     prismaMock.systemSettings.findUnique.mockResolvedValue(null)
     const c = await getAiConfig()
-    expect(c).toMatchObject({ provider: 'OPENROUTER', apiKey: 'sk-or-env', baseURL: PROVIDERS.OPENROUTER.baseURL, chatModel: 'openai/gpt-4o', sttModel: 'openai/whisper-1' })
+    expect(c).toMatchObject({ provider: 'OPENROUTER', apiKey: 'sk-or-env', baseURL: PROVIDERS.OPENROUTER.baseURL, chatModel: 'openai/gpt-4o', sttModel: 'openai/gpt-4o-transcribe' })
     expect(c.sttSegmentSeconds).toBe(10 * 60)
   })
   it('DB row with provider switched but bare OpenAI model ids gets them prefixed', async () => {

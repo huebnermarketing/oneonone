@@ -245,7 +245,7 @@ model SystemSettings {
   // Cheaper model for high-volume, low-stakes calls (transcript search)
   aiFastModel               String       @default("gpt-4o-mini")
   // Speech-to-text model (whisper-1, or openai/whisper-1 on OpenRouter)
-  whisperModel              String       @default("whisper-1")
+  whisperModel              String       @default("gpt-4o-transcribe")
   awsRegion                 String?
   awsAccessKeyId            String?
   awsSecretKey              String?

@@ -27,7 +27,7 @@ export const PROVIDERS: Record<AiProvider, ProviderSpec> = {
   OPENAI: {
     label: 'OpenAI',
     baseURL: 'https://api.openai.com/v1',
-    defaults: { chat: 'gpt-4o', fast: 'gpt-4o-mini', stt: 'whisper-1' },
+    defaults: { chat: 'gpt-4o', fast: 'gpt-4o-mini', stt: 'gpt-4o-transcribe' },
     sttSegmentSeconds: 40 * 60,
     keyHint: 'sk-…',
     keyUrl: 'https://platform.openai.com/api-keys',
@@ -35,7 +35,7 @@ export const PROVIDERS: Record<AiProvider, ProviderSpec> = {
   OPENROUTER: {
     label: 'OpenRouter',
     baseURL: 'https://openrouter.ai/api/v1',
-    defaults: { chat: 'openai/gpt-4o', fast: 'openai/gpt-4o-mini', stt: 'openai/whisper-1' },
+    defaults: { chat: 'openai/gpt-4o', fast: 'openai/gpt-4o-mini', stt: 'openai/gpt-4o-transcribe' },
     sttSegmentSeconds: 10 * 60,
     keyHint: 'sk-or-v1-…',
     keyUrl: 'https://openrouter.ai/keys',

@@ -26,14 +26,14 @@ const PROVIDER_META: Record<AiProvider, { label: string; blurb: string; keyUrl: 
     blurb: 'Direct OpenAI account. GPT models for analysis, Whisper for transcription.',
     keyUrl: 'https://platform.openai.com/api-keys',
     keyHint: 'sk-…',
-    defaults: { chat: 'gpt-4o', fast: 'gpt-4o-mini', stt: 'whisper-1' },
+    defaults: { chat: 'gpt-4o', fast: 'gpt-4o-mini', stt: 'gpt-4o-transcribe' },
   },
   OPENROUTER: {
     label: 'OpenRouter',
     blurb: 'One key for OpenAI, Anthropic, Google and more — pick a different model per job.',
     keyUrl: 'https://openrouter.ai/keys',
     keyHint: 'sk-or-v1-…',
-    defaults: { chat: 'openai/gpt-4o', fast: 'openai/gpt-4o-mini', stt: 'openai/whisper-1' },
+    defaults: { chat: 'openai/gpt-4o', fast: 'openai/gpt-4o-mini', stt: 'openai/gpt-4o-transcribe' },
   },
 }
 
@@ -99,12 +99,12 @@ function ModelPicker({
 }
 
 export function AiProviderSection({ initial, onSaved }: { initial: AiSettings | null; onSaved: (s: AiSettings) => void }) {
-  const [provider, setProvider] = useState<AiProvider>(initial?.aiProvider || 'OPENAI')
+  const [provider, setProvider] = useState<AiProvider>(initial?.aiProvider && PROVIDER_META[initial.aiProvider] ? initial.aiProvider : 'OPENAI')
   const [apiKey, setApiKey] = useState('')
   const [showKey, setShowKey] = useState(false)
   const [chatModel, setChatModel] = useState(initial?.openaiModel || 'gpt-4o')
   const [fastModel, setFastModel] = useState(initial?.aiFastModel || 'gpt-4o-mini')
-  const [sttModel, setSttModel] = useState(initial?.whisperModel || 'whisper-1')
+  const [sttModel, setSttModel] = useState(initial?.whisperModel || 'gpt-4o-transcribe')
   const [chatOptions, setChatOptions] = useState<ModelOption[]>([])
   const [sttOptions, setSttOptions] = useState<ModelOption[]>([])
   const [loadingModels, setLoadingModels] = useState(false)
@@ -113,7 +113,7 @@ export function AiProviderSection({ initial, onSaved }: { initial: AiSettings | 
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const keySet = !!initial?.openaiApiKeySet
-  const meta = PROVIDER_META[provider]
+  const meta = PROVIDER_META[provider] ?? PROVIDER_META.OPENAI
   const providerChanged = initial ? provider !== initial.aiProvider : false
 
   const fetchModels = useCallback(async () => {
@@ -135,7 +135,7 @@ export function AiProviderSection({ initial, onSaved }: { initial: AiSettings | 
 
   useEffect(() => {
     if (initial) {
-      setProvider(initial.aiProvider)
+      if (initial.aiProvider && PROVIDER_META[initial.aiProvider]) setProvider(initial.aiProvider)
       setChatModel(initial.openaiModel)
       setFastModel(initial.aiFastModel)
       setSttModel(initial.whisperModel)
@@ -292,7 +292,7 @@ export function AiProviderSection({ initial, onSaved }: { initial: AiSettings | 
         />
         <ModelPicker
           label="Transcription model"
-          hint={provider === 'OPENROUTER' ? 'Speech-to-text. OpenRouter proxies Whisper, Deepgram, Google and others; openai/whisper-1 is the safe default.' : 'Speech-to-text. Whisper supports 50+ languages including Hindi, Gujarati, English.'}
+          hint={provider === 'OPENROUTER' ? 'Speech-to-text. openai/gpt-4o-transcribe is the recommended default — markedly better than whisper-1 on Hindi/Gujarati and far less prone to repeated-phrase hallucinations.' : 'Speech-to-text. gpt-4o-transcribe is recommended; whisper-1 is cheaper-looking but drifts scripts on Gujarati/Hindi.'}
           value={sttModel}
           onChange={setSttModel}
           options={sttOptions}
