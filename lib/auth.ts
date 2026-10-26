@@ -1,6 +1,9 @@
 import { NextAuthOptions } from 'next-auth'
 import GoogleProvider from 'next-auth/providers/google'
 import { PrismaAdapter } from '@next-auth/prisma-adapter'
+import type { Adapter, AdapterAccount } from 'next-auth/adapters'
+import { saveGoogleTokens, sealAccountTokens } from './oauth-tokens'
+import { maskEmail } from './redact'
 import { UserRole } from '@prisma/client'
 import { prisma } from './prisma'
 import { logLogin } from './audit'
@@ -37,12 +40,19 @@ async function promoteIfInitialAdmin(userId: string, email?: string | null) {
     data: { role: UserRole.SUPER_ADMIN },
   })
   if (updated.count > 0) {
-    console.info(`[NextAuth] Promoted ${email} to SUPER_ADMIN via INITIAL_ADMIN_EMAILS`)
+    console.info(`[NextAuth] Promoted ${maskEmail(email)} to SUPER_ADMIN via INITIAL_ADMIN_EMAILS`)
   }
 }
 
+/** PrismaAdapter whose linkAccount stores OAuth tokens encrypted (lib/oauth-tokens.ts). */
+const baseAdapter = PrismaAdapter(prisma)
+const encryptingAdapter: Adapter = {
+  ...baseAdapter,
+  linkAccount: (account: AdapterAccount) => baseAdapter.linkAccount!(sealAccountTokens(account)),
+}
+
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma),
+  adapter: encryptingAdapter,
   events: {
     // Runs once, right after the adapter inserts a new user
     createUser: async ({ user }) => {
@@ -56,10 +66,17 @@ export const authOptions: NextAuthOptions = {
       await promoteIfInitialAdmin(user.id, user.email)
     },
     // Runs on every sign-in (new and existing users)
-    signIn: async ({ user }) => {
+    signIn: async ({ user, account }) => {
       if (user?.id) {
         await promoteIfInitialAdmin(user.id, user.email)
         await logLogin(user.id)
+        // The adapter only writes tokens when the account is first linked. Store the fresh ones on every
+        // sign-in so a revoked/expired refresh token is replaced (prompt=consent makes Google resend it).
+        if (account?.provider === 'google') {
+          await saveGoogleTokens(user.id, account).catch((err) =>
+            console.error('[auth] failed to store Google tokens:', err instanceof Error ? err.message : err)
+          )
+        }
       }
     },
   },
@@ -149,28 +166,6 @@ export const authOptions: NextAuthOptions = {
       }
 
       return session
-    },
-    async jwt({ token, account, user }) {
-      if (account && user) {
-        token.accessToken = account.access_token
-        token.refreshToken = account.refresh_token
-        
-        // Store tokens in database for Calendar API access
-        if (account.access_token && account.refresh_token) {
-          await prisma.account.updateMany({
-            where: {
-              userId: user.id,
-              provider: 'google',
-            },
-            data: {
-              access_token: account.access_token,
-              refresh_token: account.refresh_token,
-              expires_at: account.expires_at,
-            },
-          })
-        }
-      }
-      return token
     },
   },
   pages: {

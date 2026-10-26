@@ -1,6 +1,7 @@
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses'
 import nodemailer, { type Transporter } from 'nodemailer'
 import { APP_NAME } from './constants'
+import { maskRecipients } from './redact'
 import { prisma } from './prisma'
 import { formatDateOnly, formatMeetingLong, resolveTimeZone, timeZoneAbbrev } from './dates'
 
@@ -134,7 +135,7 @@ export async function sendEmail({ to, subject: rawSubject, html, text: rawText }
         html,
         text,
       })
-      console.log(`Email sent via SMTP to ${recipients.join(', ')} [${info.messageId}]`)
+      console.log(`Email sent via SMTP to ${maskRecipients(recipients)} [${info.messageId}]`)
       return info.messageId || null
     } catch (error) {
       console.error('SMTP send error:', error)
@@ -158,7 +159,7 @@ export async function sendEmail({ to, subject: rawSubject, html, text: rawText }
         },
       })
       const response = await client.send(command)
-      console.log(`Email sent via SES to ${recipients.join(', ')} [${response.MessageId}]`)
+      console.log(`Email sent via SES to ${maskRecipients(recipients)} [${response.MessageId}]`)
       return response.MessageId || null
     } catch (error) {
       console.error('SES send error:', error)

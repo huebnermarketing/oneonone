@@ -6,6 +6,7 @@ import { DEFAULT_WORK_END, DEFAULT_WORK_START } from './timezones'
 import { MEETING_DURATION_MINUTES } from './constants'
 import { computeFreeSlots, isMeetingTimeFree, type Interval } from './free-slots'
 import { buildRecurrenceRule } from './recurring-dates'
+import { getGoogleTokens, saveGoogleTokens } from './oauth-tokens'
 
 // Create OAuth2 client
 function createOAuth2Client() {
@@ -16,42 +17,28 @@ function createOAuth2Client() {
   )
 }
 
-// Get authenticated OAuth2 client for a user
+// Get authenticated OAuth2 client for a user (tokens are stored encrypted — lib/oauth-tokens.ts)
 async function getAuthenticatedClient(userId: string) {
-  const account = await prisma.account.findFirst({
-    where: {
-      userId,
-      provider: 'google',
-    },
-  })
-
-  if (!account || !account.access_token) {
+  const tokens = await getGoogleTokens(userId)
+  if (!tokens) {
     throw new Error('No Google account linked for this user')
   }
 
   const oauth2Client = createOAuth2Client()
-  
   oauth2Client.setCredentials({
-    access_token: account.access_token,
-    refresh_token: account.refresh_token,
-    expiry_date: account.expires_at ? account.expires_at * 1000 : undefined,
+    access_token: tokens.accessToken,
+    refresh_token: tokens.refreshToken ?? undefined,
+    expiry_date: tokens.expiryDate ?? undefined,
   })
 
-  // Set up token refresh handler
-  oauth2Client.on('tokens', async (tokens) => {
-    if (tokens.access_token) {
-      await prisma.account.updateMany({
-        where: {
-          userId,
-          provider: 'google',
-        },
-        data: {
-          access_token: tokens.access_token,
-          expires_at: tokens.expiry_date ? Math.floor(tokens.expiry_date / 1000) : null,
-          ...(tokens.refresh_token && { refresh_token: tokens.refresh_token }),
-        },
-      })
-    }
+  // googleapis refreshes expired access tokens itself; persist what it gets back
+  oauth2Client.on('tokens', (fresh) => {
+    saveGoogleTokens(userId, {
+      access_token: fresh.access_token,
+      refresh_token: fresh.refresh_token,
+      id_token: fresh.id_token,
+      expires_at: fresh.expiry_date ? Math.floor(fresh.expiry_date / 1000) : null,
+    }).catch((err) => console.error(`[google-calendar] failed to store refreshed tokens for user ${userId}:`, err instanceof Error ? err.message : err))
   })
 
   return oauth2Client
@@ -283,14 +270,9 @@ export async function deleteCalendarEvent(googleEventId: string, userId: string)
 // Check if calendar integration is available for a user
 export async function isCalendarEnabled(userId: string): Promise<boolean> {
   try {
-    const account = await prisma.account.findFirst({
-      where: {
-        userId,
-        provider: 'google',
-      },
-    })
-
-    return !!(account?.access_token && account?.refresh_token)
+    // Usable = tokens present AND decryptable (a refresh token is what keeps the connection alive)
+    const tokens = await getGoogleTokens(userId)
+    return !!(tokens?.accessToken && tokens.refreshToken)
   } catch (e) {
     console.error('Error checking calendar status:', e)
     return false
