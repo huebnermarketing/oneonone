@@ -1,9 +1,9 @@
-import { requireAdmin } from '@/lib/auth-helpers'
+import { requirePageAdmin } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { BackupClient } from './backup-client'
 
 export default async function BackupPage() {
-  await requireAdmin()
+  await requirePageAdmin()
 
   const backups = await prisma.backupHistory.findMany({
     orderBy: { startedAt: 'desc' },

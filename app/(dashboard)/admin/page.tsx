@@ -1,4 +1,4 @@
-import { requireAdmin } from '@/lib/auth-helpers'
+import { requirePageAdmin } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { UserRole } from '@prisma/client'
 import { UserManagement } from './user-management'
@@ -8,7 +8,7 @@ import { BulkImport } from '@/components/admin/bulk-import'
 import { isS3Configured } from '@/lib/s3'
 
 export default async function AdminPage() {
-  await requireAdmin()
+  await requirePageAdmin()
 
   const [users, departments, recordingStats, s3Configured] = await Promise.all([
     prisma.user.findMany({

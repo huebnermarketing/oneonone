@@ -96,15 +96,23 @@ const LogoMark = ({ className }: { className: string }) => (
   </svg>
 )
 
-export function Sidebar() {
+/** Server-known user, so name/avatar/role-gated nav render on first paint instead of after the client session fetch. */
+export interface SidebarUser {
+  name?: string | null
+  image?: string | null
+  role?: UserRole | string | null
+}
+
+export function Sidebar({ initialUser }: { initialUser?: SidebarUser }) {
   const pathname = usePathname()
   const { data: session } = useSession()
+  const sessionUser = session?.user ?? initialUser
   const [isMobileOpen, setIsMobileOpen] = useState(false)
   const { theme, toggleTheme } = useTheme()
   // Single poller shared by the mobile and desktop bells
   const notificationStore = useNotifications()
 
-  const userRole = session?.user?.role as UserRole | undefined
+  const userRole = (sessionUser?.role ?? undefined) as UserRole | undefined
   const isAdmin = userRole === UserRole.SUPER_ADMIN
 
   const mainItems = visibleTo(NAV_ITEMS, userRole)
@@ -178,13 +186,13 @@ export function Sidebar() {
           variant === 'desktop' && 'hover:bg-off-white/80 dark:hover:bg-dark-gray/80 transition-colors'
         )}
       >
-        <Avatar name={session?.user?.name} src={session?.user?.image} alt="" className="bg-gradient-to-br from-charcoal to-medium-gray dark:from-medium-gray dark:to-charcoal text-white dark:text-white" />
+        <Avatar name={sessionUser?.name} src={sessionUser?.image} alt="" className="bg-gradient-to-br from-charcoal to-medium-gray dark:from-medium-gray dark:to-charcoal text-white dark:text-white" />
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-dark-gray dark:text-white truncate">
-            {session?.user?.name}
+            {sessionUser?.name}
           </p>
           <p className="text-xs text-medium-gray truncate capitalize">
-            {session?.user?.role?.toLowerCase().replace('_', ' ')}
+            {sessionUser?.role?.toLowerCase().replace('_', ' ')}
           </p>
         </div>
         <UserCircle className="w-4 h-4 text-medium-gray" aria-hidden="true" />

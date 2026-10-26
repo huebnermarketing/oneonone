@@ -1,17 +1,10 @@
-import { getCurrentUser } from '@/lib/auth-helpers'
-import { notFound } from 'next/navigation'
+import { requirePageRole } from '@/lib/auth-helpers'
 import { UserRole } from '@prisma/client'
 import { InsightsClient } from './insights-client'
 import { prisma } from '@/lib/prisma'
 
 export default async function InsightsPage() {
-  const user = await getCurrentUser()
-  if (!user) return notFound()
-
-  // Only reporters and super admins can access insights
-  if (user.role !== UserRole.REPORTER && user.role !== UserRole.SUPER_ADMIN) {
-    return notFound()
-  }
+  const user = await requirePageRole([UserRole.REPORTER, UserRole.SUPER_ADMIN])
 
   // Get departments for filter
   const departments = await prisma.department.findMany({
