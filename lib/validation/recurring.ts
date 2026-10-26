@@ -27,5 +27,5 @@ export const updateRecurringScheduleSchema = z.object({
 })
 
 export const deleteRecurringQuery = z.object({
-  cancelFutureMeetings: boolString.optional().default('true'),
+  cancelFutureMeetings: boolString.optional().default(true),
 })

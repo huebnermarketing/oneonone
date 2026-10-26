@@ -18,9 +18,9 @@ export const restoreSchema = z.object({
   data: z.object({
     version: z.string(),
     data: z.object({
-      departments: z.array(z.record(z.unknown())).optional().default([]),
-      users: z.array(z.record(z.unknown())).optional().default([]),
-      meetings: z.array(z.record(z.unknown())).optional().default([]),
+      departments: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+      users: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+      meetings: z.array(z.record(z.string(), z.unknown())).optional().default([]),
     }),
   }),
   options: z
@@ -29,7 +29,8 @@ export const restoreSchema = z.object({
       restoreUsers: z.boolean().default(true),
       restoreMeetings: z.boolean().default(true),
     })
-    .default({}),
+    // v4: .default() returns the value as-is (inner defaults would be skipped); .prefault() parses it
+    .prefault({}),
 })
 
 export const clearDataSchema = z.object({
