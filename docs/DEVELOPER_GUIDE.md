@@ -88,7 +88,7 @@ Mic recording requires a secure context (`localhost` counts; LAN IPs do not).
 | Unit (vitest) | `tests/unit/*.test.ts` — meeting state machine, access predicates, conflict check, team scoping, recurring-date math, encryption, Fathom signature, API wrapper/error mapping, every zod schema | `npm test`; no DB, `@/lib/prisma` is replaced by `tests/helpers/prisma-mock.ts` |
 | API smoke (bash) | `scripts/smoke-api.sh` — logs in as seeded users by inserting `Session` rows, exercises auth mapping, validation, scoping, cancel policy, recording visibility, cron, pages; restores fixtures afterwards | `npm run test:smoke` against `http://localhost:3000` (override `BASE_URL`) |
 | CI | `.github/workflows/ci.yml` | PRs/pushes to `stage` and `main` |
-| Deploy gate | `deploy.sh` runs typecheck + unit tests before building (`SKIP_CHECKS=1` to bypass in an emergency) | on the server |
+| Deploy gate | opt-in: `RUN_CHECKS=1 bash deploy.sh` runs typecheck + unit tests before building (off by default — CI is the gate; `tsc` OOMs on small servers) | on the server |
 
 Conventions: one test file per `lib/` module; program `prismaMock.<model>.<method>.mockResolvedValue(...)` per test; pass mock implementations to `vi.fn(impl)` (the config restores mocks between tests); spy on `console.error` when a test exercises a logged failure path.
 
