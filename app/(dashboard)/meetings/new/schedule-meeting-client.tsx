@@ -1,15 +1,18 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useId } from 'react'
 import { useRouter } from 'next/navigation'
-import Link from 'next/link'
-import { Calendar, Repeat, ArrowLeft, Loader2, Check, AlertCircle, Clock, Search, User, Video, MapPin } from 'lucide-react'
+import { Calendar, Repeat, ArrowLeft, Loader2, Check, AlertCircle, Clock, Video, MapPin } from 'lucide-react'
 import { RecurringFrequency } from '@prisma/client'
 import { NewMeetingForm } from './new-meeting-form'
 import { useToast } from '@/components/ui/toast'
+import { Select } from '@/components/ui/select'
+import { EmployeePicker } from '@/components/forms/employee-picker'
+import { SlotGrid } from '@/components/forms/slot-grid'
 import { useFormat } from '@/components/providers/timezone-provider'
-
-const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+import { DAY_NAMES } from '@/lib/ui'
+import { DEFAULT_TIMEZONE } from '@/lib/dates'
+import { getNextOccurrenceDate, slotToTimeInTz, type FreeSlot } from '@/lib/slots'
 
 const frequencyOptions: { value: RecurringFrequency; label: string }[] = [
   { value: 'WEEKLY', label: 'Weekly' },
@@ -17,41 +20,24 @@ const frequencyOptions: { value: RecurringFrequency; label: string }[] = [
   { value: 'MONTHLY', label: 'Monthly' },
 ]
 
-interface FreeSlot { start: string; end: string }
-
-function getNextOccurrenceDate(dayOfWeek: number): string {
-  const now = new Date()
-  const currentDay = now.getDay()
-  let daysUntil = dayOfWeek - currentDay
-  if (daysUntil < 0 || (daysUntil === 0 && now.getHours() >= 18)) daysUntil += 7
-  const next = new Date(now)
-  next.setDate(now.getDate() + daysUntil)
-  const y = next.getFullYear()
-  const m = String(next.getMonth() + 1).padStart(2, '0')
-  const d = String(next.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
-}
-
-function slotToTimeInTz(slotStartIso: string, timeZone: string): string {
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone,
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: false,
-  }).format(new Date(slotStartIso))
-}
-
 interface ScheduleMeetingClientProps {
   employees: Array<{ id: string; name: string; email: string }>
   currentUserId: string
+  /** Viewer's work hours ("HH:mm") — passed through to the one-time form's fallback grid. */
+  workDayStart?: string | null
+  workDayEnd?: string | null
 }
 
 type ScheduleType = 'one-time' | 'recurring'
 
-export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeetingClientProps) {
+export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, workDayEnd }: ScheduleMeetingClientProps) {
   const router = useRouter()
   const { toastError } = useToast()
   const f = useFormat()
+  const frequencyId = useId()
+  const dayOfWeekId = useId()
+  const meetingLinkId = useId()
+  const slotsHeadingId = useId()
   const [scheduleType, setScheduleType] = useState<ScheduleType | null>(null)
   const [recurringLoading, setRecurringLoading] = useState(false)
   const [recurringForm, setRecurringForm] = useState({
@@ -66,17 +52,7 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
   const [recurringSlots, setRecurringSlots] = useState<FreeSlot[]>([])
   const [recurringSlotsLoading, setRecurringSlotsLoading] = useState(false)
   const [recurringWorkingHoursLabel, setRecurringWorkingHoursLabel] = useState<string | null>(null)
-  const [reporterTimeZone, setReporterTimeZone] = useState<string>('Asia/Kolkata')
-
-  const [recurringEmployeeSearch, setRecurringEmployeeSearch] = useState('')
-
-  const filteredRecurringEmployees = useMemo(() => {
-    const q = recurringEmployeeSearch.trim().toLowerCase()
-    if (!q) return employees
-    return employees.filter(
-      (e) => e.name.toLowerCase().includes(q) || e.email.toLowerCase().includes(q)
-    )
-  }, [employees, recurringEmployeeSearch])
+  const [reporterTimeZone, setReporterTimeZone] = useState<string>(DEFAULT_TIMEZONE)
 
   const [recurringAvailabilityLoading, setRecurringAvailabilityLoading] = useState(false)
   const [recurringAvailability, setRecurringAvailability] = useState<{
@@ -96,7 +72,8 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
     let cancelled = false
     setRecurringSlotsLoading(true)
     setRecurringSlots([])
-    const date = getNextOccurrenceDate(recurringForm.dayOfWeek)
+    // Which day's availability to fetch is decided on the VIEWER's calendar, not the browser's
+    const date = getNextOccurrenceDate(recurringForm.dayOfWeek, f.timeZone)
     fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(recurringForm.employeeId)}&date=${encodeURIComponent(date)}`)
       .then((res) => res.json())
       .then((data) => {
@@ -104,15 +81,21 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
         if (!data.calendarUnavailable && Array.isArray(data.slots)) {
           setRecurringSlots(data.slots)
           setRecurringWorkingHoursLabel(data.workingHoursLabel ?? null)
-          setReporterTimeZone(data.reporterTimeZone ?? 'Asia/Kolkata')
+          setReporterTimeZone(data.reporterTimeZone ?? DEFAULT_TIMEZONE)
         } else {
           setRecurringSlots([])
           setRecurringWorkingHoursLabel(null)
         }
       })
+      .catch(() => {
+        if (cancelled) return
+        setRecurringSlots([])
+        setRecurringWorkingHoursLabel(null)
+        toastError('Failed to load available slots')
+      })
       .finally(() => { if (!cancelled) setRecurringSlotsLoading(false) })
     return () => { cancelled = true }
-  }, [recurringForm.employeeId, recurringForm.dayOfWeek])
+  }, [recurringForm.employeeId, recurringForm.dayOfWeek, f.timeZone, toastError])
 
   // Check first-occurrence availability when time is selected
   const fetchRecurringAvailability = useCallback(async () => {
@@ -137,10 +120,11 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
       }
     } catch {
       setRecurringAvailability(null)
+      toastError('Failed to check availability')
     } finally {
       setRecurringAvailabilityLoading(false)
     }
-  }, [recurringForm.employeeId, recurringForm.dayOfWeek, recurringForm.timeOfDay, recurringForm.frequency])
+  }, [recurringForm.employeeId, recurringForm.dayOfWeek, recurringForm.timeOfDay, recurringForm.frequency, toastError])
 
   useEffect(() => {
     if (recurringForm.employeeId && recurringForm.timeOfDay) {
@@ -149,6 +133,12 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
       setRecurringAvailability(null)
     }
   }, [recurringForm.employeeId, recurringForm.dayOfWeek, recurringForm.timeOfDay, recurringForm.frequency, fetchRecurringAvailability])
+
+  // The grid works in slot instants; the schedule stores "HH:mm" in the reporter's zone
+  const selectedSlotIso = useMemo(
+    () => recurringSlots.find((s) => slotToTimeInTz(s.start, reporterTimeZone) === recurringForm.timeOfDay)?.start ?? null,
+    [recurringSlots, reporterTimeZone, recurringForm.timeOfDay]
+  )
 
   const handleRecurringSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -190,7 +180,7 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
           onClick={() => router.back()}
           className="flex items-center gap-2 text-medium-gray hover:text-dark-gray dark:hover:text-white mb-6 transition-colors"
         >
-          <ArrowLeft className="w-4 h-4" />
+          <ArrowLeft className="w-4 h-4" aria-hidden="true" />
           <span>Back to meetings</span>
         </button>
 
@@ -202,7 +192,7 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
             onClick={() => setScheduleType('one-time')}
             className="flex flex-col items-start gap-3 p-6 rounded-2xl border-2 border-light-gray/40 dark:border-medium-gray/40 hover:border-dark-gray dark:hover:border-white hover:bg-off-white/50 dark:hover:bg-charcoal/50 transition-all text-left"
           >
-            <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center">
+            <div className="w-12 h-12 rounded-xl bg-blue-500/10 flex items-center justify-center" aria-hidden="true">
               <Calendar className="w-6 h-6 text-blue-500" />
             </div>
             <div>
@@ -216,7 +206,7 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
             onClick={() => setScheduleType('recurring')}
             className="flex flex-col items-start gap-3 p-6 rounded-2xl border-2 border-light-gray/40 dark:border-medium-gray/40 hover:border-dark-gray dark:hover:border-white hover:bg-off-white/50 dark:hover:bg-charcoal/50 transition-all text-left"
           >
-            <div className="w-12 h-12 rounded-xl bg-green-500/10 flex items-center justify-center">
+            <div className="w-12 h-12 rounded-xl bg-green-500/10 flex items-center justify-center" aria-hidden="true">
               <Repeat className="w-6 h-6 text-green-500" />
             </div>
             <div>
@@ -238,10 +228,10 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
           onClick={() => setScheduleType(null)}
           className="flex items-center gap-2 text-medium-gray hover:text-dark-gray dark:hover:text-white mb-6 transition-colors"
         >
-          <ArrowLeft className="w-4 h-4" />
+          <ArrowLeft className="w-4 h-4" aria-hidden="true" />
           <span>Back</span>
         </button>
-        <NewMeetingForm employees={employees} currentUserId={currentUserId} />
+        <NewMeetingForm employees={employees} currentUserId={currentUserId} workDayStart={workDayStart} workDayEnd={workDayEnd} />
       </div>
     )
   }
@@ -254,13 +244,13 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
         onClick={() => setScheduleType(null)}
         className="flex items-center gap-2 text-medium-gray hover:text-dark-gray dark:hover:text-white mb-6 transition-colors"
       >
-        <ArrowLeft className="w-4 h-4" />
+        <ArrowLeft className="w-4 h-4" aria-hidden="true" />
         <span>Back</span>
       </button>
 
       <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">
         <div className="px-6 py-4 border-b border-off-white dark:border-medium-gray/20 flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center">
+          <div className="w-10 h-10 rounded-xl bg-green-500/10 flex items-center justify-center" aria-hidden="true">
             <Repeat className="w-5 h-5 text-green-500" />
           </div>
           <div>
@@ -270,129 +260,71 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
         </div>
 
         <form onSubmit={handleRecurringSubmit} className="p-6 space-y-6">
-          {/* Team Member search + list */}
-          <div className="rounded-xl border border-off-white dark:border-medium-gray/20 overflow-hidden flex flex-col max-h-[280px]">
-            <div className="px-4 py-3 border-b border-off-white dark:border-medium-gray/20 flex items-center gap-3 shrink-0">
-              <div className="w-9 h-9 rounded-full bg-blue-500/10 flex items-center justify-center shrink-0">
-                <User className="w-4 h-4 text-blue-500" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="font-semibold text-dark-gray dark:text-white text-sm">Select Team Member</p>
-                <p className="text-xs text-medium-gray truncate">Search by name or email</p>
-              </div>
-            </div>
-            <div className="px-3 py-2.5 border-b border-off-white dark:border-medium-gray/20 shrink-0">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-medium-gray pointer-events-none" />
-                <input
-                  type="text"
-                  value={recurringEmployeeSearch}
-                  onChange={(e) => setRecurringEmployeeSearch(e.target.value)}
-                  placeholder="Search by name or email..."
-                  className="w-full pl-9 pr-4 py-2 rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white dark:bg-charcoal text-dark-gray dark:text-white placeholder:text-medium-gray focus:outline-none focus:ring-2 focus:ring-dark-gray/20 dark:focus:ring-white/20 text-sm"
-                />
-              </div>
-            </div>
-            <div className="p-3 overflow-y-auto min-h-0 flex-1">
-              {employees.length === 0 ? (
-                <div className="text-center py-4">
-                  <User className="w-8 h-8 text-light-gray mx-auto mb-1" />
-                  <p className="text-xs text-medium-gray">No team members available</p>
-                </div>
-              ) : filteredRecurringEmployees.length === 0 ? (
-                <p className="text-xs text-medium-gray text-center py-3">No matches for &quot;{recurringEmployeeSearch}&quot;</p>
-              ) : (
-                <div className="grid gap-1.5">
-                  {filteredRecurringEmployees.map((emp) => (
-                    <button
-                      key={emp.id}
-                      type="button"
-                      onClick={() => setRecurringForm({ ...recurringForm, employeeId: emp.id })}
-                      className={`flex items-center gap-3 p-2.5 rounded-xl border text-left transition-all ${
-                        recurringForm.employeeId === emp.id
-                          ? 'border-dark-gray dark:border-white bg-dark-gray/5 dark:bg-white/5'
-                          : 'border-off-white dark:border-medium-gray/20 hover:border-medium-gray dark:hover:border-medium-gray/40'
-                      }`}
-                    >
-                      <div className="w-8 h-8 rounded-full bg-off-white dark:bg-dark-gray flex items-center justify-center shrink-0">
-                        <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
-                          {emp.name.split(' ').map((n) => n[0]).join('').slice(0, 2)}
-                        </span>
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <p className="font-medium text-dark-gray dark:text-white text-sm truncate">{emp.name}</p>
-                        <p className="text-xs text-medium-gray truncate">{emp.email}</p>
-                      </div>
-                      {recurringForm.employeeId === emp.id && (
-                        <div className="w-5 h-5 rounded-full bg-dark-gray dark:bg-white flex items-center justify-center shrink-0">
-                          <Check className="w-3 h-3 text-white dark:text-dark-gray" />
-                        </div>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
+          <EmployeePicker
+            employees={employees}
+            value={recurringForm.employeeId || null}
+            onChange={(id) => setRecurringForm({ ...recurringForm, employeeId: id })}
+            title="Select Team Member"
+            description="Search by name or email"
+          />
 
           <div className="grid gap-6 sm:grid-cols-2">
             <div>
-              <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
+              <label htmlFor={frequencyId} className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
                 Frequency
               </label>
-              <select
+              <Select
+                id={frequencyId}
                 value={recurringForm.frequency}
-                onChange={(e) =>
-                  setRecurringForm({ ...recurringForm, frequency: e.target.value as RecurringFrequency })
-                }
-                className="w-full rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-charcoal px-4 py-3 text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-dark-gray/20 dark:focus:ring-white/20"
+                onChange={(e) => setRecurringForm({ ...recurringForm, frequency: e.target.value as RecurringFrequency })}
+                className="py-3 text-base"
               >
                 {frequencyOptions.map((opt) => (
                   <option key={opt.value} value={opt.value}>
                     {opt.label}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
+              <label htmlFor={dayOfWeekId} className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
                 Day of week
               </label>
-              <select
+              <Select
+                id={dayOfWeekId}
                 value={recurringForm.dayOfWeek}
-                onChange={(e) =>
-                  setRecurringForm({ ...recurringForm, dayOfWeek: parseInt(e.target.value, 10) })
-                }
-                className="w-full rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-charcoal px-4 py-3 text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-dark-gray/20 dark:focus:ring-white/20"
+                onChange={(e) => setRecurringForm({ ...recurringForm, dayOfWeek: parseInt(e.target.value, 10) })}
+                className="py-3 text-base"
               >
-                {dayNames.map((day, i) => (
+                {DAY_NAMES.map((day, i) => (
                   <option key={day} value={i}>
                     {day}
                   </option>
                 ))}
-              </select>
+              </Select>
             </div>
           </div>
 
           <div className="rounded-2xl border border-off-white dark:border-medium-gray/20 p-4 sm:p-5">
             <p className="font-semibold text-dark-gray dark:text-white mb-3">Meeting type</p>
-            <div className="flex gap-3 mb-4">
+            <div className="flex gap-3 mb-4" role="radiogroup" aria-label="Meeting type">
               <label className={`flex-1 flex items-center gap-2 p-3 rounded-xl border cursor-pointer transition-all ${recurringForm.meetingType === 'IN_PERSON' ? 'border-dark-gray dark:border-white bg-dark-gray/5 dark:bg-white/5' : 'border-off-white dark:border-medium-gray/20'}`}>
                 <input type="radio" name="recurringMeetingType" checked={recurringForm.meetingType === 'IN_PERSON'} onChange={() => setRecurringForm({ ...recurringForm, meetingType: 'IN_PERSON', meetingLink: '' })} className="sr-only" />
-                <MapPin className="w-4 h-4 text-medium-gray" />
+                <MapPin className="w-4 h-4 text-medium-gray" aria-hidden="true" />
                 <span className="text-sm font-medium text-dark-gray dark:text-white">In person</span>
               </label>
               <label className={`flex-1 flex items-center gap-2 p-3 rounded-xl border cursor-pointer transition-all ${recurringForm.meetingType === 'ZOOM' ? 'border-dark-gray dark:border-white bg-dark-gray/5 dark:bg-white/5' : 'border-off-white dark:border-medium-gray/20'}`}>
                 <input type="radio" name="recurringMeetingType" checked={recurringForm.meetingType === 'ZOOM'} onChange={() => setRecurringForm({ ...recurringForm, meetingType: 'ZOOM' })} className="sr-only" />
-                <Video className="w-4 h-4 text-medium-gray" />
+                <Video className="w-4 h-4 text-medium-gray" aria-hidden="true" />
                 <span className="text-sm font-medium text-dark-gray dark:text-white">Over Zoom</span>
               </label>
             </div>
             {recurringForm.meetingType === 'ZOOM' && (
               <div>
-                <label className="block text-sm font-medium text-dark-gray dark:text-white mb-1.5">Meeting invite <span className="text-red-500">*</span></label>
+                <label htmlFor={meetingLinkId} className="block text-sm font-medium text-dark-gray dark:text-white mb-1.5">Meeting invite <span className="text-red-500">*</span></label>
                 <input
+                  id={meetingLinkId}
                   type="url"
                   value={recurringForm.meetingLink}
                   onChange={(e) => setRecurringForm({ ...recurringForm, meetingLink: e.target.value })}
@@ -407,55 +339,43 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
           {recurringForm.employeeId && recurringForm.dayOfWeek != null && (
             <div className="rounded-2xl border border-off-white dark:border-medium-gray/20 p-4 sm:p-5">
               <div className="flex items-center gap-3 mb-1">
-                <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-500/20 flex items-center justify-center">
+                <div className="w-9 h-9 rounded-full bg-purple-100 dark:bg-purple-500/20 flex items-center justify-center" aria-hidden="true">
                   <Clock className="w-5 h-5 text-purple-500" />
                 </div>
                 <div>
-                  <p className="font-semibold text-dark-gray dark:text-white">Available time slots</p>
+                  <p id={slotsHeadingId} className="font-semibold text-dark-gray dark:text-white">Available time slots</p>
                   {recurringWorkingHoursLabel && (
                     <p className="text-sm text-medium-gray">{recurringWorkingHoursLabel}</p>
                   )}
                 </div>
               </div>
               {recurringSlotsLoading ? (
-                <p className="text-sm text-medium-gray flex items-center gap-2 mt-3">
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  Loading slots for next {dayNames[recurringForm.dayOfWeek]}...
+                <p className="text-sm text-medium-gray flex items-center gap-2 mt-3" role="status">
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                  Loading slots for next {DAY_NAMES[recurringForm.dayOfWeek]}...
                 </p>
-              ) : recurringSlots.length > 0 ? (
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2 mt-3">
-                  {recurringSlots.map((slot) => {
-                    const timeInTz = slotToTimeInTz(slot.start, reporterTimeZone)
-                    const isSelected = recurringForm.timeOfDay === timeInTz
-                    return (
-                      <button
-                        key={slot.start}
-                        type="button"
-                        onClick={() => setRecurringForm({ ...recurringForm, timeOfDay: timeInTz })}
-                        className={`py-2.5 px-3 rounded-xl border text-sm font-medium transition-colors ${
-                          isSelected
-                            ? 'border-orange bg-orange/10 text-orange dark:bg-orange/20'
-                            : 'border-off-white dark:border-medium-gray/20 hover:border-orange/50 text-dark-gray dark:text-white'
-                        }`}
-                      >
-                        {f.time(slot.start)}
-                      </button>
-                    )
-                  })}
-                </div>
               ) : (
-                <p className="text-sm text-medium-gray mt-3">
-                  No free slots in overlapping working hours for that day. Try a different day.
-                </p>
+                <SlotGrid
+                  slots={recurringSlots}
+                  value={selectedSlotIso}
+                  onChange={(iso) => setRecurringForm({ ...recurringForm, timeOfDay: slotToTimeInTz(iso, reporterTimeZone) })}
+                  aria-labelledby={slotsHeadingId}
+                  className="grid-cols-2 sm:grid-cols-3 md:grid-cols-4 mt-3"
+                  emptyMessage={
+                    <p className="text-sm text-medium-gray mt-3">
+                      No free slots in overlapping working hours for that day. Try a different day.
+                    </p>
+                  }
+                />
               )}
             </div>
           )}
 
           {recurringForm.employeeId && recurringForm.timeOfDay && (
-            <div className="rounded-xl border border-off-white dark:border-medium-gray/20 p-3 sm:p-4 bg-off-white/30 dark:bg-dark-gray/30">
+            <div className="rounded-xl border border-off-white dark:border-medium-gray/20 p-3 sm:p-4 bg-off-white/30 dark:bg-dark-gray/30" role="status">
               {recurringAvailabilityLoading ? (
                 <p className="text-sm text-medium-gray flex items-center gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
                   Checking both calendars...
                 </p>
               ) : recurringAvailability?.message ? (
@@ -467,7 +387,7 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
                       : 'text-amber-600 dark:text-amber-400'
                 }`}>
                   {!recurringAvailability.calendarUnavailable && recurringAvailability.available === false && (
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <AlertCircle className="w-4 h-4 flex-shrink-0" aria-hidden="true" />
                   )}
                   {recurringAvailability.message}
                 </p>
@@ -490,12 +410,12 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
             >
               {recurringLoading ? (
                 <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
                   Creating...
                 </>
               ) : (
                 <>
-                  <Check className="w-4 h-4" />
+                  <Check className="w-4 h-4" aria-hidden="true" />
                   Create recurring schedule
                 </>
               )}

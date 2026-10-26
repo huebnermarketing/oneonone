@@ -4,6 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { CheckCircle2, XCircle, Clock, Mic } from 'lucide-react'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { MeetingStatusPill, Pill } from '@/components/ui/pill'
 
 interface MeetingHistoryItem {
   id: string
@@ -94,38 +95,21 @@ export function MeetingHistoryList({ meetings }: MeetingHistoryListProps) {
 
                 <div className="flex items-center gap-1.5 flex-shrink-0">
                   {sentiment && (
-                    <span
-                      className={`hidden sm:inline px-2 py-0.5 text-[10px] font-medium rounded-full ${
-                        sentiment === 'positive'
-                          ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                          : sentiment === 'negative'
-                            ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                            : 'bg-gray-500/10 text-gray-600 dark:text-gray-400'
-                      }`}
+                    <Pill
+                      tone={sentiment === 'positive' ? 'green' : sentiment === 'negative' ? 'red' : 'neutral'}
+                      className="hidden sm:inline-flex px-2 py-0.5 text-[10px]"
                     >
                       {sentiment}
-                    </span>
+                    </Pill>
                   )}
                   {quality !== null && (
-                    <span className="hidden sm:inline px-2 py-0.5 text-[10px] font-medium rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                      Q:{quality}
-                    </span>
+                    <Pill tone="amber" className="hidden sm:inline-flex px-2 py-0.5 text-[10px]">Q:{quality}</Pill>
                   )}
-                  <span
-                    className={`px-2 py-0.5 text-[10px] sm:text-xs font-medium rounded-full ${
-                      meeting.status === 'COMPLETED'
-                        ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                        : isMissed
-                          ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                          : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                    }`}
-                  >
-                    {meeting.status === 'COMPLETED'
-                      ? 'Completed'
-                      : isMissed
-                        ? 'Missed'
-                        : 'Scheduled'}
-                  </span>
+                  {isMissed ? (
+                    <Pill tone="red" className="px-2 py-0.5 text-[10px] sm:text-xs">Missed</Pill>
+                  ) : (
+                    <MeetingStatusPill status={meeting.status} className="px-2 py-0.5 text-[10px] sm:text-xs" />
+                  )}
                 </div>
               </div>
 
@@ -143,6 +127,7 @@ export function MeetingHistoryList({ meetings }: MeetingHistoryListProps) {
       {hasMore && (
         <div className="px-4 sm:px-6 py-3 border-t border-off-white dark:border-medium-gray/20">
           <button
+            type="button"
             onClick={() => setShowAll(!showAll)}
             className="text-sm font-medium text-medium-gray hover:text-dark-gray dark:hover:text-white transition-colors"
           >

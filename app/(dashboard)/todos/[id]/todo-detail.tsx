@@ -12,7 +12,6 @@ import {
   AlertTriangle,
   User,
   FileText,
-  ChevronDown,
   Trash2,
   LinkIcon,
 } from 'lucide-react'
@@ -20,6 +19,8 @@ import { UserRole, TodoStatus, TodoPriority } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { Pill, TodoPriorityPill, TodoStatusPill, TODO_PRIORITY_META, TODO_STATUS_META } from '@/components/ui/pill'
+import { Select } from '@/components/ui/select'
 
 interface Todo {
   id: string
@@ -47,17 +48,14 @@ interface TodoDetailProps {
   userRole: UserRole
 }
 
-const statusConfig = {
-  NOT_STARTED: { label: 'Not Started', icon: Circle, color: 'text-gray-500', bg: 'bg-gray-500/10', border: 'border-gray-300 dark:border-gray-600' },
-  IN_PROGRESS: { label: 'In Progress', icon: Clock, color: 'text-blue-500', bg: 'bg-blue-500/10', border: 'border-blue-300 dark:border-blue-600' },
-  DONE: { label: 'Done', icon: CheckCircle2, color: 'text-green-500', bg: 'bg-green-500/10', border: 'border-green-300 dark:border-green-600' },
+/** Icon + text colour for the status field row (chip visuals come from TODO_STATUS_META). */
+const statusIcons: Record<TodoStatus, { icon: typeof Circle; color: string }> = {
+  NOT_STARTED: { icon: Circle, color: 'text-gray-500' },
+  IN_PROGRESS: { icon: Clock, color: 'text-blue-500' },
+  DONE: { icon: CheckCircle2, color: 'text-green-500' },
 }
 
-const priorityConfig = {
-  HIGH: { label: 'High', color: 'text-red-500', bg: 'bg-red-500/10' },
-  MEDIUM: { label: 'Medium', color: 'text-orange', bg: 'bg-orange/10' },
-  LOW: { label: 'Low', color: 'text-gray-500', bg: 'bg-gray-500/10' },
-}
+const priorityColor: Record<TodoPriority, string> = { HIGH: 'text-red-500', MEDIUM: 'text-orange', LOW: 'text-gray-500' }
 
 export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
   const router = useRouter()
@@ -68,9 +66,7 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
   const [deleting, setDeleting] = useState(false)
   const [currentStatus, setCurrentStatus] = useState(todo.status)
 
-  const status = statusConfig[currentStatus]
-  const priority = priorityConfig[todo.priority]
-  const StatusIcon = status.icon
+  const status = statusIcons[currentStatus]
   const now = new Date()
   const isOverdue = f.isTodoOverdue(todo.dueDate, currentStatus, now)
   const canEdit = todo.assignedTo.id === currentUserId || userRole === 'SUPER_ADMIN'
@@ -112,6 +108,7 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
     <div className="w-full max-w-4xl mx-auto min-w-0 space-y-5">
       {/* Back Button */}
       <button
+        type="button"
         onClick={() => router.back()}
         className="flex items-center gap-2 text-medium-gray hover:text-dark-gray dark:hover:text-white transition-colors text-sm font-medium"
       >
@@ -125,17 +122,13 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
           {todo.title}
         </h1>
         <div className="flex flex-wrap items-center gap-2 mt-2.5">
-          <span className={`px-2.5 py-0.5 text-xs font-medium rounded-full ${priority.bg} ${priority.color}`}>
-            {priority.label} Priority
-          </span>
-          <span className={`px-2.5 py-0.5 text-xs font-medium rounded-full ${status.bg} ${status.color}`}>
-            {status.label}
-          </span>
+          <TodoPriorityPill priority={todo.priority} />
+          <TodoStatusPill status={currentStatus} />
           {isOverdue && (
-            <span className="px-2.5 py-0.5 text-xs font-medium rounded-full bg-red-500/10 text-red-500 flex items-center gap-1">
-              <AlertTriangle className="w-3 h-3" />
+            <Pill tone="red">
+              <AlertTriangle className="w-3 h-3" aria-hidden="true" />
               Overdue
-            </span>
+            </Pill>
           )}
         </div>
       </div>
@@ -152,29 +145,28 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
         )}
 
         {/* Status */}
-        <FieldRow icon={statusConfig[currentStatus].icon} label="Status">
+        <FieldRow icon={status.icon} label="Status">
           {canEdit ? (
-            <div className="relative inline-block">
-              <select
-                value={currentStatus}
-                onChange={(e) => updateStatus(e.target.value as TodoStatus)}
-                disabled={updating}
-                className="appearance-none pl-3 pr-8 py-1.5 text-sm font-medium rounded-lg border border-off-white dark:border-medium-gray/20 bg-off-white/50 dark:bg-dark-gray text-dark-gray dark:text-white cursor-pointer focus:outline-none focus:ring-2 focus:ring-orange/20 disabled:opacity-50 transition-colors"
-              >
-                <option value="NOT_STARTED">Not Started</option>
-                <option value="IN_PROGRESS">In Progress</option>
-                <option value="DONE">Done</option>
-              </select>
-              <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-medium-gray pointer-events-none" />
-            </div>
+            <Select
+              value={currentStatus}
+              onChange={(e) => updateStatus(e.target.value as TodoStatus)}
+              disabled={updating}
+              aria-label="Task status"
+              wrapperClassName="inline-block"
+              className="pl-3 pr-8 py-1.5 text-sm font-medium rounded-lg cursor-pointer"
+            >
+              <option value="NOT_STARTED">Not Started</option>
+              <option value="IN_PROGRESS">In Progress</option>
+              <option value="DONE">Done</option>
+            </Select>
           ) : (
-            <span className={`text-sm font-medium ${status.color}`}>{status.label}</span>
+            <span className={`text-sm font-medium ${status.color}`}>{TODO_STATUS_META[currentStatus].label}</span>
           )}
         </FieldRow>
 
         {/* Priority */}
         <FieldRow icon={AlertTriangle} label="Priority">
-          <span className={`text-sm font-medium ${priority.color}`}>{priority.label}</span>
+          <span className={`text-sm font-medium ${priorityColor[todo.priority]}`}>{TODO_PRIORITY_META[todo.priority].label}</span>
         </FieldRow>
 
         {/* Assigned To */}
@@ -229,6 +221,7 @@ export function TodoDetail({ todo, currentUserId, userRole }: TodoDetailProps) {
       {canDelete && (
         <div>
           <button
+            type="button"
             onClick={handleDelete}
             disabled={deleting}
             title="Permanently delete this task"

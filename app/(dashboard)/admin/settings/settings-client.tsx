@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
 import { 
   Cloud, 
@@ -20,6 +20,7 @@ import {
   FileText,
   Building2
 } from 'lucide-react'
+import { useToast } from '@/components/ui/toast'
 import { PoliciesSection, type Policies } from './policies-section'
 import { AiProviderSection, type AiSettings } from './ai-provider-section'
 
@@ -34,6 +35,10 @@ interface Settings extends Policies, AiSettings {
 }
 
 export function SettingsClient() {
+  const { toastError } = useToast()
+  // Read through a ref so the mount-only effect below keeps its empty deps
+  const toastErrorRef = useRef(toastError)
+  toastErrorRef.current = toastError
   const [settings, setSettings] = useState<Settings | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -79,7 +84,7 @@ export function SettingsClient() {
         setDataCounts(data)
       }
     } catch (error) {
-      // Error handled by toast
+      toastErrorRef.current('Failed to load data counts')
     }
   }
 

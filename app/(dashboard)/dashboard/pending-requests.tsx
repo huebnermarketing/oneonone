@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { AlertCircle, Clock, ChevronRight } from 'lucide-react'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { plural } from '@/lib/ui'
 
 interface PendingMeeting {
   id: string
@@ -29,9 +30,7 @@ export function PendingRequests({ type, meetings }: PendingRequestsProps) {
           </div>
           <div>
             <h2 className="font-semibold text-dark-gray dark:text-white">
-              {meetings.length === 1
-                ? '1 meeting request awaiting your response'
-                : `${meetings.length} meeting requests awaiting your response`}
+              {plural(meetings.length, 'meeting request')} awaiting your response
             </h2>
             <p className="text-sm text-medium-gray">Accept the proposed time or suggest an alternative</p>
           </div>
@@ -79,9 +78,7 @@ export function PendingRequests({ type, meetings }: PendingRequestsProps) {
         </div>
         <div>
           <h2 className="font-semibold text-dark-gray dark:text-white">
-            {meetings.length === 1
-              ? '1 meeting proposal awaiting response'
-              : `${meetings.length} meeting proposals awaiting response`}
+            {plural(meetings.length, 'meeting proposal')} awaiting response
           </h2>
           <p className="text-sm text-medium-gray">Waiting for the other party to accept or suggest a new time</p>
         </div>

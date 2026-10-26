@@ -16,6 +16,7 @@ import { FileAttachments } from './file-attachments'
 import { ProposalActions } from './proposal-actions'
 import { CancelMeetingButton } from './cancel-meeting-button'
 import { canCancel, canManageMeeting, canViewMeeting, canViewNotes, canViewRecording } from '@/lib/meeting-access'
+import { MeetingStatusPill, Pill, TodoPriorityPill, TodoStatusPill } from '@/components/ui/pill'
 
 export default async function MeetingDetailPage({
   params,
@@ -158,17 +159,11 @@ export default async function MeetingDetailPage({
           {isCancellable && (
             <CancelMeetingButton meetingId={meeting.id} otherPartyName={otherPartyName || 'the other participant'} />
           )}
-          <span className={`px-3 py-1.5 sm:px-4 sm:py-2 rounded-full text-xs sm:text-sm font-medium ${
-            meeting.status === 'COMPLETED'
-              ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-              : meeting.status === 'PROPOSED'
-              ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-              : meeting.status === 'CANCELLED'
-              ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-              : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-          }`}>
-            {meeting.status === 'COMPLETED' ? 'Completed' : meeting.status === 'PROPOSED' ? 'Proposed' : meeting.status === 'CANCELLED' ? 'Cancelled' : formSubmitted && isPast ? 'Form submitted' : 'Scheduled'}
-          </span>
+          {meeting.status === 'SCHEDULED' && formSubmitted && isPast ? (
+            <Pill tone="blue" className="sm:text-sm sm:px-4 sm:py-2">Form submitted</Pill>
+          ) : (
+            <MeetingStatusPill status={meeting.status} isPast={isPast} className="sm:text-sm sm:px-4 sm:py-2" />
+          )}
         </div>
       </div>
 
@@ -345,9 +340,7 @@ export default async function MeetingDetailPage({
             <FileText className="w-5 h-5" />
             Form Responses
             {isEmployee && !formSubmitted && (
-              <span className="ml-2 px-2.5 py-0.5 text-xs font-medium rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                Draft
-              </span>
+              <Pill tone="amber" className="ml-2">Draft</Pill>
             )}
           </h2>
           <div className="space-y-4">
@@ -427,24 +420,8 @@ export default async function MeetingDetailPage({
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 mt-2">
-                        <span className={`px-2 py-0.5 text-[10px] sm:text-xs font-medium rounded-full ${
-                          todo.priority === 'HIGH'
-                            ? 'bg-red-500/10 text-red-500'
-                            : todo.priority === 'MEDIUM'
-                            ? 'bg-orange/10 text-orange'
-                            : 'bg-gray-500/10 text-gray-500'
-                        }`}>
-                          {todo.priority}
-                        </span>
-                        <span className={`px-2 py-0.5 text-[10px] sm:text-xs font-medium rounded-full ${
-                          todo.status === 'DONE'
-                            ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                            : todo.status === 'IN_PROGRESS'
-                            ? 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                            : 'bg-gray-500/10 text-gray-600 dark:text-gray-400'
-                        }`}>
-                          {todo.status.replace('_', ' ')}
-                        </span>
+                        <TodoPriorityPill priority={todo.priority} />
+                        <TodoStatusPill status={todo.status} />
                       </div>
                     </div>
                   </div>

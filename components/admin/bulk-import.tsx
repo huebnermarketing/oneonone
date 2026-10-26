@@ -2,8 +2,10 @@
 
 import { useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Upload, FileSpreadsheet, Loader2, CheckCircle, XCircle, Download, X } from 'lucide-react'
+import { Upload, FileSpreadsheet, Loader2, CheckCircle, XCircle, Download } from 'lucide-react'
 import { useToast } from '@/components/ui/toast'
+import { Modal } from '@/components/ui/modal'
+import { plural } from '@/lib/ui'
 
 interface ImportResult {
   success: number
@@ -105,51 +107,85 @@ Admin User,admin@whitelabeliq.com,SUPER_ADMIN,,,CEO,`
     setResult(null)
   }
 
-  if (!isOpen) {
-    return (
-      <button
-        onClick={() => setIsOpen(true)}
-        className="flex items-center gap-2 px-4 py-2 bg-off-white dark:bg-charcoal text-dark-gray dark:text-white rounded-xl font-medium hover:bg-light-gray/20 dark:hover:bg-dark-gray transition-colors"
-      >
-        <Upload className="w-4 h-4" />
-        Bulk Import
-      </button>
-    )
+  const close = () => {
+    setIsOpen(false)
+    reset()
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
-      <div className="w-full max-w-2xl mx-4 bg-white dark:bg-charcoal rounded-2xl border border-off-white dark:border-medium-gray/20 shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-off-white dark:border-medium-gray/20">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
-              <FileSpreadsheet className="w-5 h-5 text-purple-500" />
-            </div>
-            <div>
-              <h2 className="font-semibold text-dark-gray dark:text-white">Bulk Import Users</h2>
-              <p className="text-sm text-medium-gray">Upload a CSV file to add multiple users</p>
-            </div>
-          </div>
-          <button
-            onClick={() => {
-              setIsOpen(false)
-              reset()
-            }}
-            className="p-2 hover:bg-off-white dark:hover:bg-charcoal rounded-lg transition-colors"
-          >
-            <X className="w-5 h-5 text-medium-gray" />
-          </button>
-        </div>
+    <>
+      <button
+        type="button"
+        onClick={() => setIsOpen(true)}
+        className="flex items-center gap-2 px-4 py-2 bg-off-white dark:bg-charcoal text-dark-gray dark:text-white rounded-xl font-medium hover:bg-light-gray/20 dark:hover:bg-dark-gray transition-colors"
+      >
+        <Upload className="w-4 h-4" aria-hidden="true" />
+        Bulk Import
+      </button>
 
-        {/* Content */}
-        <div className="p-6 space-y-6">
+      <Modal
+        open={isOpen}
+        onClose={close}
+        title={
+          <span className="flex items-center gap-3">
+            <span className="w-10 h-10 rounded-xl bg-purple-500/10 flex items-center justify-center">
+              <FileSpreadsheet className="w-5 h-5 text-purple-500" aria-hidden="true" />
+            </span>
+            Bulk Import Users
+          </span>
+        }
+        description="Upload a CSV file to add multiple users"
+        size="lg"
+        busy={importing}
+        footer={
+          result ? (
+            <button
+              type="button"
+              onClick={close}
+              className="px-4 py-2 bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white transition-colors"
+            >
+              Done
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={close}
+                disabled={importing}
+                className="px-4 py-2 text-medium-gray hover:text-dark-gray dark:hover:text-white transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleImport}
+                disabled={importing || csvData.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white disabled:opacity-50 transition-colors"
+              >
+                {importing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
+                    Importing...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="w-4 h-4" aria-hidden="true" />
+                    Import {plural(csvData.length, 'User')}
+                  </>
+                )}
+              </button>
+            </>
+          )
+        }
+      >
+        <div className="space-y-6">
           {/* Template download */}
           <button
+            type="button"
             onClick={downloadTemplate}
             className="flex items-center gap-2 text-sm text-blue-500 hover:underline"
           >
-            <Download className="w-4 h-4" />
+            <Download className="w-4 h-4" aria-hidden="true" />
             Download CSV template
           </button>
 
@@ -161,11 +197,14 @@ Admin User,admin@whitelabeliq.com,SUPER_ADMIN,,,CEO,`
               accept=".csv"
               onChange={handleFileSelect}
               className="hidden"
+              aria-label="CSV file"
+              tabIndex={-1}
             />
-            <Upload className="w-12 h-12 text-light-gray mx-auto mb-4" />
+            <Upload className="w-12 h-12 text-light-gray mx-auto mb-4" aria-hidden="true" />
             <p className="text-dark-gray dark:text-white mb-2">
               Drop your CSV file here or{' '}
               <button
+                type="button"
                 onClick={() => fileInputRef.current?.click()}
                 className="text-blue-500 hover:underline"
               >
@@ -181,16 +220,16 @@ Admin User,admin@whitelabeliq.com,SUPER_ADMIN,,,CEO,`
           {csvData.length > 0 && !result && (
             <div>
               <h3 className="font-medium text-dark-gray dark:text-white mb-2">
-                Preview ({csvData.length} users)
+                Preview ({plural(csvData.length, 'user')})
               </h3>
               <div className="max-h-48 overflow-y-auto border border-off-white dark:border-medium-gray/20 rounded-xl">
                 <table className="w-full text-sm">
                   <thead className="bg-off-white dark:bg-charcoal sticky top-0">
                     <tr>
-                      <th className="px-3 py-2 text-left text-medium-gray">Name</th>
-                      <th className="px-3 py-2 text-left text-medium-gray">Email</th>
-                      <th className="px-3 py-2 text-left text-medium-gray">Role</th>
-                      <th className="px-3 py-2 text-left text-medium-gray">Department</th>
+                      <th scope="col" className="px-3 py-2 text-left text-medium-gray">Name</th>
+                      <th scope="col" className="px-3 py-2 text-left text-medium-gray">Email</th>
+                      <th scope="col" className="px-3 py-2 text-left text-medium-gray">Role</th>
+                      <th scope="col" className="px-3 py-2 text-left text-medium-gray">Department</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-off-white dark:divide-medium-gray/20">
@@ -217,15 +256,15 @@ Admin User,admin@whitelabeliq.com,SUPER_ADMIN,,,CEO,`
 
           {/* Result */}
           {result && (
-            <div className="space-y-4">
+            <div className="space-y-4" role="status">
               <div className="flex items-center gap-6">
                 <div className="flex items-center gap-2">
-                  <CheckCircle className="w-5 h-5 text-green-500" />
+                  <CheckCircle className="w-5 h-5 text-green-500" aria-hidden="true" />
                   <span className="text-dark-gray dark:text-white font-medium">{result.success} imported</span>
                 </div>
                 {result.failed > 0 && (
                   <div className="flex items-center gap-2">
-                    <XCircle className="w-5 h-5 text-red-500" />
+                    <XCircle className="w-5 h-5 text-red-500" aria-hidden="true" />
                     <span className="text-dark-gray dark:text-white font-medium">{result.failed} failed</span>
                   </div>
                 )}
@@ -240,51 +279,7 @@ Admin User,admin@whitelabeliq.com,SUPER_ADMIN,,,CEO,`
             </div>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-off-white dark:border-medium-gray/20">
-          {result ? (
-            <button
-              onClick={() => {
-                setIsOpen(false)
-                reset()
-              }}
-              className="px-4 py-2 bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white transition-colors"
-            >
-              Done
-            </button>
-          ) : (
-            <>
-              <button
-                onClick={() => {
-                  setIsOpen(false)
-                  reset()
-                }}
-                className="px-4 py-2 text-medium-gray hover:text-dark-gray dark:hover:text-white transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleImport}
-                disabled={importing || csvData.length === 0}
-                className="flex items-center gap-2 px-4 py-2 bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white disabled:opacity-50 transition-colors"
-              >
-                {importing ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Importing...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="w-4 h-4" />
-                    Import {csvData.length} Users
-                  </>
-                )}
-              </button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+      </Modal>
+    </>
   )
 }

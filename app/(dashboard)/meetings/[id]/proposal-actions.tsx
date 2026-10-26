@@ -1,16 +1,13 @@
 'use client'
 
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useEffect, useId } from 'react'
 import { useRouter } from 'next/navigation'
 import { Check, Clock, Calendar, Loader2, AlertCircle } from 'lucide-react'
 import { DatePicker } from '@/components/ui/date-picker'
 import { useToast } from '@/components/ui/toast'
 import { useFormat } from '@/components/providers/timezone-provider'
-
-interface FreeSlot {
-  start: string
-  end: string
-}
+import { SlotGrid } from '@/components/forms/slot-grid'
+import { isSlotInPast, type FreeSlot } from '@/lib/slots'
 
 interface ProposalActionsProps {
   meetingId: string
@@ -32,6 +29,7 @@ export function ProposalActions({
   const router = useRouter()
   const { toastSuccess, toastError } = useToast()
   const f = useFormat()
+  const slotsHeadingId = useId()
   const [accepting, setAccepting] = useState(false)
   const [showSuggest, setShowSuggest] = useState(false)
   const [suggestDate, setSuggestDate] = useState('')
@@ -92,10 +90,11 @@ export function ProposalActions({
       }
     } catch {
       setCalendarUnavailable(true)
+      toastError('Failed to load availability')
     } finally {
       setSlotsLoading(false)
     }
-  }, [meetingId])
+  }, [meetingId, toastError])
 
   useEffect(() => {
     if (suggestDate) {
@@ -129,9 +128,7 @@ export function ProposalActions({
     }
   }
 
-  function isSlotInPast(slotDate: Date) {
-    return slotDate.getTime() <= Date.now()
-  }
+  const slotIsPast = useCallback((iso: string) => isSuggestDateToday && isSlotInPast(iso), [isSuggestDateToday])
 
   // Shared slot-picker UI used by both receiver and proposer panels
   const slotPicker = (
@@ -146,18 +143,18 @@ export function ProposalActions({
 
       {suggestDate && (
         <div>
-          <label className="flex items-center gap-2 text-sm font-medium text-dark-gray dark:text-white mb-2">
-            <Clock className="w-4 h-4 text-medium-gray" />
+          <p id={slotsHeadingId} className="flex items-center gap-2 text-sm font-medium text-dark-gray dark:text-white mb-2">
+            <Clock className="w-4 h-4 text-medium-gray" aria-hidden="true" />
             Select a time
             {workingHoursLabel && (
               <span className="font-normal text-medium-gray ml-1">
                 — {workingHoursLabel}
               </span>
             )}
-          </label>
+          </p>
           {slotsLoading ? (
-            <div className="flex items-center gap-2 py-6 justify-center text-medium-gray">
-              <Loader2 className="w-4 h-4 animate-spin" />
+            <div className="flex items-center gap-2 py-6 justify-center text-medium-gray" role="status">
+              <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
               <span className="text-sm">Loading available slots...</span>
             </div>
           ) : calendarUnavailable ? (
@@ -174,40 +171,27 @@ export function ProposalActions({
               <p className="text-sm text-medium-gray">Both calendars are fully booked on this date. Try another day.</p>
             </div>
           ) : (
-            <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-              {slots.map((slot) => {
-                const past = isSuggestDateToday && isSlotInPast(new Date(slot.start))
-                return (
-                  <button
-                    key={slot.start}
-                    type="button"
-                    disabled={past}
-                    onClick={() => setSuggestTime(slot.start)}
-                    className={`px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                      past
-                        ? 'bg-off-white dark:bg-dark-gray text-light-gray dark:text-medium-gray/40 cursor-not-allowed line-through'
-                        : suggestTime === slot.start
-                          ? 'bg-dark-gray dark:bg-white text-white dark:text-dark-gray'
-                          : 'bg-off-white dark:bg-dark-gray text-dark-gray dark:text-white hover:bg-dark-gray/10 dark:hover:bg-white/10'
-                    }`}
-                  >
-                    {f.time(slot.start)}
-                  </button>
-                )
-              })}
-            </div>
+            <SlotGrid
+              slots={slots}
+              value={suggestTime || null}
+              onChange={setSuggestTime}
+              isPast={slotIsPast}
+              aria-labelledby={slotsHeadingId}
+            />
           )}
         </div>
       )}
 
       <div className="flex justify-end gap-3 pt-2">
         <button
+          type="button"
           onClick={() => setShowSuggest(false)}
           className="px-4 py-2.5 text-medium-gray hover:text-dark-gray dark:hover:text-white transition-colors min-h-[44px]"
         >
           Cancel
         </button>
         <button
+          type="button"
           onClick={handleSuggest}
           disabled={submittingSuggest || !suggestTime}
           className="inline-flex items-center gap-2 px-5 py-2.5 bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white disabled:opacity-50 transition-all min-h-[44px]"
@@ -253,6 +237,7 @@ export function ProposalActions({
               <div className="flex flex-wrap gap-3 mt-4">
                 {!isPast && (
                   <button
+                    type="button"
                     onClick={handleAccept}
                     disabled={accepting}
                     className="inline-flex items-center gap-2 px-5 py-2.5 bg-green-600 text-white rounded-xl font-medium hover:bg-green-700 disabled:opacity-50 transition-all min-h-[44px]"
@@ -266,6 +251,8 @@ export function ProposalActions({
                   </button>
                 )}
                 <button
+                  type="button"
+                  aria-expanded={showSuggest}
                   onClick={() => setShowSuggest(!showSuggest)}
                   className="inline-flex items-center gap-2 px-5 py-2.5 bg-off-white dark:bg-dark-gray text-dark-gray dark:text-white rounded-xl font-medium hover:bg-dark-gray/10 dark:hover:bg-white/10 transition-all min-h-[44px]"
                 >
@@ -314,6 +301,8 @@ export function ProposalActions({
 
               <div className="flex flex-wrap gap-3 mt-4">
                 <button
+                  type="button"
+                  aria-expanded={showSuggest}
                   onClick={() => setShowSuggest(!showSuggest)}
                   className="inline-flex items-center gap-2 px-5 py-2.5 bg-off-white dark:bg-dark-gray text-dark-gray dark:text-white rounded-xl font-medium hover:bg-dark-gray/10 dark:hover:bg-white/10 transition-all min-h-[44px]"
                 >
