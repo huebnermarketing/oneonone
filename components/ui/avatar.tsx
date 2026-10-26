@@ -1,3 +1,6 @@
+'use client'
+
+import { useState } from 'react'
 import { cn } from '@/lib/utils'
 
 const SIZES = { xs: 'w-6 h-6 text-[10px]', sm: 'w-8 h-8 text-xs', md: 'w-10 h-10 text-sm', lg: 'w-14 h-14 text-lg', xl: 'w-20 h-20 text-2xl' } as const
@@ -10,12 +13,27 @@ export function initials(name: string | null | undefined): string {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
 }
 
-/** Initials avatar; renders the image when `src` is set. Decorative when a visible name sits next to it — pass `alt=""` then. */
+/**
+ * Initials avatar; shows the image when `src` loads, initials otherwise (missing, 403, offline).
+ * Decorative when a visible name sits next to it — pass `alt=""` then.
+ */
 export function Avatar({ name, src, size = 'md', className, alt }: { name: string | null | undefined; src?: string | null; size?: keyof typeof SIZES; className?: string; alt?: string }) {
   const label = alt ?? name ?? ''
-  if (src) {
-    // eslint-disable-next-line @next/next/no-img-element
-    return <img src={src} alt={label} className={cn('rounded-full object-cover flex-shrink-0', SIZES[size], className)} />
+  // Remember which src failed, so a new src automatically gets a fresh attempt
+  const [failedSrc, setFailedSrc] = useState<string | null>(null)
+
+  if (src && src !== failedSrc) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={src}
+        alt={label}
+        // Google profile photos (lh3.googleusercontent.com) frequently 403 when a Referer is sent
+        referrerPolicy="no-referrer"
+        onError={() => setFailedSrc(src)}
+        className={cn('rounded-full object-cover flex-shrink-0', SIZES[size], className)}
+      />
+    )
   }
   return (
     <div
