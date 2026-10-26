@@ -194,7 +194,7 @@ export function recurringScheduleUpdated(args: {
       () =>
         createNotification({
           userId: employee.id,
-          type: 'MEETING_SCHEDULED',
+          type: 'SCHEDULE_UPDATED',
           title: 'Recurring Schedule Updated',
           message: `${actorName} updated your recurring meeting to ${DAY_NAMES[dayOfWeek]}s at ${displayTime}.`,
           link: '/meetings',
