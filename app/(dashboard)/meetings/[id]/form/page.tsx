@@ -6,10 +6,11 @@ import { canAccessEmployeeData } from '@/lib/auth-helpers'
 import { MeetingFormClient } from './form-client'
 
 export default async function MeetingFormPage({
-  params,
+  params: paramsPromise,
 }: {
-  params: { id: string }
+  params: Promise<{ id: string }>
 }) {
+  const params = await paramsPromise
   const user = await getCurrentUser()
   if (!user) redirect('/auth/signin')
 

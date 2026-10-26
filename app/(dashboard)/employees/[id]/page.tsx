@@ -24,10 +24,11 @@ import { Pill, TodoPriorityPill, TodoStatusPill } from '@/components/ui/pill'
 import { plural } from '@/lib/ui'
 
 export default async function EmployeeDetailPage({
-  params,
+  params: paramsPromise,
 }: {
-  params: { id: string }
+  params: Promise<{ id: string }>
 }) {
+  const params = await paramsPromise
   const user = await getCurrentUser()
   if (!user) return notFound()
 

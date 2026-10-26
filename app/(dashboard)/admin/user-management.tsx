@@ -248,7 +248,8 @@ export function UserManagement({ users, departments, reporters }: UserManagement
     }
   }
 
-  const SortButton = ({ col, label }: { col: SortKey; label: string }) => (
+  // Render helpers, not components: an inline component remounts on every render and drops keyboard focus
+  const sortButton = (col: SortKey, label: string) => (
     <button
       type="button"
       onClick={() => handleSort(col)}
@@ -262,7 +263,7 @@ export function UserManagement({ users, departments, reporters }: UserManagement
 
   const ariaSort = (col: SortKey) => (sortKey === col ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined)
 
-  const RowActions = ({ user, large }: { user: User; large?: boolean }) => (
+  const rowActions = (user: User, large?: boolean) => (
     <div className="flex items-center gap-1">
       <button
         type="button"
@@ -321,12 +322,12 @@ export function UserManagement({ users, departments, reporters }: UserManagement
             <thead>
               <tr className="border-b border-off-white dark:border-medium-gray/20 bg-off-white/50 dark:bg-charcoal/50">
                 <th scope="col" aria-sort={ariaSort('name')} className="text-left py-3 px-6 text-sm font-medium text-medium-gray">
-                  <SortButton col="name" label="Name" />
+                  {sortButton('name', 'Name')}
                 </th>
                 <th scope="col" className="text-left py-3 px-6 text-sm font-medium text-medium-gray">Email</th>
                 {SORT_COLUMNS.map((c) => (
                   <th key={c.key} scope="col" aria-sort={ariaSort(c.key)} className="text-left py-3 px-6 text-sm font-medium text-medium-gray">
-                    <SortButton col={c.key} label={c.label} />
+                    {sortButton(c.key, c.label)}
                   </th>
                 ))}
                 <th scope="col" className="text-left py-3 px-6 text-sm font-medium text-medium-gray">Actions</th>
@@ -353,7 +354,7 @@ export function UserManagement({ users, departments, reporters }: UserManagement
                     {user.reportsTo?.name || '-'}
                   </td>
                   <td className="py-4 px-6"><ActivePill active={user.isActive} /></td>
-                  <td className="py-4 px-6"><RowActions user={user} large /></td>
+                  <td className="py-4 px-6">{rowActions(user, true)}</td>
                 </tr>
               ))}
             </tbody>
@@ -372,7 +373,7 @@ export function UserManagement({ users, departments, reporters }: UserManagement
                     <RolePill role={user.role} />
                   </div>
                 </div>
-                <RowActions user={user} />
+                {rowActions(user)}
               </div>
               <p className="text-sm text-medium-gray">{user.email}</p>
               <div className="flex items-center gap-3 text-sm">
