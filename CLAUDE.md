@@ -24,7 +24,7 @@ Local login without Google: `POST /api/auth/test-login {"role":"SUPER_ADMIN"|"RE
 ## Layout
 
 - `app/(dashboard)/<feature>/page.tsx` = server component (auth + Prisma) → props → `<feature>-client.tsx` (client, `fetch('/api/…')` + `router.refresh()`).
-- `app/api/**/route.ts` = 46 handlers. `lib/` = all server logic. `components/ui` = toast/confirm/date-picker/skeleton/button/card; `components/providers` = session/theme/timezone.
+- `app/api/**/route.ts` = 46 handlers. `lib/` = all server logic. `components/ui` = primitives (see UI rule below); `components/forms` = employee picker, slot grid; `components/providers` = session/theme/timezone.
 - Use Prisma-generated types; there is no hand-written types module.
 - `tests/unit/*.test.ts` mirror `lib/*`; `tests/helpers/prisma-mock.ts` gives a programmable `prisma`, `tests/helpers/fixtures.ts` gives users/meetings. `tests/setup.ts` auto-mocks prisma, email and google-calendar. Mock implementations must be passed to `vi.fn(impl)` (restoreMocks is on).
 
@@ -38,9 +38,9 @@ Local login without Google: `POST /api/auth/test-login {"role":"SUPER_ADMIN"|"RE
 - **Dates**: store UTC; render in the VIEWER's timezone via `lib/dates.ts` only — server components `formatMeetingShort(d, user.timeZone)`, client components `const f = useFormat()` (`components/providers/timezone-provider`). Calendar dates (todo due dates, report ranges, `YYYY-MM-DD` strings) go through `formatDateOnly` so they never shift a day. Emails/notifications render in the recipient's zone (`recipientTimeZone()` / `whenFor()`). Never call `toLocale*String` or `new Intl.DateTimeFormat` outside `lib/dates.ts`; `User.timeZone` is auto-detected from the browser on first visit and editable in Profile.
 - **Recording pipeline**: `lib/recording-pipeline.ts` — every run is a `RecordingJob` (COMBINE → TRANSCRIBE → ANALYZE, resumable, heartbeat + cron recovery). Routes call `startJob()`; never run transcription/analysis inline in a route. Reprocess = `POST /api/meetings/[id]/recording/reprocess`.
 - **Meeting state**: PROPOSED → (accept) SCHEDULED → COMPLETED; PROPOSED/SCHEDULED → CANCELLED via `POST /api/meetings/[id]/cancel` (who may cancel = `cancelPolicy` setting). Transitions are enforced in `lib/meeting-state.ts`. Calendar events are created on accept, on the reporter's calendar.
-- **UI**: use `useToast()`/`useConfirm()`, `components/ui/*`, Tailwind brand tokens (`orange`, `charcoal`, `dark-gray`, `medium-gray`, `light-gray`, `off-white`); every route needs a `loading.tsx`.
+- **UI**: use the primitives before writing markup — `components/ui/`: `Pill`/`MeetingStatusPill`/`TodoStatusPill`/`TodoPriorityPill`, `Avatar` (+`initials`), `StatCard`, `Select`, `Modal` (role=dialog, focus trap, Esc), `Pagination`, `Button`, `DatePicker`, `useToast()`/`useConfirm()`; `components/forms/`: `EmployeePicker`, `SlotGrid`; `components/notifications/notification-meta.tsx` for type→icon/label; `lib/ui.ts` (`DAY_NAMES`, `languageName`, `formatFileSize`, `greeting`, `plural`), `lib/slots.ts` (scheduling helpers, timezone-explicit). Tailwind brand tokens (`orange`, `charcoal`, `dark-gray`, `medium-gray`, `light-gray`, `off-white`); every route needs a `loading.tsx`. Every `catch` that affects the user calls `toastError`; icon-only buttons get `aria-label`; tab groups get `role="tablist"`. The sidebar owns the single notification poller (`useNotifications()`).
 - Prefer static imports of `@/lib/email`, `@/lib/notifications`, `@/lib/google-calendar`; the `await import()` pattern in routes is legacy.
-- Constants: `lib/constants.ts` (`DEFAULT_TIMEZONE`, `MEETING_DURATION_MINUTES`, `ALLOWED_EMAIL_DOMAIN`, `APP_NAME`). Client components still carry a few literals (`user-management.tsx` domain, slot-grid timezone) — next cleanup target.
+- Constants: `lib/constants.ts` (`DEFAULT_TIMEZONE`, `MEETING_DURATION_MINUTES`, `ALLOWED_EMAIL_DOMAIN`, `APP_NAME`). `user-management.tsx` still carries the email-domain literal — next cleanup target.
 
 ## Env (local minimum)
 

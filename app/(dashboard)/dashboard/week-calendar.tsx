@@ -4,6 +4,8 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { Calendar, Clock, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { startOfDayInTz, endOfDayInTz } from '@/lib/dates'
+import { MeetingStatusPill, Pill } from '@/components/ui/pill'
 
 interface CalendarMeeting {
   id: string
@@ -51,6 +53,22 @@ function isSameDay(a: Date, b: Date) {
 /** "YYYY-MM-DD" of a grid cell built from local Y/M/D parts — a calendar day, compared against `f.dateKey(instant)`. */
 function gridDayKey(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+/** Grid-cell Date (local Y/M/D parts) for a "YYYY-MM-DD" calendar day key. */
+function dayFromKey(key: string): Date {
+  const [y, m, d] = key.split('-').map(Number)
+  return new Date(y, m - 1, d)
+}
+
+/** Meetings whose calendar day (in the viewer's zone) falls in [startDay, endDayExclusive). */
+function meetingsInDays(meetings: CalendarMeeting[], dateKey: (d: string) => string, startDay: Date, endDayExclusive: Date): CalendarMeeting[] {
+  const from = gridDayKey(startDay)
+  const to = gridDayKey(endDayExclusive)
+  return meetings.filter((m) => {
+    const k = dateKey(m.meetingDate)
+    return k >= from && k < to
+  })
 }
 
 function isSameWeek(a: Date, b: Date) {
@@ -102,19 +120,13 @@ const statusDot: Record<string, string> = {
   CANCELLED: 'bg-red-400',
 }
 
-const statusBadge: Record<string, { label: string; classes: string }> = {
-  PROPOSED: { label: 'Proposed', classes: 'bg-amber-500/10 text-amber-600 dark:text-amber-400' },
-  SCHEDULED: { label: 'Scheduled', classes: 'bg-blue-500/10 text-blue-600 dark:text-blue-400' },
-  COMPLETED: { label: 'Completed', classes: 'bg-green-500/10 text-green-600 dark:text-green-400' },
-  CANCELLED: { label: 'Cancelled', classes: 'bg-red-500/10 text-red-600 dark:text-red-400' },
-}
-
 // ── Week View ────────────────────────────────────────────────────────────────
 
-function WeekView({ meetings, days, today, userRole }: {
+function WeekView({ meetings, days, todayKey, userRole }: {
   meetings: CalendarMeeting[]
   days: Date[]
-  today: Date
+  /** "YYYY-MM-DD" of today in the viewer's zone */
+  todayKey: string
   userRole: string
 }) {
   const f = useFormat()
@@ -124,13 +136,14 @@ function WeekView({ meetings, days, today, userRole }: {
       <div className="hidden sm:block overflow-x-auto">
         <div className="grid grid-cols-7 min-w-[56rem] w-full divide-x divide-off-white dark:divide-medium-gray/20 min-h-[140px]">
           {days.map((day, idx) => {
-            const isToday = isSameDay(day, today)
+            const dayKey = gridDayKey(day)
+            const isToday = dayKey === todayKey
             const dayMeetings = meetings
-              .filter((m) => f.dateKey(m.meetingDate) === gridDayKey(day))
+              .filter((m) => f.dateKey(m.meetingDate) === dayKey)
               .sort((a, b) => new Date(a.meetingDate).getTime() - new Date(b.meetingDate).getTime())
 
             return (
-              <div key={idx} className={`flex flex-col ${isToday ? 'bg-blue-500/5 dark:bg-blue-500/10' : ''}`}>
+              <div key={idx} role="group" aria-label={`${f.dateOnly(dayKey, 'weekday')}${isToday ? ' (today)' : ''}`} className={`flex flex-col ${isToday ? 'bg-blue-500/5 dark:bg-blue-500/10' : ''}`}>
                 <div className={`px-2 py-2 text-center border-b border-off-white dark:border-medium-gray/20 ${isToday ? 'bg-blue-500/10' : ''}`}>
                   <p className="text-xs font-medium text-medium-gray">{dayLabels[idx]}</p>
                   <p className={`text-sm font-bold ${isToday ? 'text-blue-600 dark:text-blue-400' : 'text-dark-gray dark:text-white'}`}>
@@ -144,7 +157,6 @@ function WeekView({ meetings, days, today, userRole }: {
                   {dayMeetings.map((m) => {
                     const time = f.time(m.meetingDate)
                     const name = userRole === 'EMPLOYEE' ? m.reporter?.name : m.employee?.name
-                    const badge = statusBadge[m.status] ?? statusBadge.SCHEDULED
 
                     return (
                       <Link key={m.id} href={`/meetings/${m.id}`} className="block px-1.5 py-1.5 rounded-lg hover:bg-off-white/70 dark:hover:bg-dark-gray/50 transition-colors group">
@@ -152,9 +164,7 @@ function WeekView({ meetings, days, today, userRole }: {
                           {name || 'Meeting'}
                         </p>
                         <p className="text-[10px] text-medium-gray">{time}</p>
-                        <span className={`inline-block mt-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-medium ${badge.classes}`}>
-                          {badge.label}
-                        </span>
+                        <MeetingStatusPill status={m.status} className="mt-0.5 px-1.5 py-0.5 text-[9px]" />
                       </Link>
                     )
                   })}
@@ -168,21 +178,22 @@ function WeekView({ meetings, days, today, userRole }: {
       {/* Mobile: stacked list */}
       <div className="sm:hidden divide-y divide-off-white dark:divide-medium-gray/20">
         {days.map((day, idx) => {
-          const isToday = isSameDay(day, today)
+          const dayKey = gridDayKey(day)
+          const isToday = dayKey === todayKey
           const dayMeetings = meetings
-            .filter((m) => f.dateKey(m.meetingDate) === gridDayKey(day))
+            .filter((m) => f.dateKey(m.meetingDate) === dayKey)
             .sort((a, b) => new Date(a.meetingDate).getTime() - new Date(b.meetingDate).getTime())
 
           if (dayMeetings.length === 0 && !isToday) return null
 
           return (
-            <div key={idx} className={`px-4 py-3 ${isToday ? 'bg-blue-500/5 dark:bg-blue-500/10' : ''}`}>
+            <div key={idx} role="group" aria-label={`${f.dateOnly(dayKey, 'weekday')}${isToday ? ' (today)' : ''}`} className={`px-4 py-3 ${isToday ? 'bg-blue-500/5 dark:bg-blue-500/10' : ''}`}>
               <div className="flex items-center gap-2 mb-2">
                 <p className={`text-xs font-bold ${isToday ? 'text-blue-600 dark:text-blue-400' : 'text-dark-gray dark:text-white'}`}>
                   {dayLabels[idx]} {day.getDate()}
                 </p>
                 {isToday && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium">Today</span>
+                  <Pill tone="blue" className="text-[10px] px-1.5 py-0.5">Today</Pill>
                 )}
               </div>
               {dayMeetings.length === 0 ? (
@@ -192,7 +203,6 @@ function WeekView({ meetings, days, today, userRole }: {
                   {dayMeetings.map((m) => {
                     const time = f.time(m.meetingDate)
                     const name = userRole === 'EMPLOYEE' ? m.reporter?.name : m.employee?.name
-                    const badge = statusBadge[m.status] ?? statusBadge.SCHEDULED
 
                     return (
                       <Link key={m.id} href={`/meetings/${m.id}`} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-off-white/70 dark:hover:bg-dark-gray/50 transition-colors">
@@ -203,9 +213,7 @@ function WeekView({ meetings, days, today, userRole }: {
                           <p className="text-sm font-medium text-dark-gray dark:text-white truncate">{name || 'Meeting'}</p>
                           <p className="text-xs text-medium-gray">{time}</p>
                         </div>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium ${badge.classes}`}>
-                          {badge.label}
-                        </span>
+                        <MeetingStatusPill status={m.status} className="px-2 py-0.5 text-[10px]" />
                       </Link>
                     )
                   })}
@@ -215,8 +223,9 @@ function WeekView({ meetings, days, today, userRole }: {
           )
         })}
         {days.every((day) => {
-          const dayMeetings = meetings.filter((m) => f.dateKey(m.meetingDate) === gridDayKey(day))
-          return dayMeetings.length === 0 && !isSameDay(day, today)
+          const dayKey = gridDayKey(day)
+          const dayMeetings = meetings.filter((m) => f.dateKey(m.meetingDate) === dayKey)
+          return dayMeetings.length === 0 && dayKey !== todayKey
         }) && (
           <div className="px-4 py-8 text-center">
             <p className="text-sm text-medium-gray">No meetings this week</p>
@@ -229,10 +238,11 @@ function WeekView({ meetings, days, today, userRole }: {
 
 // ── Month View ───────────────────────────────────────────────────────────────
 
-function MonthView({ meetings, monthDate, today, userRole }: {
+function MonthView({ meetings, monthDate, todayKey, userRole }: {
   meetings: CalendarMeeting[]
   monthDate: Date
-  today: Date
+  /** "YYYY-MM-DD" of today in the viewer's zone */
+  todayKey: string
   userRole: string
 }) {
   const f = useFormat()
@@ -262,16 +272,20 @@ function MonthView({ meetings, monthDate, today, userRole }: {
         {/* Day cells */}
         <div className="grid grid-cols-7">
           {gridDays.map((day, idx) => {
-            const isToday = isSameDay(day, today)
+            const dayKey = gridDayKey(day)
+            const isToday = dayKey === todayKey
             const isCurrentMonth = day.getMonth() === currentMonth
             const isSelected = selectedDay && isSameDay(day, selectedDay)
-            const dayMeetings = meetings.filter((m) => f.dateKey(m.meetingDate) === gridDayKey(day))
+            const dayMeetings = meetings.filter((m) => f.dateKey(m.meetingDate) === dayKey)
             const uniqueStatuses = [...new Set(dayMeetings.map((m) => m.status))]
 
             return (
               <button
                 key={idx}
+                type="button"
                 onClick={() => setSelectedDay(isSelected ? null : day)}
+                aria-label={`${f.dateOnly(dayKey, 'long')}${isToday ? ', today' : ''}, ${dayMeetings.length} meeting${dayMeetings.length === 1 ? '' : 's'}`}
+                aria-pressed={!!isSelected}
                 className={`
                   relative min-h-[72px] p-1.5 text-left border-b border-r border-off-white dark:border-medium-gray/20 transition-colors
                   ${idx % 7 === 0 ? 'border-l-0' : ''}
@@ -329,15 +343,19 @@ function MonthView({ meetings, monthDate, today, userRole }: {
 
         <div className="grid grid-cols-7">
           {gridDays.map((day, idx) => {
-            const isToday = isSameDay(day, today)
+            const dayKey = gridDayKey(day)
+            const isToday = dayKey === todayKey
             const isCurrentMonth = day.getMonth() === currentMonth
             const isSelected = selectedDay && isSameDay(day, selectedDay)
-            const dayMeetings = meetings.filter((m) => f.dateKey(m.meetingDate) === gridDayKey(day))
+            const dayMeetings = meetings.filter((m) => f.dateKey(m.meetingDate) === dayKey)
 
             return (
               <button
                 key={idx}
+                type="button"
                 onClick={() => setSelectedDay(isSelected ? null : day)}
+                aria-label={`${f.dateOnly(dayKey, 'long')}${isToday ? ', today' : ''}, ${dayMeetings.length} meeting${dayMeetings.length === 1 ? '' : 's'}`}
+                aria-pressed={!!isSelected}
                 className={`
                   relative flex flex-col items-center py-2 transition-colors
                   ${isSelected ? 'bg-blue-500/10' : isToday ? 'bg-blue-500/5' : ''}
@@ -369,8 +387,8 @@ function MonthView({ meetings, monthDate, today, userRole }: {
         <div className="border-t border-off-white dark:border-medium-gray/20 px-4 sm:px-6 py-4">
           <h3 className="text-sm font-semibold text-dark-gray dark:text-white mb-3">
             {f.dateOnly(gridDayKey(selectedDay), 'weekday')}
-            {isSameDay(selectedDay, today) && (
-              <span className="ml-2 text-[10px] px-1.5 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium align-middle">Today</span>
+            {gridDayKey(selectedDay) === todayKey && (
+              <Pill tone="blue" className="ml-2 text-[10px] px-1.5 py-0.5 align-middle">Today</Pill>
             )}
           </h3>
           {selectedMeetings.length === 0 ? (
@@ -380,7 +398,6 @@ function MonthView({ meetings, monthDate, today, userRole }: {
               {selectedMeetings.map((m) => {
                 const time = f.time(m.meetingDate)
                 const name = userRole === 'EMPLOYEE' ? m.reporter?.name : m.employee?.name
-                const badge = statusBadge[m.status] ?? statusBadge.SCHEDULED
 
                 return (
                   <Link key={m.id} href={`/meetings/${m.id}`} className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-off-white/70 dark:hover:bg-dark-gray/50 transition-colors">
@@ -391,9 +408,7 @@ function MonthView({ meetings, monthDate, today, userRole }: {
                       <p className="text-sm font-medium text-dark-gray dark:text-white truncate">{name || 'Meeting'}</p>
                       <p className="text-xs text-medium-gray">{time}</p>
                     </div>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-medium flex-shrink-0 ${badge.classes}`}>
-                      {badge.label}
-                    </span>
+                    <MeetingStatusPill status={m.status} className="px-2 py-0.5 text-[10px] flex-shrink-0" />
                   </Link>
                 )
               })}
@@ -408,59 +423,65 @@ function MonthView({ meetings, monthDate, today, userRole }: {
 // ── Main Calendar Component ──────────────────────────────────────────────────
 
 export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEnd, userRole }: WeekCalendarProps) {
-  const todayMonday = getMonday(new Date())
-  const today = new Date()
+  const f = useFormat()
+  // "Today" is a calendar day in the VIEWER's zone; grid cells are local-parts Dates keyed by gridDayKey.
+  const todayKey = f.dateKey(new Date())
+  const todayDay = useMemo(() => dayFromKey(todayKey), [todayKey])
+  const todayMonday = useMemo(() => getMonday(todayDay), [todayDay])
   const rangeEnd = useMemo(() => (initialRangeEnd ? new Date(initialRangeEnd) : null), [initialRangeEnd])
 
   const [view, setView] = useState<ViewMode>('week')
 
   // Week state
-  const [weekStart, setWeekStart] = useState<Date>(new Date(initialWeekStart))
+  const [weekStart, setWeekStart] = useState<Date>(todayMonday)
   const [weekMeetings, setWeekMeetings] = useState<CalendarMeeting[]>(() => {
-    const start = new Date(initialWeekStart)
-    const end = new Date(start)
+    const end = new Date(todayMonday)
     end.setDate(end.getDate() + 7)
-    return initialMeetings.filter((m) => {
-      const d = new Date(m.meetingDate).getTime()
-      return d >= start.getTime() && d < end.getTime()
-    })
+    return meetingsInDays(initialMeetings, f.dateKey, todayMonday, end)
   })
   const [weekLoading, setWeekLoading] = useState(false)
 
   // Month state
-  const [monthDate, setMonthDate] = useState<Date>(new Date(today.getFullYear(), today.getMonth(), 1))
+  const [monthDate, setMonthDate] = useState<Date>(new Date(todayDay.getFullYear(), todayDay.getMonth(), 1))
   const [monthMeetings, setMonthMeetings] = useState<CalendarMeeting[]>([])
   const [monthLoading, setMonthLoading] = useState(false)
   const [monthFetched, setMonthFetched] = useState<string | null>(null)
 
   const isCurrentWeek = isSameWeek(weekStart, todayMonday)
-  const isCurrentMonth = isSameMonth(monthDate, today)
+  const isCurrentMonth = isSameMonth(monthDate, todayDay)
   const days = getWeekDays(weekStart)
 
-  const fetchRange = useCallback(async (start: Date, end: Date): Promise<CalendarMeeting[]> => {
+  /** Fetch meetings for the grid days [startDay, endDayExclusive) as instants in the viewer's zone. */
+  const fetchRange = useCallback(async (startDay: Date, endDayExclusive: Date): Promise<CalendarMeeting[]> => {
+    const lastDay = new Date(endDayExclusive)
+    lastDay.setDate(lastDay.getDate() - 1)
+    const start = startOfDayInTz(gridDayKey(startDay), f.timeZone)
+    const end = endOfDayInTz(gridDayKey(lastDay), f.timeZone)
     const res = await fetch(`/api/meetings?start=${start.toISOString()}&end=${end.toISOString()}`)
     if (res.ok) {
       const data = await res.json()
       return (data as CalendarMeeting[]).filter((m) => m.status !== 'CANCELLED')
     }
     return []
-  }, [])
+  }, [f.timeZone])
+
+  /** True when every instant of the grid days [startDay, endDayExclusive) lies inside the preloaded range. */
+  const isPreloaded = useCallback((startDay: Date, endDayExclusive: Date): boolean => {
+    if (!rangeEnd) return false
+    const lastDay = new Date(endDayExclusive)
+    lastDay.setDate(lastDay.getDate() - 1)
+    const start = startOfDayInTz(gridDayKey(startDay), f.timeZone)
+    const end = endOfDayInTz(gridDayKey(lastDay), f.timeZone)
+    return start.getTime() >= new Date(initialWeekStart).getTime() && end.getTime() <= rangeEnd.getTime()
+  }, [rangeEnd, initialWeekStart, f.timeZone])
 
   // Week meetings: use preloaded 1-year data when in range, otherwise fetch
   useEffect(() => {
     const weekEnd = new Date(weekStart)
     weekEnd.setDate(weekEnd.getDate() + 7)
-    const inPreloadedRange =
-      rangeEnd &&
-      weekStart.getTime() >= new Date(initialWeekStart).getTime() &&
-      weekEnd.getTime() <= rangeEnd.getTime()
 
-    if (inPreloadedRange) {
-      const filtered = initialMeetings.filter((m) => {
-        const t = new Date(m.meetingDate).getTime()
-        return t >= weekStart.getTime() && t < weekEnd.getTime()
-      })
-      setWeekMeetings(filtered)
+    if (isPreloaded(weekStart, weekEnd)) {
+      setWeekMeetings(meetingsInDays(initialMeetings, f.dateKey, weekStart, weekEnd))
       return
     }
 
@@ -471,7 +492,7 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
       })
       .catch(() => {})
       .finally(() => setWeekLoading(false))
-  }, [weekStart, initialWeekStart, initialMeetings, rangeEnd, fetchRange])
+  }, [weekStart, initialMeetings, isPreloaded, fetchRange, f.dateKey])
 
   // Month meetings: use preloaded 1-year data when in range, otherwise fetch
   useEffect(() => {
@@ -485,17 +506,8 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
     const endPlusOne = new Date(end)
     endPlusOne.setDate(endPlusOne.getDate() + 1)
 
-    const inPreloadedRange =
-      rangeEnd &&
-      start.getTime() >= new Date(initialWeekStart).getTime() &&
-      endPlusOne.getTime() <= rangeEnd.getTime()
-
-    if (inPreloadedRange) {
-      const filtered = initialMeetings.filter((m) => {
-        const t = new Date(m.meetingDate).getTime()
-        return t >= start.getTime() && t < endPlusOne.getTime()
-      })
-      setMonthMeetings(filtered)
+    if (isPreloaded(start, endPlusOne)) {
+      setMonthMeetings(meetingsInDays(initialMeetings, f.dateKey, start, endPlusOne))
       setMonthFetched(key)
       return
     }
@@ -508,7 +520,7 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
       })
       .catch(() => setMonthFetched(key))
       .finally(() => setMonthLoading(false))
-  }, [view, monthDate, monthFetched, initialWeekStart, initialMeetings, rangeEnd, fetchRange])
+  }, [view, monthDate, monthFetched, initialMeetings, isPreloaded, fetchRange, f.dateKey])
 
   // Navigation
   const goToPreviousWeek = () => {
@@ -532,7 +544,7 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
     if (view === 'week') {
       setWeekStart(todayMonday)
     } else {
-      setMonthDate(new Date(today.getFullYear(), today.getMonth(), 1))
+      setMonthDate(new Date(todayDay.getFullYear(), todayDay.getMonth(), 1))
     }
   }
 
@@ -556,8 +568,11 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
 
         <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
           {/* View toggle */}
-          <div className="hidden sm:flex items-center bg-off-white dark:bg-dark-gray rounded-lg p-0.5">
+          <div className="hidden sm:flex items-center bg-off-white dark:bg-dark-gray rounded-lg p-0.5" role="tablist" aria-label="Calendar view">
             <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'week'}
               onClick={() => setView('week')}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
                 view === 'week'
@@ -568,6 +583,9 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
               Week
             </button>
             <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'month'}
               onClick={() => setView('month')}
               className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
                 view === 'month'
@@ -580,8 +598,12 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
           </div>
 
           {/* Mobile view toggle */}
-          <div className="sm:hidden flex items-center bg-off-white dark:bg-dark-gray rounded-lg p-0.5">
+          <div className="sm:hidden flex items-center bg-off-white dark:bg-dark-gray rounded-lg p-0.5" role="tablist" aria-label="Calendar view">
             <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'week'}
+              aria-label="Week view"
               onClick={() => setView('week')}
               className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
                 view === 'week'
@@ -592,6 +614,10 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
               W
             </button>
             <button
+              type="button"
+              role="tab"
+              aria-selected={view === 'month'}
+              aria-label="Month view"
               onClick={() => setView('month')}
               className={`px-2 py-1 text-[11px] font-medium rounded-md transition-colors ${
                 view === 'month'
@@ -605,6 +631,7 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
 
           {showTodayBtn && (
             <button
+              type="button"
               onClick={goToToday}
               className="px-2.5 py-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 bg-blue-500/10 rounded-lg hover:bg-blue-500/20 transition-colors min-h-[32px]"
             >
@@ -612,6 +639,7 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
             </button>
           )}
           <button
+            type="button"
             onClick={goPrev}
             className="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center rounded-lg hover:bg-off-white dark:hover:bg-dark-gray transition-colors"
             aria-label={view === 'week' ? 'Previous week' : 'Previous month'}
@@ -619,6 +647,7 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
             <ChevronLeft className="w-5 h-5 text-medium-gray" />
           </button>
           <button
+            type="button"
             onClick={goNext}
             className="w-8 h-8 sm:w-9 sm:h-9 flex items-center justify-center rounded-lg hover:bg-off-white dark:hover:bg-dark-gray transition-colors"
             aria-label={view === 'week' ? 'Next week' : 'Next month'}
@@ -630,9 +659,9 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
 
       {/* View content */}
       {view === 'week' ? (
-        <WeekView meetings={weekMeetings} days={days} today={today} userRole={userRole} />
+        <WeekView meetings={weekMeetings} days={days} todayKey={todayKey} userRole={userRole} />
       ) : (
-        <MonthView meetings={monthMeetings} monthDate={monthDate} today={today} userRole={userRole} />
+        <MonthView meetings={monthMeetings} monthDate={monthDate} todayKey={todayKey} userRole={userRole} />
       )}
     </div>
   )

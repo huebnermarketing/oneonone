@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { 
   Search, 
   TrendingUp, 
@@ -25,6 +26,7 @@ import {
   Zap
 } from 'lucide-react'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { useToast } from '@/components/ui/toast'
 
 interface Department {
   id: string
@@ -122,6 +124,7 @@ const suggestedQuestions = [
 
 export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProps) {
   const f = useFormat()
+  const { toastError } = useToast()
   const [insights, setInsights] = useState<InsightsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
@@ -149,11 +152,11 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
         setInsights(data)
       }
     } catch (error) {
-      // Error handled by toast
+      toastError('Failed to load insights')
     } finally {
       setLoading(false)
     }
-  }, [selectedDepartment, period])
+  }, [selectedDepartment, period, toastError])
 
   useEffect(() => {
     fetchInsights()
@@ -174,7 +177,7 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
         setActiveTab('search')
       }
     } catch (error) {
-      // Error handled by toast
+      toastError('Search failed')
     } finally {
       setSearching(false)
     }
@@ -282,8 +285,11 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 p-1 bg-off-white dark:bg-charcoal rounded-xl w-fit">
+      <div role="tablist" aria-label="Insights sections" className="flex gap-1 p-1 bg-off-white dark:bg-charcoal rounded-xl w-fit">
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'ask'}
           onClick={() => setActiveTab('ask')}
           className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${
             activeTab === 'ask'
@@ -295,6 +301,9 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
           Ask AI
         </button>
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'overview'}
           onClick={() => setActiveTab('overview')}
           className={`px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${
             activeTab === 'overview'
@@ -305,6 +314,9 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
           Overview
         </button>
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'search'}
           onClick={() => setActiveTab('search')}
           className={`px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${
             activeTab === 'search'
@@ -316,6 +328,9 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
         </button>
         {isSuperAdmin && (
           <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'departments'}
             onClick={() => setActiveTab('departments')}
             className={`px-4 py-2.5 text-sm font-medium rounded-lg transition-colors ${
               activeTab === 'departments'
@@ -783,7 +798,7 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
                   </div>
                   <div className="divide-y divide-off-white dark:divide-medium-gray/20">
                     {insights.recentMeetings.map((meeting) => (
-                      <a
+                      <Link
                         key={meeting.id}
                         href={`/meetings/${meeting.id}`}
                         className="flex items-center justify-between p-4 even:bg-off-white/40 dark:even:bg-charcoal/40 hover:bg-off-white/70 dark:hover:bg-charcoal/60 transition-colors"
@@ -810,7 +825,7 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
                             </span>
                           )}
                         </div>
-                      </a>
+                      </Link>
                     ))}
                   </div>
                 </div>
@@ -863,7 +878,7 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
           ) : (
             <div className="space-y-4">
               {searchResults.map((result) => (
-                <a
+                <Link
                   key={result.id}
                   href={`/meetings/${result.meetingId}`}
                   className="block rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-5 hover:border-orange/50 transition-colors"
@@ -888,7 +903,7 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
                   <p className="text-sm text-charcoal dark:text-light-gray line-clamp-3">
                     &ldquo;{result.snippet}&rdquo;
                   </p>
-                </a>
+                </Link>
               ))}
             </div>
           )}

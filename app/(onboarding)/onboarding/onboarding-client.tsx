@@ -299,10 +299,7 @@ export function OnboardingClient({ user, managers, departments }: OnboardingClie
 
       {/* Skip option for users who might need admin help */}
       <p className="text-center text-sm text-medium-gray mt-6">
-        Cannot find your manager?{' '}
-        <a href="mailto:admin@yourcompany.com" className="text-blue-500 hover:underline">
-          Contact admin
-        </a>
+        Cannot find your manager? Contact your administrator to be added to a department.
       </p>
     </div>
   )

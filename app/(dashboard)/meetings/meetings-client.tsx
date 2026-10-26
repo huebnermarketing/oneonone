@@ -17,14 +17,17 @@ import {
   X,
 } from 'lucide-react'
 import { useFormat } from '@/components/providers/timezone-provider'
-import { UserRole, RecurringFrequency } from '@prisma/client'
+import { UserRole, RecurringFrequency, MeetingStatus } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
+import { MeetingStatusPill, Pill } from '@/components/ui/pill'
+import { DAY_NAMES } from '@/lib/ui'
+import { Pagination } from '@/components/ui/pagination'
 
 interface Meeting {
   id: string
   meetingDate: Date
-  status: string
+  status: MeetingStatus
   formSubmittedAt: Date | string | null
   employeeId: string
   recurringScheduleId?: string | null
@@ -49,16 +52,6 @@ interface MeetingsClientProps {
   currentUserId: string
   userRole: UserRole
 }
-
-const dayNames = [
-  'Sunday',
-  'Monday',
-  'Tuesday',
-  'Wednesday',
-  'Thursday',
-  'Friday',
-  'Saturday',
-]
 
 export function MeetingsClient({
   meetings,
@@ -126,7 +119,6 @@ export function MeetingsClient({
     return dateB - dateA
   })
 
-  const totalPages = Math.ceil(sortedMeetings.length / ITEMS_PER_PAGE)
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
   const endIndex = startIndex + ITEMS_PER_PAGE
   const paginatedMeetings = sortedMeetings.slice(startIndex, endIndex)
@@ -234,19 +226,13 @@ export function MeetingsClient({
               {schedule.frequency === 'BIWEEKLY'
                 ? 'Bi-weekly'
                 : schedule.frequency.toLowerCase()}{' '}
-              • {dayNames[schedule.dayOfWeek]} at{' '}
+              • {DAY_NAMES[schedule.dayOfWeek]} at{' '}
               {formatTime(schedule.timeOfDay)}
             </p>
           </div>
-          <span
-            className={`hidden sm:inline px-3 py-1 text-xs font-medium rounded-full ${
-              schedule.isActive
-                ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                : 'bg-gray-500/10 text-gray-600 dark:text-gray-400'
-            }`}
-          >
+          <Pill tone={schedule.isActive ? 'green' : 'neutral'} className="hidden sm:inline-flex">
             {schedule.isActive ? 'Active' : 'Paused'}
-          </span>
+          </Pill>
           {canSchedule && (
             <div className="flex items-center gap-0.5 sm:gap-1 flex-shrink-0">
               <button
@@ -257,6 +243,7 @@ export function MeetingsClient({
                 disabled={isToggling === schedule.id}
                 className="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-off-white dark:hover:bg-charcoal transition-colors focus-visible:ring-2 focus-visible:ring-orange/50 focus-visible:outline-none"
                 title={schedule.isActive ? 'Pause' : 'Resume'}
+                aria-label={schedule.isActive ? `Pause schedule for ${displayName ?? 'employee'}` : `Resume schedule for ${displayName ?? 'employee'}`}
               >
                 {isToggling === schedule.id ? (
                   <div className="w-4 h-4 border-2 border-medium-gray border-t-transparent rounded-full animate-spin" />
@@ -272,6 +259,7 @@ export function MeetingsClient({
                 disabled={isDeleting === schedule.id}
                 className="p-2 min-w-[44px] min-h-[44px] flex items-center justify-center rounded-lg hover:bg-red-50 dark:hover:bg-red-500/10 transition-colors focus-visible:ring-2 focus-visible:ring-orange/50 focus-visible:outline-none"
                 title="Delete"
+                aria-label={`Delete schedule for ${displayName ?? 'employee'}`}
               >
                 {isDeleting === schedule.id ? (
                   <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
@@ -397,11 +385,13 @@ export function MeetingsClient({
       {/* Tabs — visible for all users when there's data */}
       {!hasNoData && (
         <div className="overflow-x-auto">
-          <div className="flex gap-1 p-1 bg-off-white dark:bg-charcoal rounded-xl w-fit min-w-0">
+          <div className="flex gap-1 p-1 bg-off-white dark:bg-charcoal rounded-xl w-fit min-w-0" role="tablist" aria-label="Meeting type">
           {(['all', 'one-time', 'recurring'] as const).map((tab) => (
             <button
               key={tab}
               type="button"
+              role="tab"
+              aria-selected={activeTab === tab}
               onClick={() => { setActiveTab(tab); setCurrentPage(1) }}
               className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors focus-visible:ring-2 focus-visible:ring-orange/50 focus-visible:outline-none ${
                 activeTab === tab
@@ -483,65 +473,27 @@ export function MeetingsClient({
                         {otherPerson?.name ?? 'Unknown'}
                       </p>
                       {needsForm && isEmployee && (
-                        <span className="px-2 py-0.5 text-xs font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400 rounded-full flex-shrink-0">
-                          Form needed
-                        </span>
+                        <Pill tone="amber" className="flex-shrink-0">Form needed</Pill>
                       )}
                     </div>
                     <p className="text-xs sm:text-sm text-medium-gray">
                       {f.meetingShort(meetingDate)}
                     </p>
                   </div>
-                  <span
-                    className={`px-2 sm:px-3 py-1 text-xs font-medium rounded-full flex-shrink-0 ${
-                      meeting.status === 'COMPLETED'
-                        ? 'bg-green-500/10 text-green-600 dark:text-green-400'
-                        : meeting.status === 'PROPOSED'
-                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400'
-                        : meeting.status === 'CANCELLED'
-                        ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                        : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                    }`}
-                  >
-                    {meeting.status === 'COMPLETED'
-                      ? 'Completed'
-                      : meeting.status === 'PROPOSED'
-                      ? 'Proposed'
-                      : meeting.status === 'CANCELLED'
-                      ? 'Cancelled'
-                      : isPast
-                        ? 'Pending'
-                        : 'Scheduled'}
-                  </span>
+                  <MeetingStatusPill status={meeting.status} isPast={isPast} className="flex-shrink-0" />
                   <ChevronRight className="w-4 h-4 sm:w-5 sm:h-5 text-light-gray hidden sm:block" />
                 </Link>
               )
             })}
           </div>
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t border-off-white dark:border-medium-gray/20">
-              <p className="text-sm text-medium-gray">
-                Showing {startIndex + 1}-{Math.min(endIndex, sortedMeetings.length)} of {sortedMeetings.length}
-              </p>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                  className="px-3 py-2 text-sm rounded-lg border border-off-white dark:border-medium-gray/20 disabled:opacity-40 hover:bg-off-white dark:hover:bg-dark-gray transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
-                >
-                  Prev
-                </button>
-                <span className="text-sm text-medium-gray px-2">{currentPage} / {totalPages}</span>
-                <button
-                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages}
-                  className="px-3 py-2 text-sm rounded-lg border border-off-white dark:border-medium-gray/20 disabled:opacity-40 hover:bg-off-white dark:hover:bg-dark-gray transition-colors min-w-[44px] min-h-[44px] flex items-center justify-center"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          )}
+          <Pagination
+            offset={startIndex}
+            limit={ITEMS_PER_PAGE}
+            total={sortedMeetings.length}
+            onChange={(offset) => setCurrentPage(Math.floor(offset / ITEMS_PER_PAGE) + 1)}
+            noun="meetings"
+            className="px-4 py-3 border-t border-off-white dark:border-medium-gray/20"
+          />
         </div>
       ) : !hasNoData ? (
         <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-6 sm:p-8 text-center">

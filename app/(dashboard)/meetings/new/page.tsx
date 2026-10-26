@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 
 export default async function NewMeetingPage() {
   const user = await requireRole([UserRole.REPORTER, UserRole.SUPER_ADMIN])
+  const workHours = await prisma.user.findUnique({ where: { id: user.id }, select: { workDayStart: true, workDayEnd: true } })
 
   // Get employees that can be scheduled
   // For REPORTER: get their direct reports
@@ -31,7 +32,7 @@ export default async function NewMeetingPage() {
         <p className="text-medium-gray">One-time or recurring one-on-one with your team</p>
       </div>
 
-      <ScheduleMeetingClient employees={employees} currentUserId={user.id} />
+      <ScheduleMeetingClient employees={employees} currentUserId={user.id} workDayStart={workHours?.workDayStart} workDayEnd={workHours?.workDayEnd} />
     </div>
   )
 }
