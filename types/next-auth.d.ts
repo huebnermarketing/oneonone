@@ -12,6 +12,7 @@ declare module 'next-auth' {
       role: UserRole
       departmentId?: string | null
       reportsToId?: string | null
+      timeZone?: string | null
     }
   }
 

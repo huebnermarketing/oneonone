@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { AuditAction } from '@prisma/client'
 import { DatePicker } from '@/components/ui/date-picker'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface AuditLog {
   id: string
@@ -63,6 +64,7 @@ const actionColors: Record<AuditAction, string> = {
 }
 
 export function AuditLogsClient() {
+  const f = useFormat()
   const [logs, setLogs] = useState<AuditLog[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
@@ -102,10 +104,6 @@ export function AuditLogsClient() {
   useEffect(() => {
     fetchLogs()
   }, [fetchLogs])
-
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString()
-  }
 
   const totalPages = Math.ceil(total / limit)
 
@@ -298,7 +296,7 @@ export function AuditLogsClient() {
                         </td>
                         <td className="px-6 py-4">
                           <span className="text-sm text-medium-gray">
-                            {formatDate(log.createdAt)}
+                            {f.dateTime(log.createdAt, 'short')}
                           </span>
                         </td>
                       </tr>
@@ -324,7 +322,7 @@ export function AuditLogsClient() {
                           {log.action.replace('_', ' ')}
                         </span>
                       </div>
-                      <span className="text-xs text-medium-gray">{formatDate(log.createdAt)}</span>
+                      <span className="text-xs text-medium-gray">{f.dateTime(log.createdAt, 'short')}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <div className="w-6 h-6 rounded-full bg-gradient-to-br from-charcoal to-medium-gray flex items-center justify-center text-white text-xs font-medium">

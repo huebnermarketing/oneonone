@@ -4,6 +4,7 @@ import { useState, useRef } from 'react'
 import { Paperclip, Upload, File, Trash2, Download, Loader2, X, FileText, Image, FileArchive } from 'lucide-react'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface Attachment {
   id: string
@@ -41,6 +42,7 @@ function formatFileSize(bytes: number) {
 
 export function FileAttachments({ meetingId, initialAttachments, canUpload }: FileAttachmentsProps) {
   const { toastError } = useToast()
+  const f = useFormat()
   const confirm = useConfirm()
   const [attachments, setAttachments] = useState<Attachment[]>(initialAttachments)
   const [uploading, setUploading] = useState(false)
@@ -259,7 +261,7 @@ export function FileAttachments({ meetingId, initialAttachments, canUpload }: Fi
                     </p>
                     <p className="text-xs text-medium-gray">
                       {formatFileSize(attachment.fileSize)} •{' '}
-                      {new Date(attachment.createdAt).toLocaleDateString()}
+                      {f.date(attachment.createdAt, 'short')}
                     </p>
                   </div>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">

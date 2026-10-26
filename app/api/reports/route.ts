@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { UserRole, Prisma } from '@prisma/client'
 import { parseQuery, REPORTER_OR_ADMIN, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
-import { isTodoOverdue } from '@/lib/utils'
+import { formatDate, isTodoOverdue } from '@/lib/dates'
 import { getTeamUserIds } from '@/lib/team'
 import { logDataExport } from '@/lib/audit'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
@@ -123,7 +123,8 @@ function buildCsv(
   reportData: ReportData,
   trends: Record<string, string>,
   commonIssues: Array<{ text: string; count: number }>,
-  meetings: ReportMeeting[]
+  meetings: ReportMeeting[],
+  timeZone: string
 ): string {
   const csvRows = [
     ['Report Generated', reportData.generatedAt],
@@ -146,7 +147,7 @@ function buildCsv(
     ['Meetings'],
     ['Date', 'Employee', 'Department', 'Reporter', 'Status', 'Form Submitted'],
     ...meetings.map(m => [
-      new Date(m.meetingDate).toLocaleDateString('en-US', { timeZone: DEFAULT_TIMEZONE }),
+      formatDate(m.meetingDate, timeZone, 'short'),
       m.employee.name,
       m.employee.department?.name || 'N/A',
       m.reporter.name,
@@ -223,7 +224,8 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
   const completedTasks = todos.filter(t => t.status === 'DONE').length
   const pendingTasks = todos.filter(t => t.status !== 'DONE').length
   const now = new Date()
-  const overdueTasks = todos.filter(t => isTodoOverdue(t.dueDate, now, t.status)).length
+  const timeZone = user.timeZone ?? DEFAULT_TIMEZONE
+  const overdueTasks = todos.filter(t => isTodoOverdue(t.dueDate, now, t.status, timeZone)).length
 
   // Analyze sentiment from meeting responses
   const sentimentData = meetings
@@ -279,7 +281,7 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
   }
 
   if (format === 'csv') {
-    const csv = buildCsv(reportData, trends, commonIssues, meetings)
+    const csv = buildCsv(reportData, trends, commonIssues, meetings, timeZone)
     await logDataExport(user.id, 'Report', {
       format: 'csv',
       departmentId: departmentId ?? null,

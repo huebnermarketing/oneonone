@@ -3,6 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { CheckCircle2, XCircle, Clock, Mic } from 'lucide-react'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface MeetingHistoryItem {
   id: string
@@ -30,6 +31,7 @@ interface MeetingHistoryListProps {
 const INITIAL_DISPLAY = 20
 
 export function MeetingHistoryList({ meetings }: MeetingHistoryListProps) {
+  const f = useFormat()
   const [showAll, setShowAll] = useState(false)
   const now = new Date()
 
@@ -79,12 +81,7 @@ export function MeetingHistoryList({ meetings }: MeetingHistoryListProps) {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="font-medium text-sm text-dark-gray dark:text-white">
-                      {date.toLocaleDateString('en-US', {
-                        weekday: 'short',
-                        month: 'short',
-                        day: 'numeric',
-                        year: 'numeric',
-                      })}
+                      {f.meetingShort(date)}
                     </p>
                     {hasRecording && (
                       <Mic className="w-3.5 h-3.5 text-purple-500 flex-shrink-0" />

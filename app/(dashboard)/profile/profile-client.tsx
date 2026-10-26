@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { User, Mail, Phone, Briefcase, Building2, Calendar, Save, Loader2, Users, ChevronDown, Globe, Clock } from 'lucide-react'
 import { UserRole } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
+import { useFormat } from '@/components/providers/timezone-provider'
 import {
   COUNTRY_OPTIONS,
   TIMEZONE_OPTIONS,
@@ -61,6 +62,7 @@ function parsePhone(phone: string | null): { countryCode: string; localNumber: s
 export function ProfileClient({ user, departments, managers }: ProfileClientProps) {
   const router = useRouter()
   const { toastSuccess, toastError } = useToast()
+  const f = useFormat()
   const [saving, setSaving] = useState(false)
 
   const parsed = parsePhone(user.phone)
@@ -199,10 +201,7 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
                 <span className="text-xs font-medium">Member Since</span>
               </div>
               <p className="text-dark-gray dark:text-white font-medium text-sm sm:text-base">
-                {new Date(user.createdAt).toLocaleDateString('en-US', { 
-                  month: 'long', 
-                  year: 'numeric' 
-                })}
+                {f.date(user.createdAt, 'long')}
               </p>
             </div>
           </div>

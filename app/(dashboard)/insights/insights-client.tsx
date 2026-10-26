@@ -24,6 +24,7 @@ import {
   ThumbsDown,
   Zap
 } from 'lucide-react'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface Department {
   id: string
@@ -120,6 +121,7 @@ const suggestedQuestions = [
 ]
 
 export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProps) {
+  const f = useFormat()
   const [insights, setInsights] = useState<InsightsData | null>(null)
   const [loading, setLoading] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
@@ -789,7 +791,7 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
                         <div>
                           <p className="font-medium text-dark-gray dark:text-white">{meeting.employee}</p>
                           <p className="text-sm text-medium-gray">
-                            {meeting.department} • {new Date(meeting.date).toLocaleDateString()}
+                            {meeting.department} • {f.date(meeting.date, 'short')}
                           </p>
                         </div>
                         <div className="flex items-center gap-3">
@@ -872,7 +874,7 @@ export function InsightsClient({ departments, isSuperAdmin }: InsightsClientProp
                         {result.meeting?.employee.name || 'Unknown'}
                       </p>
                       <p className="text-sm text-medium-gray">
-                        {result.meeting?.employee.department} • {result.meeting?.date && new Date(result.meeting.date).toLocaleDateString()}
+                        {result.meeting?.employee.department} • {result.meeting?.date && f.date(result.meeting.date, 'short')}
                       </p>
                     </div>
                     <span className={`px-2.5 py-1 text-xs font-medium rounded-full ${

@@ -7,6 +7,7 @@ import { Calendar, Repeat, ArrowLeft, Loader2, Check, AlertCircle, Clock, Search
 import { RecurringFrequency } from '@prisma/client'
 import { NewMeetingForm } from './new-meeting-form'
 import { useToast } from '@/components/ui/toast'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
 
@@ -40,14 +41,6 @@ function slotToTimeInTz(slotStartIso: string, timeZone: string): string {
   }).format(new Date(slotStartIso))
 }
 
-function formatSlotTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  })
-}
-
 interface ScheduleMeetingClientProps {
   employees: Array<{ id: string; name: string; email: string }>
   currentUserId: string
@@ -58,6 +51,7 @@ type ScheduleType = 'one-time' | 'recurring'
 export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeetingClientProps) {
   const router = useRouter()
   const { toastError } = useToast()
+  const f = useFormat()
   const [scheduleType, setScheduleType] = useState<ScheduleType | null>(null)
   const [recurringLoading, setRecurringLoading] = useState(false)
   const [recurringForm, setRecurringForm] = useState({
@@ -444,7 +438,7 @@ export function ScheduleMeetingClient({ employees, currentUserId }: ScheduleMeet
                             : 'border-off-white dark:border-medium-gray/20 hover:border-orange/50 text-dark-gray dark:text-white'
                         }`}
                       >
-                        {formatSlotTime(slot.start)}
+                        {f.time(slot.start)}
                       </button>
                     )
                   })}

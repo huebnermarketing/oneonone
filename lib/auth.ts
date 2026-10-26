@@ -126,6 +126,7 @@ export const authOptions: NextAuthOptions = {
             avatar: true,
             departmentId: true,
             reportsToId: true,
+            timeZone: true,
             isActive: true,
           },
         })
@@ -143,6 +144,7 @@ export const authOptions: NextAuthOptions = {
           session.user.role = dbUser.role
           session.user.departmentId = dbUser.departmentId
           session.user.reportsToId = dbUser.reportsToId
+          session.user.timeZone = dbUser.timeZone
         }
       }
 

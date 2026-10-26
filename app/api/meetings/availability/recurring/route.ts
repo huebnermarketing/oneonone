@@ -7,6 +7,7 @@ import { isDateUnavailableForEitherUser } from '@/lib/keka'
 import { getNextOccurrenceDates } from '@/lib/recurring-dates'
 import { DEFAULT_WORK_END, DEFAULT_WORK_START } from '@/lib/timezones'
 import { DEFAULT_TIMEZONE, MEETING_DURATION_MINUTES } from '@/lib/constants'
+import { formatMeetingLong } from '@/lib/dates'
 import { recurringAvailabilityQuery } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
@@ -73,15 +74,7 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
   const firstDate = firstFreeDate ?? upcomingDates[0]!
   const available = firstFreeDate !== null
 
-  const formatted = firstDate.toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: reporterTz,
-  })
+  const formatted = formatMeetingLong(firstDate, reporterTz)
 
   return NextResponse.json({
     available,

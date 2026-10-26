@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma'
 import { createAuditLog } from '@/lib/audit'
 import { DEFAULT_WORK_END, DEFAULT_WORK_START } from '@/lib/timezones'
 import { DEFAULT_TIMEZONE, MEETING_DURATION_MINUTES } from '@/lib/constants'
+import { formatMeetingLong } from '@/lib/dates'
 import { advanceToNextOccurrence, getNextOccurrenceDates } from '@/lib/recurring-dates'
 import { isCalendarEnabled, isDateTimeFreeForBoth } from '@/lib/google-calendar'
 import { isDateUnavailableForEitherUser } from '@/lib/keka'
@@ -74,15 +75,7 @@ async function findFirstFreeOccurrence(
     return upcomingDates[0]!
   }
 
-  const formatted = upcomingDates[0]!.toLocaleDateString('en-US', {
-    weekday: 'short',
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZone: reporterTz,
-  })
+  const formatted = formatMeetingLong(upcomingDates[0]!, reporterTz)
   throw conflict(
     `Each of the next ${MAX_OCCURRENCES_TO_CHECK} occurrences has a calendar conflict (e.g. first: ${formatted}). Please choose a different day or time.`
   )

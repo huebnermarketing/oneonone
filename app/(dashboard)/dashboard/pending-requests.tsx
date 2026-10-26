@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { AlertCircle, Clock, ChevronRight } from 'lucide-react'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface PendingMeeting {
   id: string
@@ -16,6 +17,7 @@ interface PendingRequestsProps {
 }
 
 export function PendingRequests({ type, meetings }: PendingRequestsProps) {
+  const f = useFormat()
   if (meetings.length === 0) return null
 
   if (type === 'receiver') {
@@ -36,17 +38,7 @@ export function PendingRequests({ type, meetings }: PendingRequestsProps) {
         </div>
         <div className="divide-y divide-amber-500/15">
           {meetings.map((m) => {
-            const date = new Date(m.meetingDate)
-            const formattedDate = date.toLocaleDateString('en-US', {
-              weekday: 'short',
-              month: 'short',
-              day: 'numeric',
-            })
-            const formattedTime = date.toLocaleTimeString('en-US', {
-              hour: 'numeric',
-              minute: '2-digit',
-              hour12: true,
-            })
+            const formattedDate = `${f.meetingShort(m.meetingDate)} ${f.abbrev(m.meetingDate)}`
 
             return (
               <Link
@@ -62,7 +54,7 @@ export function PendingRequests({ type, meetings }: PendingRequestsProps) {
                     {m.proposerName} proposed a meeting
                   </p>
                   <p className="text-sm text-medium-gray">
-                    {formattedDate} at {formattedTime}
+                    {formattedDate}
                   </p>
                 </div>
                 <span className="hidden sm:inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-sm font-medium bg-amber-500 text-white">
@@ -96,17 +88,7 @@ export function PendingRequests({ type, meetings }: PendingRequestsProps) {
       </div>
       <div className="divide-y divide-blue-500/10">
         {meetings.map((m) => {
-          const date = new Date(m.meetingDate)
-          const formattedDate = date.toLocaleDateString('en-US', {
-            weekday: 'short',
-            month: 'short',
-            day: 'numeric',
-          })
-          const formattedTime = date.toLocaleTimeString('en-US', {
-            hour: 'numeric',
-            minute: '2-digit',
-            hour12: true,
-          })
+          const formattedDate = `${f.meetingShort(m.meetingDate)} ${f.abbrev(m.meetingDate)}`
 
           return (
             <Link
@@ -122,7 +104,7 @@ export function PendingRequests({ type, meetings }: PendingRequestsProps) {
                   Awaiting {m.otherPartyName}&apos;s response
                 </p>
                 <p className="text-sm text-medium-gray">
-                  Proposed: {formattedDate} at {formattedTime}
+                  Proposed: {formattedDate}
                 </p>
               </div>
               <ChevronRight className="w-5 h-5 text-blue-400 group-hover:text-blue-500 transition-colors" />

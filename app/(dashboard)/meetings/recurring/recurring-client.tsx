@@ -23,6 +23,7 @@ import {
 import { RecurringFrequency } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
+import { useFormat } from '@/components/providers/timezone-provider'
 
 interface Employee {
   id: string
@@ -94,18 +95,11 @@ function slotToTimeInTz(slotStartIso: string, timeZone: string): string {
   }).format(d)
 }
 
-function formatSlotTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  })
-}
-
 export function RecurringSchedulesClient({ employees, initialSchedules }: Props) {
   const router = useRouter()
   const { toastSuccess, toastError } = useToast()
   const confirm = useConfirm()
+  const f = useFormat()
   const [schedules, setSchedules] = useState<Schedule[]>(initialSchedules)
   const [showForm, setShowForm] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -611,7 +605,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
                             : 'border-off-white dark:border-medium-gray/20 hover:border-orange/50 text-dark-gray dark:text-white'
                         }`}
                       >
-                        {formatSlotTime(slot.start)}
+                        {f.time(slot.start)}
                       </button>
                     )
                   })}
@@ -711,11 +705,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
                         {schedule.nextMeetingDate && schedule.isActive && (
                           <p className="text-xs text-medium-gray mt-1 flex items-center gap-1">
                             <Clock className="w-3 h-3" />
-                            Next: {new Date(schedule.nextMeetingDate).toLocaleDateString('en-US', {
-                              month: 'short',
-                              day: 'numeric',
-                              year: 'numeric',
-                            })}
+                            Next: {f.meetingShort(schedule.nextMeetingDate)}
                           </p>
                         )}
                       </div>
@@ -835,7 +825,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
                                       : 'border-off-white dark:border-medium-gray/20 hover:border-orange/50 text-dark-gray dark:text-white'
                                   }`}
                                 >
-                                  {formatSlotTime(slot.start)}
+                                  {f.time(slot.start)}
                                 </button>
                               )
                             })}
