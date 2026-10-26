@@ -1,14 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // output: 'standalone', // Disabled for simpler deployment with npm start
+  // Keep the ffmpeg-static binary out of the server bundle so recording compression can spawn it
+  serverExternalPackages: ['ffmpeg-static'],
   experimental: {
-    // Keep ffmpeg-static binary external so recording compression works in production (Next.js 14)
-    serverComponentsExternalPackages: ['ffmpeg-static'],
-    // Allow large recording uploads (default can truncate at 1MB)
-    serverActions: {
-      bodySizeLimit: '50mb',
-    },
+    // proxy.ts matches /api, and Next buffers proxied request bodies up to this size (default 10 MB).
+    // Recording chunks are small, but attachments and backup restores can be larger — keep the old 50 MB headroom.
+    proxyClientMaxBodySize: '50mb',
   },
 }
 

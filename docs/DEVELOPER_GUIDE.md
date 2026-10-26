@@ -12,7 +12,7 @@ Baseline: `npm run check` (typecheck + lint + 106 unit tests) clean, `next build
 
 | Layer | Choice | Notes |
 |---|---|---|
-| Framework | Next.js 14.2 App Router, React 18, TypeScript 5 (strict) | All API routes export `dynamic = 'force-dynamic'` |
+| Framework | Next.js 16 App Router, React 19, TypeScript 5 (strict); Turbopack for dev, webpack for production builds; Node ≥ 20.9 | All API routes export `dynamic = 'force-dynamic'` |
 | DB / ORM | PostgreSQL + Prisma 5.19 | Migrations in `prisma/migrations/` (baseline `0_init`); `deploy.sh` runs `migrate deploy`. Databases created earlier with `db push` need a one-time `prisma migrate resolve --applied 0_init` |
 | Auth | NextAuth 4, Google provider only, `PrismaAdapter`, database sessions (30d) | Requests `calendar` scope at sign-in |
 | Styling | Tailwind 3.4, class-based dark mode, lucide-react icons | Brand tokens in `tailwind.config.ts` (`orange #F37022`, `charcoal`, `dark-gray`, `medium-gray`, `light-gray`, `off-white`) |
@@ -113,7 +113,7 @@ components/
 lib/         all server logic — see §5
 prisma/      schema.prisma, seed.ts
 types/       next-auth.d.ts (session augmentation)
-middleware.ts  security headers + cookie-presence redirect for protected prefixes
+proxy.ts       security headers + cookie-presence redirect for protected prefixes
 deploy/, deploy.sh, ecosystem.config.cjs   PM2/Nginx deployment
 prisma/migrations/   migration history (0_init baseline)
 ```

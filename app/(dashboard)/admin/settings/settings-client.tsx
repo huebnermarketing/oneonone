@@ -38,7 +38,9 @@ export function SettingsClient() {
   const { toastError } = useToast()
   // Read through a ref so the mount-only effect below keeps its empty deps
   const toastErrorRef = useRef(toastError)
-  toastErrorRef.current = toastError
+  useEffect(() => {
+    toastErrorRef.current = toastError
+  }, [toastError])
   const [settings, setSettings] = useState<Settings | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)

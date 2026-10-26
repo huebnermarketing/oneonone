@@ -48,36 +48,39 @@ describe('toErrorResponse', () => {
   })
 })
 
+/** Next 15+ always passes a context whose params is a Promise (empty for static routes). */
+const noParams = { params: Promise.resolve({}) }
+
 describe('withApiAuth', () => {
   it('401 when no session', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(null)
     const h = withApiAuth(async () => new Response('ok'))
-    expect((await h(req())).status).toBe(401)
+    expect((await h(req(), noParams)).status).toBe(401)
   })
   it('403 when role not allowed', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(employee as never)
     const h = withApiAuth([UserRole.SUPER_ADMIN], async () => new Response('ok'))
-    expect((await h(req())).status).toBe(403)
+    expect((await h(req(), noParams)).status).toBe(403)
   })
   it('passes user + params to the handler when allowed', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(reporter as never)
     const h = withApiAuth([UserRole.REPORTER, UserRole.SUPER_ADMIN], async (_r, ctx) =>
       Response.json({ id: ctx.user.id, p: ctx.params.id })
     )
-    const r = await json(await h(req(), { params: { id: 'abc' } }))
+    const r = await json(await h(req(), { params: Promise.resolve({ id: 'abc' }) }))
     expect(r.body).toEqual({ id: reporter.id, p: 'abc' })
   })
   it('no roles = any authenticated user', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(employee as never)
     const h = withApiAuth(async () => new Response('ok'))
-    expect((await h(req())).status).toBe(200)
+    expect((await h(req(), noParams)).status).toBe(200)
   })
   it('maps thrown errors from the handler', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(admin as never)
     const h = withApiAuth(async () => {
       throw notFound('Thing')
     })
-    expect((await h(req())).status).toBe(404)
+    expect((await h(req(), noParams)).status).toBe(404)
   })
 })
 
@@ -85,11 +88,11 @@ describe('withPublicRoute', () => {
   it('runs without a session and still maps errors', async () => {
     vi.mocked(getCurrentUser).mockResolvedValue(null)
     const ok = withPublicRoute(async () => new Response('ok'))
-    expect((await ok(req())).status).toBe(200)
+    expect((await ok(req(), noParams)).status).toBe(200)
     const bad = withPublicRoute(async () => {
       throw new ApiError(503, 'down')
     })
-    expect((await bad(req())).status).toBe(503)
+    expect((await bad(req(), noParams)).status).toBe(503)
   })
 })
 

@@ -1,22 +1,22 @@
 # CLAUDE.md — AMI One-on-One
 
-Next.js 14 App Router + Prisma/Postgres + NextAuth (Google) app for managing 1:1 meetings, with audio recording → Whisper → GPT analysis, Google Calendar, email/in-app notifications, Keka + Fathom integrations.
+Next.js 16 App Router (React 19) + Prisma/Postgres + NextAuth (Google) app for managing 1:1 meetings, with audio recording → Whisper → GPT analysis, Google Calendar, email/in-app notifications, Keka + Fathom integrations.
 
 Read first: `docs/DEVELOPER_GUIDE.md` (architecture, flows, setup), `docs/API_REFERENCE.md` (every route + auth rule), `docs/REFACTOR_BACKLOG.md` (known defects with file:line — check before "fixing" something that is already listed).
 
 ## Commands
 
 ```bash
-npm run dev            # http://localhost:3000 (reads .env — Prisma CLI ignores .env.local)
+npm run dev            # http://localhost:3000, Turbopack (reads .env — Prisma CLI ignores .env.local)
 npm run typecheck      # tsc --noEmit — clean; keep it that way
-npm run lint           # clean
+npm run lint           # ESLint 9 flat config (eslint.config.mjs) — 0 errors; React Compiler rules are warnings (backlog)
 npm test               # vitest unit tests (tests/unit, no DB — prisma is mocked). Add a test for every lib/ change.
 npm run test:smoke     # end-to-end API checks against a running dev server + seeded DB (scripts/smoke-api.sh). Never against prod.
 npm run check          # typecheck + lint + test — run before every PR. CI runs the same plus build + migration drift check.
 npm run db:migrate     # prisma migrate dev — use this for schema changes (creates prisma/migrations/*). Never db push.
 npm run db:seed        # WIPES the DB, seeds @test.com users. Never in production.
 npm run db:studio
-npm run build          # NODE_OPTIONS=--max-old-space-size=3072 next build
+npm run build          # next build --webpack, 3 GB heap (webpack peaks ~2.3 GB vs Turbopack ~3.2 GB — keeps prod box headroom)
 ```
 
 Local login without Google: `POST /api/auth/test-login {"role":"SUPER_ADMIN"|"REPORTER"|"EMPLOYEE"}` sets a real session cookie (dev only).
@@ -30,6 +30,7 @@ Local login without Google: `POST /api/auth/test-login {"role":"SUPER_ADMIN"|"RE
 
 ## Rules for changes
 
+- **Next 16 specifics**: page/layout `params`/`searchParams` are Promises (`const { id } = await props.params`); `cookies()`/`headers()` must be awaited; route handlers get `params` already awaited from the `withApiAuth`/`withPublicRoute` wrapper. Request gating + security headers live in `proxy.ts` (formerly middleware). Node ≥ 20.9.
 - **API routes**: `export const GET = withApiAuth([roles], async (req, { user, params }) => …)` from `lib/api.ts` (or `withPublicRoute` for health/webhooks/cron). Parse input with `parseBody(req, schema)` / `parseQuery(req, schema)` using schemas in `lib/validation/*.ts`. Throw `ApiError`/`notFound()`/`forbidden()`/`badRequest()`/`conflict()`; the wrapper maps errors (zod → 400 with `details`, P2002 → 409, P2025 → 404). Object-level checks: `lib/meeting-access.ts` (`canViewMeeting`, `canManageMeeting`, `canCancel`, `canViewRecording`…), `lib/team.ts` (`getTeamUserIds`, `canActOnUser`). Status changes go through `lib/meeting-state.ts`. Audit every mutation. Static imports only (no `await import('@/lib/…')`). Never `requireAuth()`/`requireRole()` in a route.
 - **Prisma schema change**: `npx prisma migrate dev --name <change>` and commit the new folder under `prisma/migrations/`. Mind missing cascades (`Todo.meeting`, `AuditLog.user`, `RecurringSchedule.*`).
 - **AI calls** go through `lib/ai.ts` (`getAiClient()`, `chatJson()`); never `new OpenAI()` in a route. Provider (OpenAI/OpenRouter), key and the three models (chat / fast / transcription) live in `SystemSettings` → Admin → Settings → AI Provider. Model ids are provider-prefixed on OpenRouter (`openai/gpt-4o`); `normalizeModelId` handles the switch. Transcription steering (prompt per language, repetition guard, language fallback) lives in `lib/transcription-quality.ts` — pure functions, test them.

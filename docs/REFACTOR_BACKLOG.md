@@ -51,7 +51,9 @@ Findings from a full read of the codebase at commit `a26e431` (2026-10-23). Grou
 
 ### Dependency upgrades (status)
 - Done in `chore/upgrade-mail-calendar`: nodemailer 7 → 10.2.1 (Node ≥20; `next-auth` optional peer pinned via `overrides`), googleapis 144 → 188, `engines.node >=20.9.0`. Prod audit 10 → 3.
-- Next: Next 14 → 16 (clears the `next` critical + `postcss` high), Tailwind 3 → 4, Prisma 5 → 6, **zod 3 → 4** (`zod` high: memory exhaustion on oversized constrained collections; v4 changes `nativeEnum`, error shapes used by `lib/api.ts` → separate PR).
+- Done in `chore/upgrade-next-16`: Next 14 → 16.4, React 19, ESLint 9 flat config, `middleware.ts` → `proxy.ts`, async params, `serverExternalPackages`, `experimental.proxyClientMaxBodySize: 50mb`. Prod audit → 1 (zod).
+- React Compiler lint rules downgraded to warnings (23): `react-hooks/set-state-in-effect` ×18 (fetch-on-mount effects), `immutability` ×2 (settings-client functions used before declaration), `purity` ×2 (`Date.now()` in render), `incompatible-library` ×1. Fix opportunistically when touching those files, then flip back to error.
+- Next: Tailwind 3 → 4, Prisma 5 → 6, **zod 3 → 4** (`zod` high: memory exhaustion on oversized constrained collections; v4 changes `nativeEnum`, error shapes used by `lib/api.ts` → separate PR).
 
 ## P2 — Structure, duplication, dead code
 

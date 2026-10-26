@@ -3,7 +3,8 @@ import { prisma } from '@/lib/prisma'
 import { notFound } from 'next/navigation'
 import { TodoDetail } from './todo-detail'
 
-export default async function TodoDetailPage({ params }: { params: { id: string } }) {
+export default async function TodoDetailPage(props: { params: Promise<{ id: string }> }) {
+  const params = await props.params
   const user = await getCurrentUser()
   if (!user) return null
 
