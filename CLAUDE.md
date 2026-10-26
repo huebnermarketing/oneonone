@@ -32,6 +32,7 @@ Local login without Google: `POST /api/auth/test-login {"role":"SUPER_ADMIN"|"RE
 
 - **API routes**: `export const GET = withApiAuth([roles], async (req, { user, params }) => …)` from `lib/api.ts` (or `withPublicRoute` for health/webhooks/cron). Parse input with `parseBody(req, schema)` / `parseQuery(req, schema)` using schemas in `lib/validation/*.ts`. Throw `ApiError`/`notFound()`/`forbidden()`/`badRequest()`/`conflict()`; the wrapper maps errors (zod → 400 with `details`, P2002 → 409, P2025 → 404). Object-level checks: `lib/meeting-access.ts` (`canViewMeeting`, `canManageMeeting`, `canCancel`, `canViewRecording`…), `lib/team.ts` (`getTeamUserIds`, `canActOnUser`). Status changes go through `lib/meeting-state.ts`. Audit every mutation. Static imports only (no `await import('@/lib/…')`). Never `requireAuth()`/`requireRole()` in a route.
 - **Prisma schema change**: `npx prisma migrate dev --name <change>` and commit the new folder under `prisma/migrations/`. Mind missing cascades (`Todo.meeting`, `AuditLog.user`, `RecurringSchedule.*`).
+- **AI calls** go through `lib/ai.ts` (`getAiClient()`, `chatJson()`); never `new OpenAI()` in a route. Provider (OpenAI/OpenRouter), key and the three models (chat / fast / transcription) live in `SystemSettings` → Admin → Settings → AI Provider. Model ids are provider-prefixed on OpenRouter (`openai/gpt-4o`); `normalizeModelId` handles the switch.
 - **Policies** live in `SystemSettings` (Admin → Settings → Policies) and are read via `getPolicies()`: `requireFormBeforeComplete`, `cancelPolicy`, `employeeCanViewRecording`, `employeeCanViewNotes`, `enableEmailReminders`, `reminderHoursBefore`, `shortReminderHoursBefore`. Gate behaviour on these, don't hardcode.
 - **Secrets**: `SystemSettings` row overrides env per field; `openaiApiKey`/`awsAccessKeyId`/`awsSecretKey` are AES-GCM encrypted (`lib/encryption.ts`, v2 format, key from `ENCRYPTION_SECRET` via HKDF; `NEXTAUTH_SECRET` fallback). Rotation = `ENCRYPTION_SECRET_PREVIOUS` + `npm run secrets:reencrypt`. Production refuses to boot without `GOOGLE_WORKSPACE_DOMAIN`.
 - **Dates**: store UTC; display helpers in `lib/utils.ts` default to `Asia/Kolkata`. Don't add new `toLocaleDateString` calls; the TZ story is being consolidated (backlog #24).
@@ -42,7 +43,7 @@ Local login without Google: `POST /api/auth/test-login {"role":"SUPER_ADMIN"|"RE
 
 ## Env (local minimum)
 
-`DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL=http://localhost:3000`, `NODE_ENV=development`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (placeholders OK — `lib/auth.ts` only checks presence), `GOOGLE_WORKSPACE_DOMAIN`, `INITIAL_ADMIN_EMAILS`, `ENCRYPTION_SECRET`. Optional: `OPENAI_API_KEY`, `AWS_*` (S3 required for recording), SMTP/SES, `FATHOM_WEBHOOK_SECRET`, `KEKA_*`. `CRON_SECRET` is now required for `/api/cron/meetings` in every environment.
+`DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL=http://localhost:3000`, `NODE_ENV=development`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (placeholders OK — `lib/auth.ts` only checks presence), `GOOGLE_WORKSPACE_DOMAIN`, `INITIAL_ADMIN_EMAILS`, `ENCRYPTION_SECRET`. Optional: `AI_PROVIDER` + `OPENAI_API_KEY`/`OPENROUTER_API_KEY`, `AWS_*` (S3 required for recording), SMTP/SES, `FATHOM_WEBHOOK_SECRET`, `KEKA_*`. `CRON_SECRET` is now required for `/api/cron/meetings` in every environment.
 
 ## Branch flow
 

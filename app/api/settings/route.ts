@@ -3,6 +3,7 @@ import { ADMIN, badRequest, parseBody, withApiAuth } from '@/lib/api'
 import { getSettings, updateSettings, SystemSettings } from '@/lib/settings'
 import { maskApiKey } from '@/lib/encryption'
 import { logSettingsChanged } from '@/lib/audit'
+import { buildClient, PROVIDERS } from '@/lib/ai'
 import { settingsActionSchema, updateSettingsSchema } from '@/lib/validation/admin'
 
 export const dynamic = 'force-dynamic'
@@ -12,9 +13,11 @@ const SECRET_KEYS: (keyof SystemSettings)[] = ['openaiApiKey', 'awsAccessKeyId',
 function maskedView(s: SystemSettings) {
   return {
     // AI
+    aiProvider: s.aiProvider,
     openaiApiKey: maskApiKey(s.openaiApiKey),
     openaiApiKeySet: !!s.openaiApiKey,
     openaiModel: s.openaiModel,
+    aiFastModel: s.aiFastModel,
     whisperModel: s.whisperModel,
     // Storage
     awsRegion: s.awsRegion,
@@ -68,14 +71,21 @@ export const POST = withApiAuth(ADMIN, async (req: NextRequest) => {
   const settings = await getSettings()
 
   if (action === 'test-openai') {
-    if (!settings.openaiApiKey) throw badRequest('OpenAI API key not configured')
-    const OpenAI = (await import('openai')).default
-    const openai = new OpenAI({ apiKey: settings.openaiApiKey })
+    const label = PROVIDERS[settings.aiProvider].label
+    if (!settings.openaiApiKey) throw badRequest(`${label} API key not configured`)
+    const client = buildClient(settings.aiProvider, settings.openaiApiKey)
     try {
-      await openai.models.list()
-      return NextResponse.json({ success: true, message: 'OpenAI connection successful' })
+      // Cheapest authenticated call on both providers; also proves the chat model id resolves
+      const res = await client.chat.completions.create({
+        model: settings.aiProvider === 'OPENROUTER' && !settings.openaiModel.includes('/') ? `openai/${settings.openaiModel}` : settings.openaiModel,
+        messages: [{ role: 'user', content: 'Reply with the single word: ok' }],
+        max_tokens: 5,
+        temperature: 0,
+      })
+      const reply = res.choices[0]?.message?.content?.trim() || ''
+      return NextResponse.json({ success: true, message: `${label} connection successful (${res.model || settings.openaiModel} replied "${reply.slice(0, 20)}")` })
     } catch (err: unknown) {
-      throw badRequest(`OpenAI connection failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+      throw badRequest(`${label} connection failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
     }
   }
 

@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import OpenAI from 'openai'
 import { UserRole, Prisma } from '@prisma/client'
 import { ApiError, badRequest, parseBody, REPORTER_OR_ADMIN, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
-import { getSettings } from '@/lib/settings'
+import { getAiClient, chatJson, AiNotConfiguredError } from '@/lib/ai'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { recordingsAnalyzeSchema } from '@/lib/validation/misc'
 
@@ -107,7 +106,7 @@ function toOpenAiError(error: unknown): ApiError {
   const err = error as { status?: number; message?: string }
   let message = 'Failed to analyze data. Please try again.'
   if (err?.status === 401 || err?.message?.includes('API key')) {
-    message = 'OpenAI API key is invalid. Please check your API key in Admin > Settings.'
+    message = 'AI provider API key is invalid. Please check your API key in Admin > Settings.'
   } else if (err?.status === 429) {
     message = 'Rate limit exceeded. Please try again in a few minutes.'
   } else if (err?.status === 400) {
@@ -129,9 +128,12 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
 
   const { question, departmentId } = await parseBody(req, recordingsAnalyzeSchema)
 
-  const settings = await getSettings()
-  if (!settings.openaiApiKey) {
-    throw badRequest('OpenAI API key not configured. Please configure it in Admin > Settings.')
+  let ai: Awaited<ReturnType<typeof getAiClient>>
+  try {
+    ai = await getAiClient()
+  } catch (e) {
+    if (e instanceof AiNotConfiguredError) throw badRequest(e.message)
+    throw e
   }
 
   const where: Prisma.MeetingWhereInput = {}
@@ -162,23 +164,16 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
     })
   }
 
-  const openai = new OpenAI({ apiKey: settings.openaiApiKey })
   const { systemPrompt, userPrompt } = buildPrompts(meetingData, question, departmentId)
 
   let analysis: Record<string, unknown>
   try {
-    const response = await openai.chat.completions.create({
-      model: settings.openaiModel || 'gpt-4o',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
+    analysis = await chatJson<Record<string, unknown>>(ai.client, {
+      model: ai.config.chatModel,
+      system: systemPrompt,
+      user: userPrompt,
       temperature: 0.3,
-      response_format: { type: 'json_object' },
     })
-    const content = response.choices[0].message.content
-    if (!content) throw new Error('No response from OpenAI')
-    analysis = JSON.parse(content)
   } catch (error) {
     throw toOpenAiError(error)
   }

@@ -587,7 +587,7 @@ export function MeetingRecorder({
               </p>
               {currentError?.includes('API key') && (
                 <p className="text-xs text-red-400 mt-1">
-                  Configure the OpenAI API key in Admin → Settings
+                  Configure the AI provider API key in Admin → Settings
                 </p>
               )}
               {currentError?.includes('S3') && (
