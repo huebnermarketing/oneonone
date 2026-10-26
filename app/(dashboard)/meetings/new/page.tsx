@@ -1,10 +1,10 @@
-import { requireRole } from '@/lib/auth-helpers'
+import { requirePageRole } from '@/lib/auth-helpers'
 import { UserRole } from '@prisma/client'
 import { ScheduleMeetingClient } from './schedule-meeting-client'
 import { prisma } from '@/lib/prisma'
 
 export default async function NewMeetingPage() {
-  const user = await requireRole([UserRole.REPORTER, UserRole.SUPER_ADMIN])
+  const user = await requirePageRole([UserRole.REPORTER, UserRole.SUPER_ADMIN])
   const workHours = await prisma.user.findUnique({ where: { id: user.id }, select: { workDayStart: true, workDayEnd: true } })
 
   // Get employees that can be scheduled

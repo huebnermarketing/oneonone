@@ -1,16 +1,8 @@
-import { getCurrentUser } from '@/lib/auth-helpers'
-import { notFound } from 'next/navigation'
-import { UserRole } from '@prisma/client'
+import { requirePageAdmin } from '@/lib/auth-helpers'
 import { SettingsClient } from './settings-client'
 
 export default async function SettingsPage() {
-  const user = await getCurrentUser()
-  if (!user) return notFound()
-
-  // Only Super Admin can access settings
-  if (user.role !== UserRole.SUPER_ADMIN) {
-    return notFound()
-  }
+  await requirePageAdmin()
 
   return (
     <div className="space-y-8 max-w-4xl">

@@ -129,7 +129,12 @@ check "cron with secret 200" 200 $(code -X POST $B/api/cron/meetings -H "x-cron-
 
 echo "## pages"
 for p in /dashboard /meetings /todos /employees /admin /admin/settings /insights /profile; do check "admin page $p" 200 $(code -b "$ADMIN" $B$p); done
-check "employee /admin -> error boundary (200)" 200 $(code -b "$ALEX" $B/admin)
+# Pages with loading.tsx stream, so redirect() arrives in the body (NEXT_REDIRECT + meta refresh), not as a 307
+denied() { curl -s -b "$ALEX" "$B$1" | grep -q 'NEXT_REDIRECT;replace;/access-denied' && echo yes || echo no; }
+for p in /admin /admin/settings /admin/audit-logs /reports /employees /meetings/new /insights; do check "employee $p -> access-denied" yes "$(denied $p)"; done
+check "admin /admin not redirected" no "$(curl -s -b "$ADMIN" "$B/admin" | grep -q 'NEXT_REDIRECT' && echo yes || echo no)"
+check "access-denied page renders" 200 $(code -b "$ALEX" $B/access-denied)
+grep -q "have access to that page" /tmp/body && echo "  ok   access-denied copy" || { echo "  FAIL access-denied copy"; fail=$((fail+1)); }
 
 # cleanup: restore cancelled fixtures, remove temp rows, reset policies
 $PSQL -c "update \"Meeting\" set status='SCHEDULED' where id in ('$MID','$MID2'); delete from \"Notification\" where link in ('/meetings/$MID','/meetings/$MID2') and type='MEETING_CANCELLED'; update \"User\" set title=null where id='$ALEX_ID'; delete from \"Todo\" where id='$TODO_ID'; delete from \"AuditLog\" where \"entityId\" in ('$MID','$MID2') and action='UPDATE' and details->>'status'='CANCELLED'; delete from \"Session\" where expires < now()+interval '2 days';" >/dev/null

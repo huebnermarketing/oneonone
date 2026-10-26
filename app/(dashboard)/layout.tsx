@@ -15,7 +15,7 @@ export default async function Layout({ children }: { children: React.ReactNode }
   
   return (
     <TimeZoneProvider timeZone={user.timeZone}>
-      <DashboardLayout>{children}</DashboardLayout>
+      <DashboardLayout user={{ name: user.name, image: user.image, role: user.role }}>{children}</DashboardLayout>
     </TimeZoneProvider>
   )
 }

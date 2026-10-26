@@ -3,6 +3,9 @@ import { fromZonedTime, toZonedTime } from 'date-fns-tz'
 import { RecurringFrequency } from '@prisma/client'
 import { prisma } from './prisma'
 import { DEFAULT_WORK_END, DEFAULT_WORK_START } from './timezones'
+import { MEETING_DURATION_MINUTES } from './constants'
+import { computeFreeSlots, isMeetingTimeFree, type Interval } from './free-slots'
+import { buildRecurrenceRule } from './recurring-dates'
 
 // Create OAuth2 client
 function createOAuth2Client() {
@@ -81,7 +84,7 @@ export async function createCalendarEvent(
         timeZone: calendarTz,
       },
       end: {
-        dateTime: new Date(meetingDate.getTime() + 30 * 60 * 1000).toISOString(),
+        dateTime: new Date(meetingDate.getTime() + MEETING_DURATION_MINUTES * 60_000).toISOString(),
         timeZone: calendarTz,
       },
       attendees: [
@@ -143,20 +146,6 @@ export async function createCalendarEvent(
   }
 }
 
-/** Build RRULE for 1 year of occurrences. COUNT: weekly 52, biweekly 26, monthly 12. */
-function buildRecurrenceRule(frequency: RecurringFrequency): string[] {
-  switch (frequency) {
-    case 'WEEKLY':
-      return ['RRULE:FREQ=WEEKLY;WKST=MO;COUNT=52']
-    case 'BIWEEKLY':
-      return ['RRULE:FREQ=WEEKLY;INTERVAL=2;WKST=MO;COUNT=26']
-    case 'MONTHLY':
-      return ['RRULE:FREQ=MONTHLY;COUNT=12']
-    default:
-      return ['RRULE:FREQ=WEEKLY;WKST=MO;COUNT=52']
-  }
-}
-
 /**
  * Create a recurring Google Calendar event (1 year of occurrences) so both reporter and employee
  * see the series on their calendars. Uses reporter's calendar as organizer; employee gets invite.
@@ -179,7 +168,7 @@ export async function createRecurringCalendarEvent(
   const oauth2Client = await getAuthenticatedClient(reporterId)
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client })
 
-  const endDate = new Date(firstOccurrenceDate.getTime() + 30 * 60 * 1000)
+  const endDate = new Date(firstOccurrenceDate.getTime() + MEETING_DURATION_MINUTES * 60_000)
   const event = {
     summary: `One-on-One (recurring): ${employeeName} & ${reporterName}`,
     description: `AMI One-on-One Recurring Meeting\n\nView meeting details: ${process.env.NEXTAUTH_URL}/meetings/${firstMeetingId}`,
@@ -191,7 +180,7 @@ export async function createRecurringCalendarEvent(
       dateTime: endDate.toISOString(),
       timeZone: calendarTz,
     },
-    recurrence: buildRecurrenceRule(frequency),
+    recurrence: buildRecurrenceRule(frequency, firstOccurrenceDate, calendarTz),
     attendees: [
       { email: employeeEmail },
       { email: reporterEmail },
@@ -247,7 +236,7 @@ export async function updateCalendarEvent(
         timeZone: calendarTz,
       },
       end: {
-        dateTime: new Date(meetingDate.getTime() + 30 * 60 * 1000).toISOString(),
+        dateTime: new Date(meetingDate.getTime() + MEETING_DURATION_MINUTES * 60_000).toISOString(),
         timeZone: calendarTz,
       },
     }
@@ -419,7 +408,7 @@ export async function getMutualFreeSlots(
   reporterId: string,
   employeeId: string,
   date: Date,
-  slotMinutes = 30,
+  slotMinutes = MEETING_DURATION_MINUTES,
   options?: MutualFreeSlotsOptions
 ): Promise<FreeSlot[]> {
   const reporterTz = options?.reporterTimeZone ?? FALLBACK_TZ
@@ -449,78 +438,59 @@ export async function getMutualFreeSlots(
     getFreeBusy(employeeId, queryStart, queryEnd),
   ])
 
-  const allBusy = [...reporterBusy, ...employeeBusy]
-    .map((b) => ({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() }))
-    .sort((a, b) => a.start - b.start)
+  const busy: Interval[] = [...reporterBusy, ...employeeBusy].map((b) => ({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() }))
 
-  const merged: { start: number; end: number }[] = []
-  for (const range of allBusy) {
-    const last = merged[merged.length - 1]
-    if (last && range.start <= last.end) {
-      last.end = Math.max(last.end, range.end)
-    } else {
-      merged.push({ ...range })
-    }
-  }
-
-  const slotMs = slotMinutes * 60 * 1000
-  const slots: FreeSlot[] = []
-  let cursor = windowStart.getTime()
-
-  const considerSlot = (slotStartMs: number): boolean => {
-    const slotStart = new Date(slotStartMs)
-    if (!isWithinWorkHours(slotStart, reporterTz, reporterStart, reporterEnd)) return false
-    if (!isWithinWorkHours(slotStart, employeeTz, employeeStart, employeeEnd)) return false
-    return true
-  }
-
-  for (const busy of merged) {
-    while (cursor + slotMs <= busy.start) {
-      if (considerSlot(cursor)) {
-        slots.push({
-          start: new Date(cursor).toISOString(),
-          end: new Date(cursor + slotMs).toISOString(),
-        })
-      }
-      cursor += slotMs
-    }
-    cursor = Math.max(cursor, busy.end)
-  }
-
-  while (cursor + slotMs <= windowEnd.getTime()) {
-    if (considerSlot(cursor)) {
-      slots.push({
-        start: new Date(cursor).toISOString(),
-        end: new Date(cursor + slotMs).toISOString(),
-      })
-    }
-    cursor += slotMs
-  }
-
-  return slots
+  return computeFreeSlots({
+    window: { start: windowStart.getTime(), end: windowEnd.getTime() },
+    busy,
+    durationMs: slotMinutes * 60_000,
+    stepMs: SLOT_STEP_MINUTES * 60_000,
+    accept: bothInWorkHours(options),
+  }).map((slot) => ({ start: new Date(slot.start).toISOString(), end: new Date(slot.end).toISOString() }))
 }
 
-const SLOT_DURATION_MINUTES = 30
+/** Candidate start times are offered every 30 minutes regardless of meeting length. */
+const SLOT_STEP_MINUTES = 30
+
+/** The whole meeting [start, end) must sit inside BOTH people's working hours in their own timezones. */
+function bothInWorkHours(options?: MutualFreeSlotsOptions) {
+  const rTz = options?.reporterTimeZone ?? FALLBACK_TZ
+  const rStart = options?.reporterWorkStart ?? DEFAULT_WORK_START
+  const rEnd = options?.reporterWorkEnd ?? DEFAULT_WORK_END
+  const eTz = options?.employeeTimeZone ?? FALLBACK_TZ
+  const eStart = options?.employeeWorkStart ?? DEFAULT_WORK_START
+  const eEnd = options?.employeeWorkEnd ?? DEFAULT_WORK_END
+  return (start: number, end: number) => {
+    const first = new Date(start)
+    const last = new Date(end - 1) // last minute of the meeting
+    return (
+      isWithinWorkHours(first, rTz, rStart, rEnd) &&
+      isWithinWorkHours(last, rTz, rStart, rEnd) &&
+      isWithinWorkHours(first, eTz, eStart, eEnd) &&
+      isWithinWorkHours(last, eTz, eStart, eEnd)
+    )
+  }
+}
 
 /**
- * Check if a specific date/time is free for both reporter and employee
- * (i.e. falls within one of their mutual free slots for that day).
+ * Is a specific meeting time free for both reporter and employee? Checks the exact interval
+ * [dateTime, dateTime + duration) against both calendars and both people's working hours, so it is
+ * correct for any duration and any start minute (it used to require the meeting to fit inside a
+ * single pre-built 30-minute slot, which made every meeting longer than 30 minutes "busy").
  */
 export async function isDateTimeFreeForBoth(
   reporterId: string,
   employeeId: string,
   dateTime: Date,
-  durationMinutes = SLOT_DURATION_MINUTES,
+  durationMinutes = MEETING_DURATION_MINUTES,
   options?: MutualFreeSlotsOptions
 ): Promise<boolean> {
-  const day = new Date(dateTime)
-  day.setUTCHours(0, 0, 0, 0)
-  const slots = await getMutualFreeSlots(reporterId, employeeId, day, 30, options)
-  const startMs = dateTime.getTime()
-  const endMs = startMs + durationMinutes * 60 * 1000
-  return slots.some((slot) => {
-    const slotStart = new Date(slot.start).getTime()
-    const slotEnd = new Date(slot.end).getTime()
-    return startMs >= slotStart && endMs <= slotEnd
-  })
+  const start = dateTime.getTime()
+  const end = start + durationMinutes * 60_000
+  const [reporterBusy, employeeBusy] = await Promise.all([
+    getFreeBusy(reporterId, new Date(start), new Date(end)),
+    getFreeBusy(employeeId, new Date(start), new Date(end)),
+  ])
+  const busy: Interval[] = [...reporterBusy, ...employeeBusy].map((b) => ({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() }))
+  return isMeetingTimeFree(start, end - start, { start, end }, busy, bothInWorkHours(options))
 }

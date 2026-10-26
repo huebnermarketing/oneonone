@@ -6,6 +6,7 @@
  *      KEKA_HOLIDAY_CALENDAR_ID_US (optional), KEKA_HOLIDAY_CALENDAR_ID_IN (optional)
  */
 
+import { TtlCache } from './ttl-cache'
 import { toZonedTime } from 'date-fns-tz'
 import { prisma } from './prisma'
 
@@ -86,21 +87,23 @@ export async function getKekaHolidays(
   calendarId: string,
   calendarYear: number
 ): Promise<KekaHoliday[]> {
-  const token = await getKekaAccessToken()
-  const base = getBaseUrl()
-  if (!token || !base) return []
-
-  const url = `${base}/time/holidayscalendar/${calendarId}/holidays?calendarYear=${calendarYear}&pageSize=200`
   try {
-    const res = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    if (!res.ok) return []
-    const json = (await res.json()) as { data?: KekaHoliday[] }
-    return Array.isArray(json.data) ? json.data : []
+    return await fetchKekaHolidays(calendarId, calendarYear)
   } catch {
     return []
   }
+}
+
+/** Like getKekaHolidays but THROWS on any failure, so callers can tell "no holidays" from "Keka unavailable". */
+async function fetchKekaHolidays(calendarId: string, calendarYear: number): Promise<KekaHoliday[]> {
+  const token = await getKekaAccessToken()
+  const base = getBaseUrl()
+  if (!token || !base) throw new Error('Keka not configured')
+  const url = `${base}/time/holidayscalendar/${calendarId}/holidays?calendarYear=${calendarYear}&pageSize=200`
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) throw new Error(`Keka holidays ${res.status}`)
+  const json = (await res.json()) as { data?: KekaHoliday[] }
+  return Array.isArray(json.data) ? json.data : []
 }
 
 /** Leave request from Keka API. Status: 1 = Approved (commonly). */
@@ -138,25 +141,24 @@ export async function getKekaLeaveRequests(
   }
 }
 
-const HOLIDAY_CACHE = new Map<string, Set<string>>()
-const CACHE_TTL_MS = 10 * 60 * 1000
-let holidayCacheExpiry = 0
+/**
+ * Holiday calendars change a few times a year: cache each calendar-year for 6 h, a failed fetch for
+ * 5 min (Keka is rate-limited). Previously one global expiry was set once and never re-armed, so after
+ * the first 10 minutes every availability check refetched from Keka.
+ */
+const holidayCache = new TtlCache<Set<string>>({ ttlMs: 6 * 60 * 60 * 1000, errorTtlMs: 5 * 60 * 1000 })
 
-function holidayCacheKey(calendarId: string, year: number): string {
-  return `${calendarId}:${year}`
+function getHolidayDates(calendarId: string, year: number): Promise<Set<string>> {
+  return holidayCache.get(
+    `${calendarId}:${year}`,
+    async () => new Set((await fetchKekaHolidays(calendarId, year)).map((h) => h.date.slice(0, 10))),
+    new Set<string>()
+  )
 }
 
-function getHolidayDatesForCalendar(calendarId: string, year: number): Set<string> {
-  const key = holidayCacheKey(calendarId, year)
-  if (Date.now() < holidayCacheExpiry && HOLIDAY_CACHE.has(key)) {
-    return HOLIDAY_CACHE.get(key)!
-  }
-  return new Set<string>()
-}
-
-function setHolidayDatesForCalendar(calendarId: string, year: number, dates: Set<string>): void {
-  HOLIDAY_CACHE.set(holidayCacheKey(calendarId, year), dates)
-  if (holidayCacheExpiry === 0) holidayCacheExpiry = Date.now() + CACHE_TTL_MS
+/** Test hook */
+export function clearKekaHolidayCache() {
+  holidayCache.clear()
 }
 
 const COUNTRY_TZ: Record<string, string> = {
@@ -174,13 +176,7 @@ async function isHolidayForCountry(date: Date, country: string | null): Promise<
   const zoned = toZonedTime(date, tz)
   const year = zoned.getFullYear()
 
-  let set = getHolidayDatesForCalendar(calendarId, year)
-  if (set.size === 0) {
-    const holidays = await getKekaHolidays(calendarId, year)
-    const dateStrings = new Set(holidays.map((h) => h.date.slice(0, 10)))
-    setHolidayDatesForCalendar(calendarId, year, dateStrings)
-    set = dateStrings
-  }
+  const set = await getHolidayDates(calendarId, year)
   const y = zoned.getFullYear()
   const m = String(zoned.getMonth() + 1).padStart(2, '0')
   const d = String(zoned.getDate()).padStart(2, '0')

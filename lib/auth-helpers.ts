@@ -53,9 +53,22 @@ export async function requireAuth() {
   return user
 }
 
+/**
+ * For PAGE routes: signed out → sign-in; signed in with the wrong role → the "No access" page.
+ * (requireRole/requireAdmin throw, which in a page renders the generic "Something went wrong" boundary.)
+ */
+export async function requirePageRole(allowedRoles: UserRole[]) {
+  const user = await requireAuth()
+  if (!allowedRoles.includes(user.role)) redirect('/access-denied')
+  return user
+}
+
+export async function requirePageAdmin() {
+  return requirePageRole([UserRole.SUPER_ADMIN])
+}
+
 // For API routes - THROWS UnauthorizedError / ForbiddenError (pair with handleApiError in catch).
-// In a page component the thrown error renders the route's error boundary; prefer
-// getCurrentUser() + redirect()/notFound() there.
+// Never use these in a page — use requirePageRole()/requirePageAdmin() above.
 export async function requireRole(allowedRoles: UserRole[]) {
   const user = await getCurrentUser()
   if (!user) {

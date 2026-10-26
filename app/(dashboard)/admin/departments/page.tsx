@@ -1,9 +1,9 @@
-import { requireAdmin } from '@/lib/auth-helpers'
+import { requirePageAdmin } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { DepartmentsClient } from './departments-client'
 
 export default async function DepartmentsPage() {
-  await requireAdmin()
+  await requirePageAdmin()
 
   const departments = await prisma.department.findMany({
     include: {

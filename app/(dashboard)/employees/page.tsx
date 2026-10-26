@@ -1,4 +1,4 @@
-import { requireRole } from '@/lib/auth-helpers'
+import { requirePageRole } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { UserRole } from '@prisma/client'
 import Link from 'next/link'
@@ -8,7 +8,7 @@ import { Avatar } from '@/components/ui/avatar'
 import { Pill } from '@/components/ui/pill'
 
 export default async function EmployeesPage() {
-  const user = await requireRole([UserRole.REPORTER, UserRole.SUPER_ADMIN])
+  const user = await requirePageRole([UserRole.REPORTER, UserRole.SUPER_ADMIN])
 
   // Reporters see their direct reports; Super Admin sees ALL users (employees + reporters)
   const whereClause =
