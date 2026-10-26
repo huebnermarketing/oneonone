@@ -155,21 +155,6 @@ export async function deleteAllNotifications(userId: string) {
 }
 
 // Helper functions for common notification types
-export async function notifyMeetingScheduled(
-  employeeId: string,
-  reporterName: string,
-  meetingDate: Date,
-  meetingId: string
-) {
-  return createNotification({
-    userId: employeeId,
-    type: 'MEETING_SCHEDULED',
-    title: 'New Meeting Scheduled',
-    message: `${reporterName} has scheduled a one-on-one meeting with you on ${await whenFor(employeeId, meetingDate)}`,
-    link: `/meetings/${meetingId}`,
-  })
-}
-
 export async function notifyMeetingReminder(
   userId: string,
   otherPersonName: string,
@@ -249,7 +234,7 @@ export async function notifyMeetingCompleted(
 ) {
   return createNotification({
     userId: employeeId,
-    type: 'MEETING_SCHEDULED',
+    type: 'MEETING_COMPLETED',
     title: 'Meeting Completed',
     message: `${reporterName} has marked your one-on-one meeting as completed`,
     link: `/meetings/${meetingId}`,
@@ -308,7 +293,7 @@ export async function notifyMeetingProposed(
 ) {
   return createNotification({
     userId: employeeId,
-    type: 'MEETING_SCHEDULED',
+    type: 'MEETING_PROPOSED',
     title: 'Meeting Request',
     message: `${reporterName} proposed a one-on-one for ${await whenFor(employeeId, meetingDate)}. Accept or suggest a new time.`,
     link: `/meetings/${meetingId}`,
@@ -323,7 +308,7 @@ export async function notifyMeetingAccepted(
 ) {
   return createNotification({
     userId: proposerId,
-    type: 'MEETING_SCHEDULED',
+    type: 'MEETING_ACCEPTED',
     title: 'Meeting Confirmed',
     message: `${acceptorName} accepted the one-on-one for ${await whenFor(proposerId, meetingDate)}.`,
     link: `/meetings/${meetingId}`,
@@ -338,7 +323,7 @@ export async function notifyMeetingSuggested(
 ) {
   return createNotification({
     userId: recipientId,
-    type: 'MEETING_SCHEDULED',
+    type: 'MEETING_TIME_SUGGESTED',
     title: 'New Time Suggested',
     message: `${suggestorName} suggested a new time for the one-on-one: ${await whenFor(recipientId, newDate)}. Accept or suggest another time.`,
     link: `/meetings/${meetingId}`,
