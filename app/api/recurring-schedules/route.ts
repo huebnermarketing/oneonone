@@ -3,21 +3,15 @@ import { UserRole } from '@prisma/client'
 import { REPORTER_OR_ADMIN, badRequest, conflict, notFound, withApiAuth, parseBody } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { createAuditLog } from '@/lib/audit'
-import { DEFAULT_WORK_END, DEFAULT_WORK_START } from '@/lib/timezones'
-import { DEFAULT_TIMEZONE, MEETING_DURATION_MINUTES } from '@/lib/constants'
 import { formatMeetingLong } from '@/lib/dates'
 import { advanceToNextOccurrence, getNextOccurrenceDates } from '@/lib/recurring-dates'
-import { isCalendarEnabled, isDateTimeFreeForBoth } from '@/lib/google-calendar'
-import { isDateUnavailableForEitherUser } from '@/lib/keka'
-import { sendMeetingProposalEmail } from '@/lib/email'
-import { notifyMeetingProposed } from '@/lib/notifications'
+import { MAX_OCCURRENCES_TO_CHECK, calendarsConnected, firstFreeOccurrence, pairProfiles, type PairProfiles } from '@/lib/availability'
+import * as notify from '@/lib/notify'
 import { createRecurringScheduleSchema } from '@/lib/validation/recurring'
 
 export const dynamic = 'force-dynamic'
 
 /** When creating a schedule, check this many future occurrences; a one-off holiday/leave shouldn't block the slot. */
-const MAX_OCCURRENCES_TO_CHECK = 6
-
 const partySelect = { select: { id: true, name: true, email: true } } as const
 
 /**
@@ -36,46 +30,21 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (_req: NextRequest, { us
   return NextResponse.json(schedules)
 })
 
-type Profile = { timeZone: string | null; workDayStart: string | null; workDayEnd: string | null }
-
 /**
  * Among the next few occurrences, pick the first that is free on both Google Calendars and not a Keka
  * holiday/leave day. Falls back to the first occurrence when either calendar is not connected or the
  * check itself fails; throws 409 when every candidate is busy.
  */
-async function findFirstFreeOccurrence(
-  reporterId: string,
-  employeeId: string,
-  reporterProfile: Profile | null,
-  employeeProfile: Profile | null,
-  upcomingDates: Date[]
-): Promise<Date> {
-  const reporterTz = reporterProfile?.timeZone ?? DEFAULT_TIMEZONE
+async function pickFirstMeetingDate(reporterId: string, employeeId: string, profiles: PairProfiles, upcomingDates: Date[]): Promise<Date> {
   try {
-    const [reporterConnected, employeeConnected] = await Promise.all([
-      isCalendarEnabled(reporterId),
-      isCalendarEnabled(employeeId),
-    ])
-    if (!reporterConnected || !employeeConnected) return upcomingDates[0]!
-
-    const availabilityOptions = {
-      reporterTimeZone: reporterTz,
-      reporterWorkStart: reporterProfile?.workDayStart ?? DEFAULT_WORK_START,
-      reporterWorkEnd: reporterProfile?.workDayEnd ?? DEFAULT_WORK_END,
-      employeeTimeZone: employeeProfile?.timeZone ?? DEFAULT_TIMEZONE,
-      employeeWorkStart: employeeProfile?.workDayStart ?? DEFAULT_WORK_START,
-      employeeWorkEnd: employeeProfile?.workDayEnd ?? DEFAULT_WORK_END,
-    }
-    for (const date of upcomingDates) {
-      if (await isDateUnavailableForEitherUser(reporterId, employeeId, date)) continue
-      if (await isDateTimeFreeForBoth(reporterId, employeeId, date, MEETING_DURATION_MINUTES, availabilityOptions)) return date
-    }
+    if (!(await calendarsConnected(reporterId, employeeId)).both) return upcomingDates[0]!
+    const free = await firstFreeOccurrence(reporterId, employeeId, upcomingDates, profiles)
+    if (free) return free
   } catch (err) {
     console.error('Recurring schedule calendar check:', err)
     return upcomingDates[0]!
   }
-
-  const formatted = formatMeetingLong(upcomingDates[0]!, reporterTz)
+  const formatted = formatMeetingLong(upcomingDates[0]!, profiles.reporter.timeZone)
   throw conflict(
     `Each of the next ${MAX_OCCURRENCES_TO_CHECK} occurrences has a calendar conflict (e.g. first: ${formatted}). Please choose a different day or time.`
   )
@@ -114,9 +83,10 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
     throw badRequest(`${employee.name || 'This employee'} already has a recurring schedule at this day and time. Please choose a different time.`)
   }
 
-  const reporterTz = reporterProfile?.timeZone ?? DEFAULT_TIMEZONE
+  const profiles = pairProfiles(reporterProfile, employee)
+  const reporterTz = profiles.reporter.timeZone
   const upcomingDates = getNextOccurrenceDates(dayOfWeek, timeOfDay, frequency, reporterTz, MAX_OCCURRENCES_TO_CHECK)
-  const firstMeetingDate = await findFirstFreeOccurrence(user.id, employeeId, reporterProfile, employee, upcomingDates)
+  const firstMeetingDate = await pickFirstMeetingDate(user.id, employeeId, profiles, upcomingDates)
   const link = meetingType === 'ZOOM' ? meetingLink ?? null : null
 
   const { schedule, meeting } = await prisma.$transaction(async (tx) => {
@@ -164,14 +134,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
     details: { employeeId, employeeName: employee.name, frequency: schedule.frequency, dayOfWeek, timeOfDay },
   })
 
-  await Promise.all([
-    sendMeetingProposalEmail(employee.email, employee.name, user.name, firstMeetingDate, meeting.id).catch((e) =>
-      console.error('Failed to send proposal email for recurring schedule:', e)
-    ),
-    notifyMeetingProposed(employeeId, user.name || 'Your manager', firstMeetingDate, meeting.id).catch((e) =>
-      console.error('Failed to send proposal notification:', e)
-    ),
-  ])
+  await notify.meetingProposed({ meetingId: meeting.id, date: firstMeetingDate, employee: { id: employeeId, email: employee.email, name: employee.name }, reporter: { email: user.email, name: user.name } })
 
   return NextResponse.json({ schedule, meeting }, { status: 201 })
 })

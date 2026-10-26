@@ -273,4 +273,6 @@ See `DEPLOYMENT.md`. Summary: `deploy.sh` on the EC2 host at `/var/www/oneonone`
 - Use `useToast()` / `useConfirm()` rather than inline banners or custom modals; use `components/ui/button.tsx` + `card.tsx` (currently used by one file — adopt them rather than hand-rolling `rounded-2xl bg-white dark:bg-charcoal …`).
 - Dates: store UTC; display via `lib/utils` formatters (currently default IST) — don't add more ad-hoc `toLocaleDateString` calls.
 - Keep `'Asia/Kolkata'`, 30-min duration, app name, allowed email domain (`@whitelabeliq.com`, hardcoded in 4 places) in one constants module when touching them.
-- Import `@/lib/email`, `@/lib/notifications`, `@/lib/google-calendar` statically; the dynamic `await import()` pattern in routes is a holdover.
+- Notify people through `@/lib/notify` (`notify.meetingProposed(...)`, `notify.todoAssigned(...)`, …): one call per event delivers in-app + email, never throws, logs `[notify] <event> <channel> failed`. Message wording stays in `lib/notifications.ts` / `lib/email.ts`.
+- Scheduling availability (mutual free slots, first free recurring occurrence, working-hours label) lives in `lib/availability.ts`; calendar I/O stays in `lib/google-calendar.ts`, interval maths in `lib/free-slots.ts`.
+- Import `@/lib/google-calendar` statically; the dynamic `await import()` pattern in routes is a holdover.

@@ -2,18 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { REPORTER_OR_ADMIN, forbidden, notFound, parseQuery, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { canActOnUser } from '@/lib/team'
-import { isCalendarEnabled, isDateTimeFreeForBoth } from '@/lib/google-calendar'
-import { isDateUnavailableForEitherUser } from '@/lib/keka'
+import { isCalendarEnabled } from '@/lib/google-calendar'
+import { MAX_OCCURRENCES_TO_CHECK, firstFreeOccurrence, pairProfiles } from '@/lib/availability'
 import { getNextOccurrenceDates } from '@/lib/recurring-dates'
-import { DEFAULT_WORK_END, DEFAULT_WORK_START } from '@/lib/timezones'
-import { DEFAULT_TIMEZONE, MEETING_DURATION_MINUTES } from '@/lib/constants'
 import { formatMeetingLong } from '@/lib/dates'
 import { recurringAvailabilityQuery } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
-
-/** Number of future occurrences to check; a one-off holiday/leave shouldn't block the whole slot. */
-const MAX_OCCURRENCES_TO_CHECK = 6
 
 /**
  * GET /api/meetings/availability/recurring?employeeId=&dayOfWeek=&timeOfDay=&frequency=
@@ -51,26 +46,12 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
     })
   }
 
-  const reporterTz = reporter?.timeZone ?? DEFAULT_TIMEZONE
-  const availabilityOptions = {
-    reporterTimeZone: reporterTz,
-    reporterWorkStart: reporter?.workDayStart ?? DEFAULT_WORK_START,
-    reporterWorkEnd: reporter?.workDayEnd ?? DEFAULT_WORK_END,
-    employeeTimeZone: employee.timeZone ?? DEFAULT_TIMEZONE,
-    employeeWorkStart: employee.workDayStart ?? DEFAULT_WORK_START,
-    employeeWorkEnd: employee.workDayEnd ?? DEFAULT_WORK_END,
-  }
+  const profiles = pairProfiles(reporter, employee)
+  const reporterTz = profiles.reporter.timeZone
 
   // Use the first free occurrence among the next few
   const upcomingDates = getNextOccurrenceDates(dayOfWeek, timeOfDay, frequency, reporterTz, MAX_OCCURRENCES_TO_CHECK)
-  let firstFreeDate: Date | null = null
-  for (const date of upcomingDates) {
-    if (await isDateUnavailableForEitherUser(user.id, employeeId, date)) continue
-    if (await isDateTimeFreeForBoth(user.id, employeeId, date, MEETING_DURATION_MINUTES, availabilityOptions)) {
-      firstFreeDate = date
-      break
-    }
-  }
+  const firstFreeDate = await firstFreeOccurrence(user.id, employeeId, upcomingDates, profiles)
   const firstDate = firstFreeDate ?? upcomingDates[0]!
   const available = firstFreeDate !== null
 
