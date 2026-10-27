@@ -185,6 +185,26 @@ check "meeting moved + length changed" "${MON} 10:00 30" "$($PSQL -c "select to_
 check "nothing to accept now" 400 $(code -b "$ALEX" -X POST $B/api/meetings/$D3/reschedule/accept)
 $PSQL -c "delete from \"Notification\" where link like '/meetings/$D3%'; delete from \"AuditLog\" where \"entityId\"='$D3'; delete from \"CalendarEvent\" where \"meetingId\"='$D3'; delete from \"Meeting\" where id='$D3';" >/dev/null
 
+echo "## form answers + history"
+check "meeting for form created" 201 $(mk 11:00 '')
+D4=$(python3 -c "import json;print(json.load(open('/tmp/body'))['id'])")
+check "employee accepts it" 200 $(code -b "$ALEX" -X POST $B/api/meetings/$D4/accept)
+FORM='"checkInPersonal":"p","checkInProfessional":"q","priorityGoalProfessional":"r","progressReport":"s"'
+frm() { code -b "$1" -X "$2" $B/api/meetings/$D4/form -H 'content-type: application/json' -d "{$3}"; }
+check "employee saves draft" 200 $(frm "$ALEX" POST "$FORM,\"draft\":true")
+check "owner cannot edit before submit" 400 $(frm "$REP" PATCH '"progressReport":"x"')
+check "employee submits" 200 $(frm "$ALEX" POST "$FORM")
+check "draft after submit refused" 400 $(frm "$ALEX" POST "$FORM,\"draft\":true")
+check "owner edits an answer" 200 $(frm "$REP" PATCH '"progressReport":"fixed by manager"')
+check "admin edits an answer" 200 $(frm "$ADMIN" PATCH '"goodNews":"added by admin"')
+check "employee cannot use the edit endpoint" 403 $(frm "$ALEX" PATCH '"goodNews":"x"')
+check "owner cannot blank a required answer" 400 $(frm "$REP" PATCH '"checkInPersonal":""')
+check "employee resubmits with a change" 200 $(frm "$ALEX" POST '"checkInPersonal":"p2","checkInProfessional":"q","priorityGoalProfessional":"r","progressReport":"fixed by manager","goodNews":"added by admin"')
+check "history kinds newest first" "RESUBMITTED,EDITED,EDITED,SUBMITTED" "$(code -b "$ALEX" $B/api/meetings/$D4/form/history >/dev/null; python3 -c "import json;print(','.join(r['kind'] for r in json.load(open('/tmp/body'))))")"
+check "edit recorded before/after" "s -> fixed by manager" "$($PSQL -c "select c->>'before'||' -> '||(c->>'after') from \"MeetingFormRevision\" r, jsonb_array_elements(r.changes) c where r.\"meetingId\"='$D4' and r.kind='EDITED' and c->>'field'='progressReport'")"
+check "employee told about the edit" 2 "$($PSQL -c "select count(*) from \"Notification\" where link='/meetings/$D4' and type='FORM_EDITED'")"
+$PSQL -c "delete from \"Notification\" where link like '/meetings/$D4%'; delete from \"AuditLog\" where \"entityId\"='$D4'; delete from \"Meeting\" where id='$D4';" >/dev/null
+
 echo "## user import"
 check "employee cannot download template" 403 $(code -b "$ALEX" "$B/api/admin/import-users?format=template")
 check "admin template 200" 200 $(code -b "$ADMIN" "$B/api/admin/import-users?format=template")
