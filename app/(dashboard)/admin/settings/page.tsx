@@ -11,7 +11,7 @@ export default async function SettingsPage() {
           System Settings
         </h1>
         <p className="text-medium-gray">
-          Configure API keys and system settings for the application
+          Policies, AI provider, recording storage and data
         </p>
       </div>
 
