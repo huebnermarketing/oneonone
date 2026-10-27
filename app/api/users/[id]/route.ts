@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma'
 import { logUserUpdated, logUserDeleted } from '@/lib/audit'
 import { ALLOWED_EMAIL_DOMAIN, isAllowedEmail } from '@/lib/constants'
 import { updateUserSchema } from '@/lib/validation/users'
+import { lockedFieldChanges, lockedMessage } from '@/lib/keka-sync'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,6 +23,10 @@ export const PATCH = withApiAuth(ADMIN, async (req: NextRequest, { user: admin, 
 
   const existingUser = await prisma.user.findUnique({ where: { id: params.id } })
   if (!existingUser) throw notFound('User')
+
+  // HR fields of Keka-synced users are owned by Keka (lib/keka-sync.ts)
+  const locked = lockedFieldChanges(existingUser, body)
+  if (locked.length > 0) throw badRequest(lockedMessage(locked))
 
   // Email change: domain + uniqueness
   if (body.email && body.email !== existingUser.email) {

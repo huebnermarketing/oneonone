@@ -107,7 +107,10 @@ All handlers live under `app/api/**/route.ts`, export `dynamic = 'force-dynamic'
 | GET / POST | `/api/admin/backup` | `{type='FULL'}` | History / JSON export returned **inline** (users, depts, meetings+todos, recording text). Not written to S3. Omits schedules, notifications, attachments, settings. |
 | POST | `/api/admin/restore` | `{data, options:{clearExisting, restoreUsers, restoreMeetings}}` | Transaction with per-row try/catch; roles from file applied unvalidated; recordings not restored |
 | GET / POST | `/api/admin/clear-data` | `{clearType:'all'\|'recordings'\|'todos'\|'meetings'\|'users'\|'departments', keepCurrentUser}` | **Non-transactional, no audit log.** Will FK-fail on `AuditLog`/`RecurringSchedule` when clearing users; S3 objects never deleted. |
-| POST | `/api/admin/import-users` | `{users:[{name*, email*, role, department, reportsTo, title, phone}]}` | Non-transactional; role aliases TEAM_LEAD/MANAGER→REPORTER, ADMIN→SUPER_ADMIN; auto-creates departments |
+| GET | `/api/admin/import-users?format=template\|export` | — | CSV download. `template` = header + 2 example rows; `export` = all users in the import format (audited as EXPORT) |
+| POST | `/api/admin/import-users` | `{csv*, commit?}` | Raw CSV text (≤2 MB, ≤1000 rows). Without `commit`: preview `{summary, rows[{line,email,name,action,changes,errors,warnings}], newDepartments, promotions, ignoredColumns}`, nothing written. With `commit: true`: re-plans, writes valid rows in one transaction, returns `result` + `errorCsv`. Logic in `lib/user-import.ts` |
+| GET | `/api/admin/keka-sync` | — | `{configured, lastSyncAt}` |
+| POST | `/api/admin/keka-sync` | `{commit?}` | Keka employee sync. Preview without `commit` (import preview shape + `skipped`, `leaversIgnored`); with `commit: true` applies and stamps `kekaLastSyncAt`. 400 if Keka isn't configured, 502 if Keka is unreachable. Logic in `lib/keka-sync.ts` |
 | GET | `/api/admin/storage` | — | S3/local flag, local dir stats, recording byte totals |
 | GET | `/api/admin/recordings` | — | All recordings flattened, unpaginated |
 | GET | `/api/admin/audit-logs` | `?userId&action&entityType&startDate&endDate&limit&offset` | `action` cast unvalidated |
@@ -143,7 +146,7 @@ No route uses zod. Routes that accept unvalidated enums/dates/ids and will 500 o
 | `PATCH /api/profile` | `reportsToId` / `departmentId` are ignored (schema strips them). |
 | `GET/PUT /api/settings` | Policy fields added: `requireFormBeforeComplete`, `cancelPolicy`, `employeeCanViewRecording`, `employeeCanViewNotes`, `enableEmailReminders`, `reminderHoursBefore`, `shortReminderHoursBefore`. |
 | `POST /api/admin/clear-data` | Requires `confirm: <clearType>`; transactional; audited; also deletes recurring schedules, attachments, notifications when clearing meetings. |
-| `POST /api/admin/import-users` | All-or-nothing: any invalid row → 400 `{error, details}` and nothing inserted. |
+| `POST /api/admin/import-users` | Partial by design: rows with errors are skipped and returned in `errorCsv`; valid rows are imported. File-level problems (no email column, too many rows) → 400. |
 | `POST /api/admin/restore` | Invalid `role` values fall back to EMPLOYEE and are reported in `errors[]`. |
 | `GET /api/admin/recordings` | Paginated: `?limit&offset` → `{recordings, total, limit, offset}`. |
 | `GET /api/recurring-schedules` | SUPER_ADMIN sees all active schedules; REPORTER_OR_ADMIN only (EMPLOYEE → 403). |

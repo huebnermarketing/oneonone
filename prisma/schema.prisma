@@ -29,6 +29,11 @@ model User {
   workDayEnd                   String?
   // Keka HR employee ID for leave/attendance integration
   kekaEmployeeId               String?
+  // Keka-owned HR fields (lib/keka-sync.ts)
+  employeeNumber               String?
+  joiningDate                  DateTime?           @db.Date
+  // Last time this user was matched in a Keka sync; null = never synced (manual / CSV user)
+  kekaSyncedAt                 DateTime?
   accounts                     Account[]
   auditLogs                    AuditLog[]
   recordingJobsTriggered       RecordingJob[]      @relation("RecordingJobTrigger")
@@ -266,6 +271,8 @@ model SystemSettings {
   employeeCanViewNotes      Boolean      @default(true)
   // Hours before a meeting for the second (short-notice) reminder; the first is reminderHoursBefore
   shortReminderHoursBefore  Int          @default(1)
+  // Last successful Keka employee sync. Null = never run; the daily auto-sync only starts after an admin's first confirmed sync.
+  kekaLastSyncAt            DateTime?
 }
 
 model RecurringSchedule {

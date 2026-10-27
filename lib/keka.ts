@@ -18,12 +18,13 @@ const KEKA_API_KEY = process.env.KEKA_API_KEY
 const KEKA_HOLIDAY_CALENDAR_US = process.env.KEKA_HOLIDAY_CALENDAR_ID_US
 const KEKA_HOLIDAY_CALENDAR_IN = process.env.KEKA_HOLIDAY_CALENDAR_ID_IN
 
+// KEKA_TOKEN_URL / KEKA_API_BASE_URL override the hosts (local mock Keka for development and tests)
 const TOKEN_URL =
-  KEKA_ENV === 'kekademo'
-    ? 'https://login.kekademo.com/connect/token'
-    : 'https://login.keka.com/connect/token'
+  process.env.KEKA_TOKEN_URL ||
+  (KEKA_ENV === 'kekademo' ? 'https://login.kekademo.com/connect/token' : 'https://login.keka.com/connect/token')
 
-function getBaseUrl(): string {
+export function getBaseUrl(): string {
+  if (process.env.KEKA_API_BASE_URL) return process.env.KEKA_API_BASE_URL.replace(/\/$/, '')
   if (!KEKA_COMPANY) return ''
   const env = KEKA_ENV === 'kekademo' ? 'kekademo' : 'keka'
   return `https://${KEKA_COMPANY}.${env}.com/api/v1`

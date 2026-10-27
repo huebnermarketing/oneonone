@@ -35,6 +35,8 @@ interface ProfileUser {
 }
 
 interface ProfileClientProps {
+  /** HR fields (name, phone, job title, country) come from Keka and are read-only here */
+  kekaManaged?: boolean
   user: ProfileUser
   departments: { id: string; name: string }[]
   managers: { id: string; name: string; email: string }[]
@@ -59,7 +61,7 @@ function parsePhone(phone: string | null): { countryCode: string; localNumber: s
   return { countryCode: '+91', localNumber: trimmed.replace(/^\+/, '') }
 }
 
-export function ProfileClient({ user, departments, managers }: ProfileClientProps) {
+export function ProfileClient({ user, departments, managers, kekaManaged = false }: ProfileClientProps) {
   const router = useRouter()
   const { toastSuccess, toastError } = useToast()
   const f = useFormat()
@@ -91,7 +93,7 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
       return
     }
 
-    if (localNumber) {
+    if (localNumber && !kekaManaged) {
       const digitsOnly = localNumber.replace(/\D/g, '')
       if (digitsOnly.length < 10) {
         toastError('Phone number must be at least 10 digits')
@@ -105,7 +107,11 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
       const response = await fetch('/api/profile', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...formData, phone: combinedPhone }),
+        body: JSON.stringify(
+          kekaManaged
+            ? { timeZone: formData.timeZone, workDayStart: formData.workDayStart, workDayEnd: formData.workDayEnd }
+            : { ...formData, phone: combinedPhone }
+        ),
       })
 
       const data = await response.json()
@@ -130,10 +136,11 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
   }
 
   const hasChanges =
-    formData.name !== user.name ||
-    combinedPhone !== (user.phone || '') ||
-    formData.title !== (user.title || '') ||
-    formData.country !== (user.country || '') ||
+    (!kekaManaged &&
+      (formData.name !== user.name ||
+        combinedPhone !== (user.phone || '') ||
+        formData.title !== (user.title || '') ||
+        formData.country !== (user.country || ''))) ||
     formData.timeZone !== (user.timeZone || '') ||
     formData.workDayStart !== (user.workDayStart || DEFAULT_WORK_START) ||
     formData.workDayEnd !== (user.workDayEnd || DEFAULT_WORK_END)
@@ -218,7 +225,8 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
                 type="text"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                className="w-full px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow"
+                disabled={kekaManaged}
+                className="w-full disabled:opacity-60 disabled:cursor-not-allowed px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow"
                 aria-label="Full name"
               />
             </div>
@@ -235,7 +243,8 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
                   <select
                     value={countryCode}
                     onChange={(e) => setCountryCode(e.target.value)}
-                    className="h-full w-[100px] sm:w-[110px] px-2.5 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow appearance-none pr-7 text-sm"
+                    disabled={kekaManaged}
+                    className="disabled:opacity-60 disabled:cursor-not-allowed h-full w-[100px] sm:w-[110px] px-2.5 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow appearance-none pr-7 text-sm"
                     aria-label="Country code"
                   >
                     {COUNTRY_CODES.map((cc) => (
@@ -265,7 +274,8 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
                   }}
                   placeholder="98765 43210"
                   maxLength={12}
-                  className="flex-1 min-w-0 px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow"
+                  disabled={kekaManaged}
+                  className="disabled:opacity-60 disabled:cursor-not-allowed flex-1 min-w-0 px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow"
                   aria-label="Phone number"
                 />
               </div>
@@ -283,7 +293,8 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
                 value={formData.title}
                 onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                 placeholder="e.g., Senior Developer"
-                className="w-full px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow"
+                disabled={kekaManaged}
+                className="w-full disabled:opacity-60 disabled:cursor-not-allowed px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow"
                 aria-label="Job title"
               />
             </div>
@@ -316,7 +327,9 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
                 </div>
               </div>
               <p className="sm:col-span-2 text-xs text-medium-gray">
-                Department and reporting manager are managed by an admin. Contact them if this is wrong.
+                {kekaManaged
+                  ? 'Name, phone, job title, country, department and manager are synced from Keka. Ask HR to update Keka if something is wrong.'
+                  : 'Department and reporting manager are managed by an admin. Contact them if this is wrong.'}
               </p>
             </div>
 
@@ -335,7 +348,8 @@ export function ProfileClient({ user, departments, managers }: ProfileClientProp
                     <select
                       value={formData.country}
                       onChange={(e) => handleCountryChange(e.target.value)}
-                      className="w-full px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow appearance-none pr-10"
+                      disabled={kekaManaged}
+                      className="w-full disabled:opacity-60 disabled:cursor-not-allowed px-4 py-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-dark-gray text-dark-gray dark:text-white focus:outline-none focus:ring-2 focus:ring-orange/50 transition-shadow appearance-none pr-10"
                       aria-label="Country"
                     >
                       <option value="">Select country</option>
