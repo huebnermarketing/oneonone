@@ -2,6 +2,7 @@ import { getCurrentUser } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { redirect } from 'next/navigation'
 import { ProfileClient } from './profile-client'
+import { isKekaManaged } from '@/lib/keka-sync'
 
 export default async function ProfilePage() {
   const currentUser = await getCurrentUser()
@@ -33,7 +34,8 @@ export default async function ProfilePage() {
   ])
 
   return (
-    <ProfileClient 
+    <ProfileClient
+      kekaManaged={isKekaManaged(user)}
       user={{
         id: user.id,
         name: user.name,

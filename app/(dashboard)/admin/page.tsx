@@ -5,7 +5,9 @@ import { UserManagement } from './user-management'
 import Link from 'next/link'
 import { Settings, Building2, Shield, HardDrive, Users, ChevronRight, Mic } from 'lucide-react'
 import { BulkImport } from '@/components/admin/bulk-import'
+import { KekaSync } from '@/components/admin/keka-sync'
 import { isS3Configured } from '@/lib/s3'
+import { isKekaConfigured } from '@/lib/keka'
 
 export default async function AdminPage() {
   await requirePageAdmin()
@@ -187,7 +189,8 @@ export default async function AdminPage() {
       </div>
 
       {/* Bulk Import */}
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
+        <KekaSync />
         <BulkImport />
       </div>
 
@@ -196,6 +199,7 @@ export default async function AdminPage() {
         users={users} 
         departments={departments} 
         reporters={reporters}
+        kekaConfigured={isKekaConfigured()}
       />
     </div>
   )

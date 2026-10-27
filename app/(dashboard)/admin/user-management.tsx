@@ -28,6 +28,7 @@ interface User {
   workDayStart: string | null
   workDayEnd: string | null
   kekaEmployeeId?: string | null
+  kekaSyncedAt?: Date | string | null
   department: { name: string } | null
   reportsTo: { name: string } | null
 }
@@ -50,7 +51,7 @@ const RolePill = ({ role }: { role: UserRole }) => {
 
 const ActivePill = ({ active }: { active: boolean }) => <Pill tone={active ? 'green' : 'red'}>{active ? 'Active' : 'Inactive'}</Pill>
 
-const FIELD = 'w-full rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white dark:bg-charcoal px-4 py-3 text-dark-gray dark:text-white focus:border-orange focus:outline-none focus:ring-2 focus:ring-orange/20'
+const FIELD = 'w-full rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white dark:bg-charcoal px-4 py-3 text-dark-gray dark:text-white focus:border-orange focus:outline-none focus:ring-2 focus:ring-orange/20 disabled:opacity-60 disabled:cursor-not-allowed'
 const LABEL = 'block text-sm font-medium text-dark-gray dark:text-white mb-1'
 
 const SORT_COLUMNS: { key: SortKey; label: string }[] = [
@@ -64,15 +65,19 @@ interface UserManagementProps {
   users: User[]
   departments: Department[]
   reporters: User[]
+  /** Keka configured on the server: synced users' HR fields are read-only */
+  kekaConfigured?: boolean
 }
 
-export function UserManagement({ users, departments, reporters }: UserManagementProps) {
+export function UserManagement({ users, departments, reporters, kekaConfigured = false }: UserManagementProps) {
   const router = useRouter()
   const { toastError } = useToast()
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [isAddOpen, setIsAddOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
+  // Name, email, department, manager, country and Keka ID of Keka-synced users are owned by Keka
+  const locked = !!editingUser && kekaConfigured && !!editingUser.kekaSyncedAt
   const [isLoading, setIsLoading] = useState(false)
   const [emailError, setEmailError] = useState('')
   const ALLOWED_EMAIL_DOMAIN = '@whitelabeliq.com'
@@ -222,16 +227,26 @@ export function UserManagement({ users, departments, reporters }: UserManagement
       const response = await fetch(url, {
         method,
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          ...formData,
-          departmentId: formData.departmentId || null,
-          reportsToId: formData.reportsToId || null,
-          country: formData.country || null,
-          timeZone: formData.timeZone || null,
-          workDayStart: formData.workDayStart || null,
-          workDayEnd: formData.workDayEnd || null,
-          kekaEmployeeId: formData.kekaEmployeeId?.trim() || null,
-        }),
+        body: JSON.stringify(
+          locked
+            ? {
+                role: formData.role,
+                isActive: formData.isActive,
+                timeZone: formData.timeZone || null,
+                workDayStart: formData.workDayStart || null,
+                workDayEnd: formData.workDayEnd || null,
+              }
+            : {
+                ...formData,
+                departmentId: formData.departmentId || null,
+                reportsToId: formData.reportsToId || null,
+                country: formData.country || null,
+                timeZone: formData.timeZone || null,
+                workDayStart: formData.workDayStart || null,
+                workDayEnd: formData.workDayEnd || null,
+                kekaEmployeeId: formData.kekaEmployeeId?.trim() || null,
+              }
+        ),
       })
 
       if (!response.ok) {
@@ -413,12 +428,19 @@ export function UserManagement({ users, departments, reporters }: UserManagement
         }
       >
         <form id={formId} onSubmit={handleSubmit} className="space-y-4">
+          {locked && (
+            <p className="rounded-xl bg-blue-500/10 px-4 py-3 text-sm text-blue-700 dark:text-blue-300">
+              Synced from Keka: name, email, department, manager, country and Keka ID are updated from Keka every day. Role, status,
+              time zone and working hours can be changed here.
+            </p>
+          )}
           <div>
             <label htmlFor={fid('name')} className={LABEL}>Full Name *</label>
             <input
               id={fid('name')}
               type="text"
               value={formData.name}
+              disabled={locked}
               onChange={(e) => setFormData({ ...formData, name: e.target.value })}
               placeholder="John Doe"
               className={FIELD}
@@ -432,6 +454,7 @@ export function UserManagement({ users, departments, reporters }: UserManagement
               id={fid('email')}
               type="email"
               value={formData.email}
+              disabled={locked}
               onChange={(e) => {
                 setFormData({ ...formData, email: e.target.value })
                 if (emailError) setEmailError('')
@@ -469,6 +492,7 @@ export function UserManagement({ users, departments, reporters }: UserManagement
               <Select
                 id={fid('department')}
                 value={formData.departmentId}
+              disabled={locked}
                 onChange={(e) => setFormData({ ...formData, departmentId: e.target.value })}
                 className={FIELD}
               >
@@ -485,6 +509,7 @@ export function UserManagement({ users, departments, reporters }: UserManagement
             <Select
               id={fid('reportsTo')}
               value={formData.reportsToId}
+              disabled={locked}
               onChange={(e) => setFormData({ ...formData, reportsToId: e.target.value })}
               className={FIELD}
             >
@@ -509,6 +534,7 @@ export function UserManagement({ users, departments, reporters }: UserManagement
                 <Select
                   id={fid('country')}
                   value={formData.country}
+              disabled={locked}
                   onChange={(e) => {
                     const country = e.target.value
                     const next = { ...formData, country }
@@ -581,6 +607,7 @@ export function UserManagement({ users, departments, reporters }: UserManagement
                 id={fid('keka')}
                 type="text"
                 value={formData.kekaEmployeeId}
+              disabled={locked}
                 onChange={(e) => setFormData({ ...formData, kekaEmployeeId: e.target.value })}
                 placeholder="UUID from Keka for leave integration"
                 aria-describedby={fid('keka-hint')}

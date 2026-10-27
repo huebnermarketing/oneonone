@@ -115,7 +115,7 @@ If a value can no longer be decrypted (secret lost), the app logs `Cannot decryp
 
 ## Optional: Keka HR (leave & holidays)
 
-Only needed if you want the app to skip leave and public holidays when finding meeting slots. See [KEKA_INTEGRATION.md](./KEKA_INTEGRATION.md).
+Used for the **employee sync** (who can sign in, HR fields, leavers) and to skip leave and public holidays when finding meeting slots. Without Keka, only users already in the app (added manually or by CSV) can sign in. See [KEKA_INTEGRATION.md](./KEKA_INTEGRATION.md). The API key needs read access to employees (`/hris/employees`) as well as leave and holidays.
 
 | Variable | Description | Example |
 |----------|-------------|---------|
@@ -126,6 +126,7 @@ Only needed if you want the app to skip leave and public holidays when finding m
 | `KEKA_API_KEY` | From Keka Developer Portal | … |
 | `KEKA_HOLIDAY_CALENDAR_ID_US` | UUID of US office holiday calendar in Keka | … |
 | `KEKA_HOLIDAY_CALENDAR_ID_IN` | UUID of India office holiday calendar in Keka | … |
+| `KEKA_API_BASE_URL`, `KEKA_TOKEN_URL` | Optional host overrides — only for a local mock Keka in development/tests | `http://127.0.0.1:8765/api/v1` |
 
 ---
 

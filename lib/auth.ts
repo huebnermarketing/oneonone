@@ -7,6 +7,7 @@ import { maskEmail } from './redact'
 import { UserRole } from '@prisma/client'
 import { prisma } from './prisma'
 import { logLogin } from './audit'
+import { initialAdminEmails, signInGate } from './sign-in-gate'
 
 // Validate Google OAuth env vars so we fail fast with a clear error instead of "client_id is required"
 const googleClientId = process.env.GOOGLE_CLIENT_ID
@@ -26,15 +27,10 @@ if (process.env.NODE_ENV === 'production' && !process.env.GOOGLE_WORKSPACE_DOMAI
 
 // Comma-separated list of emails that are promoted to SUPER_ADMIN on sign-in.
 // Replaces the "run an UPDATE in psql" bootstrap step. Only ever promotes, never demotes.
-const initialAdminEmails = new Set(
-  (process.env.INITIAL_ADMIN_EMAILS || '')
-    .split(',')
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean)
-)
+const initialAdmins = initialAdminEmails()
 
 async function promoteIfInitialAdmin(userId: string, email?: string | null) {
-  if (!email || !initialAdminEmails.has(email.toLowerCase())) return
+  if (!email || !initialAdmins.has(email.toLowerCase())) return
   const updated = await prisma.user.updateMany({
     where: { id: userId, role: { not: UserRole.SUPER_ADMIN } },
     data: { role: UserRole.SUPER_ADMIN },
@@ -116,16 +112,8 @@ export const authOptions: NextAuthOptions = {
           return '/auth/signin?error=AccessDenied'
         }
 
-        // Block inactive users from signing in
-        const existingUser = await prisma.user.findUnique({
-          where: { email },
-          select: { isActive: true },
-        })
-        if (existingUser && !existingUser.isActive) {
-          return '/auth/signin?error=AccountInactive'
-        }
-
-        return true
+        // Inactive users are blocked; unknown emails are provisioned from Keka or refused (lib/sign-in-gate.ts)
+        return await signInGate(email)
       } catch (err) {
         console.error('[NextAuth] signIn callback error:', err)
         return '/auth/signin?error=Callback'

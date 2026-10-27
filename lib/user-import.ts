@@ -140,6 +140,8 @@ alias('time_zone', 'time_zone', 'time zone', 'timezone', 'tz')
 alias('work_start', 'work_start', 'work start', 'work day start', 'start time', 'shift start')
 alias('work_end', 'work_end', 'work end', 'work day end', 'end time', 'shift end')
 alias('keka_employee_id', 'keka_employee_id', 'keka employee id', 'keka id', 'employee id', 'emp id', 'employee code')
+alias('employee_number', 'employee_number', 'employee number', 'emp no', 'employee no', 'staff number')
+alias('joining_date', 'joining_date', 'joining date', 'date of joining', 'doj', 'start date', 'hire date')
 alias('status', 'status', 'active', 'is active')
 
 export function mapHeaders(headers: string[]): { columns: (InputColumn | null)[]; ignored: string[] } {
@@ -217,6 +219,24 @@ const STATUS_ALIASES: Record<string, boolean> = {
 }
 export const parseStatus = (v: string): boolean | null => STATUS_ALIASES[squash(v)] ?? null
 
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+/** "2024-12-01", "1 Dec 2024", "Dec 1, 2024" → "YYYY-MM-DD". Numeric d/m/y is rejected (ambiguous between India and US). */
+export function parseDateOnly(v: string): string | null {
+  const s = v.trim()
+  let y: number, m: number, d: number
+  let match = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:T.*)?$/)
+  if (match) [y, m, d] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  else if ((match = s.match(/^(\d{1,2})[\s-]+([a-z]{3})[a-z]*\.?[\s,-]+(\d{4})$/i))) {
+    ;[d, m, y] = [Number(match[1]), MONTHS.indexOf(match[2].toLowerCase()) + 1, Number(match[3])]
+  } else if ((match = s.match(/^([a-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})$/i))) {
+    ;[m, d, y] = [MONTHS.indexOf(match[1].toLowerCase()) + 1, Number(match[2]), Number(match[3])]
+  } else return null
+  if (m < 1 || m > 12 || d < 1 || y < 1900 || y > 2200) return null
+  const date = new Date(Date.UTC(y, m - 1, d))
+  if (date.getUTCMonth() !== m - 1) return null
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 // ── Planning ────────────────────────────────────────────────────────
@@ -236,6 +256,8 @@ export interface ExistingUser {
   workDayStart: string | null
   workDayEnd: string | null
   kekaEmployeeId: string | null
+  employeeNumber: string | null
+  joiningDate: Date | null
 }
 
 export interface ImportContext {
@@ -259,6 +281,9 @@ export interface RowData {
   workDayStart?: string
   workDayEnd?: string
   kekaEmployeeId?: string
+  employeeNumber?: string
+  /** YYYY-MM-DD */
+  joiningDate?: string
   isActive?: boolean
 }
 
@@ -296,11 +321,25 @@ const deptKey = (name: string) => name.trim().replace(/\s+/g, ' ').toLowerCase()
 const FIELD_LABEL: Record<keyof RowData, string> = {
   name: 'name', role: 'role', department: 'department', managerEmail: 'manager', title: 'job title', phone: 'phone',
   country: 'country', timeZone: 'time zone', workDayStart: 'work start', workDayEnd: 'work end',
-  kekaEmployeeId: 'Keka ID', isActive: 'status',
+  kekaEmployeeId: 'Keka ID', employeeNumber: 'employee number', joiningDate: 'joining date', isActive: 'status',
 }
 
 function emptyPlan(fatal: string, ignoredColumns: string[] = []): ImportPlan {
   return { rows: [], ignoredColumns, newDepartments: [], promotions: [], summary: { create: 0, update: 0, unchanged: 0, error: 0 }, fatal }
+}
+
+/** One input row: its line (CSV line number, or position for Keka) and cell values by column. */
+export interface InputRecord {
+  line: number
+  values: Partial<Record<InputColumn, string>>
+}
+
+export interface PlanOptions {
+  /**
+   * 'error' (CSV): a manager that is neither in the file nor in the app fails the row.
+   * 'warn' (Keka): the user is still created/updated without that manager; a later sync links it.
+   */
+  missingManager?: 'error' | 'warn'
 }
 
 /** Decide what importing `csv` would do. Pure — safe to call for the preview. */
@@ -312,6 +351,19 @@ export function planImport(csv: string, ctx: ImportContext): ImportPlan {
   const dataRows = table.slice(1)
   if (dataRows.length === 0) return emptyPlan('The file has a header row but no users.', ignored)
   if (dataRows.length > MAX_IMPORT_ROWS) return emptyPlan(`Too many rows (${dataRows.length}). Import at most ${MAX_IMPORT_ROWS} at a time.`, ignored)
+  const records: InputRecord[] = dataRows.map((cells, idx) => {
+    const values: Partial<Record<InputColumn, string>> = {}
+    columns.forEach((col, i) => {
+      if (col) values[col] = unguard((cells[i] ?? '').trim())
+    })
+    return { line: idx + 2, values }
+  })
+  return { ...planRecords(records, ctx), ignoredColumns: ignored }
+}
+
+/** Plan already-parsed rows (CSV or Keka). Pure. */
+export function planRecords(records: InputRecord[], ctx: ImportContext, opts: PlanOptions = {}): ImportPlan {
+  const missingManager = opts.missingManager ?? 'error'
 
   const byEmail = new Map(ctx.users.map((u) => [u.email.toLowerCase(), u]))
   const byId = new Map(ctx.users.map((u) => [u.id, u]))
@@ -321,17 +373,13 @@ export function planImport(csv: string, ctx: ImportContext): ImportPlan {
 
   // 1. Per-row parsing and field validation
   const seenEmails = new Map<string, number>()
-  const rows: PlannedRow[] = dataRows.map((cells, idx) => {
-    const raw: Record<string, string> = {}
+  const rows: PlannedRow[] = records.map(({ line, values }) => {
     const val: Partial<Record<InputColumn, string>> = {}
-    columns.forEach((col, i) => {
-      const cell = unguard((cells[i] ?? '').trim())
-      if (col) {
-        val[col] = cell
-        raw[col === 'full_name' ? 'name' : col] = cell
-      }
-    })
-    const line = idx + 2
+    const raw: Record<string, string> = {}
+    for (const [col, v] of Object.entries(values) as [InputColumn, string][]) {
+      val[col] = (v ?? '').trim()
+      raw[col === 'full_name' ? 'name' : col] = val[col]!
+    }
     const errors: string[] = []
     const warnings: string[] = []
     const data: RowData = {}
@@ -398,6 +446,15 @@ export function planImport(csv: string, ctx: ImportContext): ImportPlan {
       if (val.keka_employee_id.length > 50) errors.push('Keka employee ID is longer than 50 characters')
       else data.kekaEmployeeId = val.keka_employee_id
     }
+    if (val.employee_number) {
+      if (val.employee_number.length > 50) errors.push('Employee number is longer than 50 characters')
+      else data.employeeNumber = val.employee_number
+    }
+    if (val.joining_date) {
+      const d = parseDateOnly(val.joining_date)
+      if (d) data.joiningDate = d
+      else errors.push(`joining_date "${val.joining_date}" is not a date — use YYYY-MM-DD`)
+    }
     if (val.status) {
       const s = parseStatus(val.status)
       if (s === null) errors.push(`Unknown status "${val.status}" — use Active or Inactive`)
@@ -456,13 +513,12 @@ export function planImport(csv: string, ctx: ImportContext): ImportPlan {
       const m = r.data.managerEmail
       if (!isValid(r) || !m) continue
       const mRow = rowByEmail.get(m)
-      if (mRow && !isValid(mRow)) {
-        fail(r, `Manager ${m} is on line ${mRow.line}, which has errors`)
-        changed = true
-        continue
-      }
-      if (!mRow && !byEmail.has(m)) {
-        fail(r, `Manager ${m} is not in the system or in this file`)
+      const unusable = mRow && !isValid(mRow) ? `Manager ${m} is on line ${mRow.line}, which has errors` : !mRow && !byEmail.has(m) ? `Manager ${m} is not in the system or in this file` : null
+      if (unusable) {
+        if (missingManager === 'warn') {
+          delete r.data.managerEmail
+          r.warnings.push(`Manager ${m} isn't in the app yet — will be linked on a later sync`)
+        } else fail(r, unusable)
         changed = true
         continue
       }
@@ -529,6 +585,8 @@ export function planImport(csv: string, ctx: ImportContext): ImportPlan {
       workDayStart: u.workDayStart ?? undefined,
       workDayEnd: u.workDayEnd ?? undefined,
       kekaEmployeeId: u.kekaEmployeeId ?? undefined,
+      employeeNumber: u.employeeNumber ?? undefined,
+      joiningDate: u.joiningDate ? u.joiningDate.toISOString().slice(0, 10) : undefined,
       isActive: u.isActive,
     }
     for (const k of Object.keys(r.data) as (keyof RowData)[]) {
@@ -544,7 +602,7 @@ export function planImport(csv: string, ctx: ImportContext): ImportPlan {
   const neededDepts = new Set(rows.filter((r) => r.action === 'create' || r.action === 'update').map((r) => r.data.department))
   return {
     rows,
-    ignoredColumns: ignored,
+    ignoredColumns: [],
     newDepartments: [...newDepartments].filter(([k]) => neededDepts.has(k)).map(([, display]) => display),
     promotions,
     summary,
@@ -558,6 +616,8 @@ export interface ImportResult {
   updated: number
   promoted: number
   departmentsCreated: number
+  /** Users switched to inactive (their sessions are revoked) */
+  deactivated: number
   failed: number
 }
 
@@ -566,7 +626,7 @@ export async function loadImportContext(actorEmail: string): Promise<ImportConte
     prisma.user.findMany({
       select: {
         id: true, email: true, name: true, role: true, isActive: true, departmentId: true, reportsToId: true, title: true,
-        phone: true, country: true, timeZone: true, workDayStart: true, workDayEnd: true, kekaEmployeeId: true,
+        phone: true, country: true, timeZone: true, workDayStart: true, workDayEnd: true, kekaEmployeeId: true, employeeNumber: true, joiningDate: true,
       },
     }),
     prisma.department.findMany({ select: { id: true, name: true } }),
@@ -577,7 +637,7 @@ export async function loadImportContext(actorEmail: string): Promise<ImportConte
 /** Write every create/update row of the plan in one transaction. Error and unchanged rows are skipped. */
 export async function applyImport(plan: ImportPlan, ctx: ImportContext): Promise<ImportResult> {
   const work = plan.rows.filter((r) => r.action === 'create' || r.action === 'update')
-  const result: ImportResult = { created: 0, updated: 0, promoted: plan.promotions.length, departmentsCreated: 0, failed: plan.summary.error }
+  const result: ImportResult = { created: 0, updated: 0, promoted: plan.promotions.length, departmentsCreated: 0, deactivated: 0, failed: plan.summary.error }
   if (work.length === 0 && plan.promotions.length === 0) return result
 
   await prisma.$transaction(
@@ -602,6 +662,8 @@ export async function applyImport(plan: ImportPlan, ctx: ImportContext): Promise
         if (d.workDayStart !== undefined) out.workDayStart = d.workDayStart
         if (d.workDayEnd !== undefined) out.workDayEnd = d.workDayEnd
         if (d.kekaEmployeeId !== undefined) out.kekaEmployeeId = d.kekaEmployeeId
+        if (d.employeeNumber !== undefined) out.employeeNumber = d.employeeNumber
+        if (d.joiningDate !== undefined) out.joiningDate = new Date(`${d.joiningDate}T00:00:00.000Z`)
         if (d.isActive !== undefined) out.isActive = d.isActive
         return out
       }
@@ -615,6 +677,11 @@ export async function applyImport(plan: ImportPlan, ctx: ImportContext): Promise
         } else {
           const data = fields(r.data)
           if (Object.keys(data).length > 0) await tx.user.update({ where: { id: r.existingId! }, data })
+          if (r.data.isActive === false) {
+            // Deactivated: end their sessions now instead of at their next request
+            await tx.session.deleteMany({ where: { userId: r.existingId! } })
+            result.deactivated++
+          }
           result.updated++
         }
       }
@@ -648,8 +715,8 @@ export function templateCsv(): string {
   const d = ALLOWED_EMAIL_DOMAIN
   return toCsv([
     [...IMPORT_COLUMNS],
-    [`priya.shah${d}`, 'Priya', 'Shah', 'Manager', 'Engineering', '', 'Engineering Manager', '+91 98765 43210', 'India', 'IST', '11:00', '20:00', 'WLIQ001', 'Active'],
-    [`rahul.mehta${d}`, 'Rahul', 'Mehta', 'Employee', 'Engineering', `priya.shah${d}`, 'Software Engineer', '', 'India', '', '', '', '', 'Active'],
+    [`priya.shah${d}`, 'Priya', 'Shah', 'Manager', 'Engineering', '', 'Engineering Manager', '+91 98765 43210', 'India', 'IST', '11:00', '20:00', '', 'EMP001', '2024-12-01', 'Active'],
+    [`rahul.mehta${d}`, 'Rahul', 'Mehta', 'Employee', 'Engineering', `priya.shah${d}`, 'Software Engineer', '', 'India', '', '', '', '', 'EMP002', '2025-03-15', 'Active'],
   ])
 }
 
@@ -664,7 +731,8 @@ export function exportUsersCsv(users: ExportUser[]): string {
       return [
         u.email, first ?? '', rest.join(' '), ROLE_LABEL[u.role], u.department?.name ?? '', u.reportsTo?.email ?? '', u.title ?? '',
         u.phone ?? '', u.country ? countryLabel(u.country) : '', u.timeZone ?? '', u.workDayStart ?? '', u.workDayEnd ?? '',
-        u.kekaEmployeeId ?? '', u.isActive ? 'Active' : 'Inactive',
+        u.kekaEmployeeId ?? '', u.employeeNumber ?? '', u.joiningDate ? u.joiningDate.toISOString().slice(0, 10) : '',
+        u.isActive ? 'Active' : 'Inactive',
       ]
     }),
   ])
@@ -675,7 +743,7 @@ export async function exportAllUsersCsv(): Promise<string> {
     orderBy: [{ isActive: 'desc' }, { name: 'asc' }],
     select: {
       id: true, email: true, name: true, role: true, isActive: true, departmentId: true, reportsToId: true, title: true,
-      phone: true, country: true, timeZone: true, workDayStart: true, workDayEnd: true, kekaEmployeeId: true,
+      phone: true, country: true, timeZone: true, workDayStart: true, workDayEnd: true, kekaEmployeeId: true, employeeNumber: true, joiningDate: true,
       department: { select: { name: true } },
       reportsTo: { select: { email: true } },
     },
