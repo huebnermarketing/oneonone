@@ -46,6 +46,10 @@ export function toErrorResponse(error: unknown): NextResponse {
   if (error instanceof UnauthorizedError) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
+  // AI features with no provider key: tell the user what to fix instead of a generic 500
+  if (error instanceof Error && error.name === 'AiNotConfiguredError') {
+    return NextResponse.json({ error: error.message }, { status: 400 })
+  }
   if (error instanceof ForbiddenError) {
     return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
   }
