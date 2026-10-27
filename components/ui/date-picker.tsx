@@ -13,6 +13,8 @@ interface DatePickerProps {
   placeholder?: string
   label?: string
   className?: string
+  /** Weekdays that can't be picked (0 = Sunday … 6 = Saturday), e.g. non-working days */
+  disabledWeekdays?: number[]
 }
 
 const MONTHS = [
@@ -29,7 +31,8 @@ export function DatePicker({
   max,
   placeholder = 'Select date',
   label,
-  className
+  className,
+  disabledWeekdays,
 }: DatePickerProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [dropdownRect, setDropdownRect] = useState<{ top: number; left: number } | null>(null)
@@ -112,6 +115,7 @@ export function DatePicker({
     const dateStr = formatDateValue(date)
     if (min && dateStr < min) return true
     if (max && dateStr > max) return true
+    if (disabledWeekdays?.includes(date.getDay())) return true
     return false
   }
 
@@ -212,6 +216,9 @@ export function DatePicker({
     } else if (option === 'nextWeek') {
       date.setDate(date.getDate() + 7)
     }
+    // Tomorrow / next week roll forward past disabled weekdays (e.g. weekends)
+    if (option !== 'today') for (let i = 0; i < 7 && isDateDisabled(date); i++) date.setDate(date.getDate() + 1)
+    if (isDateDisabled(date)) return
     const value = formatDateValue(date)
     const withinMin = !min || value >= min
     const withinMax = !max || value <= max
@@ -265,7 +272,8 @@ export function DatePicker({
             <button
               type="button"
               onClick={() => quickSelect('today')}
-              className="flex-1 px-3 py-2 text-xs font-medium text-medium-gray hover:text-dark-gray dark:hover:text-white hover:bg-white dark:hover:bg-dark-gray rounded-lg transition-colors"
+              disabled={isDateDisabled(new Date())}
+              className="disabled:opacity-40 disabled:cursor-not-allowed flex-1 px-3 py-2 text-xs font-medium text-medium-gray hover:text-dark-gray dark:hover:text-white hover:bg-white dark:hover:bg-dark-gray rounded-lg transition-colors"
             >
               Today
             </button>

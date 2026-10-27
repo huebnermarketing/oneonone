@@ -63,6 +63,12 @@ export const updateSettingsSchema = z.object({
   enableEmailReminders: z.boolean().optional(),
   reminderHoursBefore: z.coerce.number().int().min(1).max(168).optional(),
   shortReminderHoursBefore: z.coerce.number().int().min(0).max(48).optional(),
+  workingDays: z
+    .array(z.number().int().min(0).max(6))
+    .min(1, 'Pick at least one working day')
+    .max(7)
+    .transform((days) => [...new Set(days)].sort((a, b) => a - b))
+    .optional(),
 })
 
 export const settingsActionSchema = z.object({

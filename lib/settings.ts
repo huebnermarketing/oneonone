@@ -30,6 +30,8 @@ export interface SystemSettings {
   reminderHoursBefore: number
   /** Second, short-notice reminder (in-app only). 0 disables it. */
   shortReminderHoursBefore: number
+  /** Days meetings can be scheduled on, 0 = Sunday … 6 = Saturday (scheduler's timezone). */
+  workingDays: number[]
 }
 
 export type PolicySettings = Pick<
@@ -41,6 +43,7 @@ export type PolicySettings = Pick<
   | 'enableEmailReminders'
   | 'reminderHoursBefore'
   | 'shortReminderHoursBefore'
+  | 'workingDays'
 >
 
 export const DEFAULT_POLICIES: PolicySettings = {
@@ -51,6 +54,7 @@ export const DEFAULT_POLICIES: PolicySettings = {
   enableEmailReminders: true,
   reminderHoursBefore: 24,
   shortReminderHoursBefore: 1,
+  workingDays: [1, 2, 3, 4, 5],
 }
 
 // In-process cache (5 minutes). Cleared on every updateSettings().
@@ -131,6 +135,7 @@ export async function getSettings(): Promise<SystemSettings> {
         enableEmailReminders: row.enableEmailReminders,
         reminderHoursBefore: row.reminderHoursBefore,
         shortReminderHoursBefore: row.shortReminderHoursBefore,
+        workingDays: row.workingDays?.length ? row.workingDays : DEFAULT_POLICIES.workingDays,
       }
     : defaults
 
@@ -150,6 +155,7 @@ export async function getPolicies(): Promise<PolicySettings> {
     enableEmailReminders: s.enableEmailReminders,
     reminderHoursBefore: s.reminderHoursBefore,
     shortReminderHoursBefore: s.shortReminderHoursBefore,
+    workingDays: s.workingDays?.length ? s.workingDays : DEFAULT_POLICIES.workingDays,
   }
 }
 

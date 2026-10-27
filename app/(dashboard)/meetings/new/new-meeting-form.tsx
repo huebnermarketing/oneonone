@@ -1,6 +1,7 @@
 'use client'
 
 import { useForm } from 'react-hook-form'
+import { DEFAULT_WORKING_DAYS } from '@/lib/working-days'
 import { zodResolver } from '@hookform/resolvers/zod'
 import * as z from 'zod'
 import '@/lib/zod-messages'
@@ -30,9 +31,11 @@ interface NewMeetingFormProps {
   /** Viewer's work hours ("HH:mm", their profile zone) — bound the fallback grid when calendars are not connected. */
   workDayStart?: string | null
   workDayEnd?: string | null
+  /** Admin → Settings → Policies → Working days; other weekdays can't be picked */
+  workingDays?: number[]
 }
 
-export function NewMeetingForm({ employees, workDayStart, workDayEnd, onBack }: NewMeetingFormProps) {
+export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDays = DEFAULT_WORKING_DAYS, onBack }: NewMeetingFormProps) {
   const router = useRouter()
   const { toastError, toastSuccess } = useToast()
   const f = useFormat()
@@ -44,6 +47,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, onBack }: 
   const [slots, setSlots] = useState<FreeSlot[]>([])
   const [slotsLoading, setSlotsLoading] = useState(false)
   const [calendarUnavailable, setCalendarUnavailable] = useState(false)
+  const [dayMessage, setDayMessage] = useState('')
   const [calendarMessage, setCalendarMessage] = useState('')
   const [workingHoursLabel, setWorkingHoursLabel] = useState<string | null>(null)
   const [slotsFetched, setSlotsFetched] = useState(false)
@@ -125,6 +129,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, onBack }: 
     setSlotsFetched(false)
     setCalendarUnavailable(false)
     setCalendarMessage('')
+    setDayMessage('')
     setValue('meetingTime', '')
 
     try {
@@ -138,6 +143,8 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, onBack }: 
       } else {
         setSlots(data.slots ?? [])
         setWorkingHoursLabel(data.workingHoursLabel ?? null)
+        // Holiday / leave / non-working day: say why there are no slots
+        if (data.dateUnavailable) setDayMessage(data.message || 'No meetings can be booked on this day.')
       }
       setSlotsFetched(true)
     } catch {
@@ -286,6 +293,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, onBack }: 
                   onChange={(value) => setValue('meetingDate', value, { shouldValidate: true })}
                   min={minDate}
                   placeholder="Select meeting date"
+                  disabledWeekdays={[0, 1, 2, 3, 4, 5, 6].filter((d) => !workingDays.includes(d))}
                 />
                 {errors.meetingDate && (
                   <p className="mt-2 text-sm text-red-500" role="alert">{errors.meetingDate.message}</p>
@@ -319,7 +327,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, onBack }: 
                     <div className="text-center py-8">
                       <Calendar className="w-10 h-10 text-light-gray mx-auto mb-2" aria-hidden="true" />
                       <p className="text-sm font-medium text-dark-gray dark:text-white mb-1">No available slots</p>
-                      <p className="text-sm text-medium-gray">Both calendars are fully booked on this date. Try another day.</p>
+                      <p className="text-sm text-medium-gray">{dayMessage || 'Both calendars are fully booked on this date. Try another day.'}</p>
                     </div>
                   ) : (
                     <SlotGrid

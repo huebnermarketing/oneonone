@@ -8,6 +8,8 @@ import { advanceToNextOccurrence, getNextOccurrenceDates } from '@/lib/recurring
 import { MAX_OCCURRENCES_TO_CHECK, calendarsConnected, firstFreeOccurrence, pairProfiles, type PairProfiles } from '@/lib/availability'
 import * as notify from '@/lib/notify'
 import { createRecurringScheduleSchema } from '@/lib/validation/recurring'
+import { getPolicies } from '@/lib/settings'
+import { assertWorkingWeekday } from '@/lib/working-days'
 
 export const dynamic = 'force-dynamic'
 
@@ -56,6 +58,7 @@ async function pickFirstMeetingDate(reporterId: string, employeeId: string, prof
  */
 export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user }) => {
   const { employeeId, frequency, dayOfWeek, timeOfDay, meetingType, meetingLink } = await parseBody(req, createRecurringScheduleSchema)
+  assertWorkingWeekday(dayOfWeek, (await getPolicies()).workingDays)
 
   const profileSelect = { name: true, email: true, timeZone: true, workDayStart: true, workDayEnd: true } as const
   const [reporterProfile, employee] = await Promise.all([
