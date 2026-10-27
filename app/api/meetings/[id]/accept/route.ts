@@ -96,7 +96,8 @@ export const POST = withApiAuth(async (_req: NextRequest, { user, params }) => {
             meeting.employee.name,
             meeting.reporter.name,
             schedule.frequency,
-            schedule.reporter?.timeZone ?? DEFAULT_TIMEZONE
+            schedule.reporter?.timeZone ?? DEFAULT_TIMEZONE,
+            meeting.durationMinutes
           )
         }
       } else {
@@ -107,7 +108,8 @@ export const POST = withApiAuth(async (_req: NextRequest, { user, params }) => {
           meeting.reporterId,
           meeting.meetingDate,
           meeting.employee.name,
-          meeting.reporter.name
+          meeting.reporter.name,
+          meeting.durationMinutes
         )
       }
     }
@@ -119,7 +121,7 @@ export const POST = withApiAuth(async (_req: NextRequest, { user, params }) => {
   const acceptor = user.id === meeting.employeeId ? meeting.employee : meeting.reporter
 
   await Promise.all([
-    notify.meetingAccepted({ meetingId: meeting.id, date: meeting.meetingDate, to: proposer, acceptorName: acceptor.name }),
+    notify.meetingAccepted({ meetingId: meeting.id, date: meeting.meetingDate, to: proposer, acceptorName: acceptor.name, durationMinutes: meeting.durationMinutes }),
     logMeetingUpdated(user.id, params.id, { action: 'accepted', acceptedBy: acceptor.name, status: 'SCHEDULED' }),
   ])
 

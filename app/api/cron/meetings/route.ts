@@ -145,6 +145,7 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
           employeeId: schedule.employeeId,
           reporterId: schedule.reporterId,
           meetingDate,
+          durationMinutes: schedule.durationMinutes,
           recurringScheduleId: schedule.id,
           status: autoSchedule ? 'SCHEDULED' : 'PROPOSED',
           proposedById: schedule.reporterId,
@@ -179,7 +180,8 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
                 schedule.reporterId,
                 meetingDate,
                 schedule.employee.name,
-                schedule.reporter.name
+                schedule.reporter.name,
+                schedule.durationMinutes
               )
             }
           } catch (calError) {
@@ -194,6 +196,7 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
           to: { id: schedule.employeeId, email: schedule.employee.email, name: schedule.employee.name },
           acceptorName: schedule.reporter.name,
           acceptorFallback: 'Your manager',
+          durationMinutes: schedule.durationMinutes,
         })
       } else {
         // First-time proposal
@@ -202,6 +205,7 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
           date: meetingDate,
           employee: { id: schedule.employeeId, email: schedule.employee.email, name: schedule.employee.name },
           reporter: schedule.reporter,
+          durationMinutes: schedule.durationMinutes,
         })
       }
 

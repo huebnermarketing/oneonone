@@ -37,10 +37,10 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (_req: NextRequest, { us
  * holiday/leave day. Falls back to the first occurrence when either calendar is not connected or the
  * check itself fails; throws 409 when every candidate is busy.
  */
-async function pickFirstMeetingDate(reporterId: string, employeeId: string, profiles: PairProfiles, upcomingDates: Date[]): Promise<Date> {
+async function pickFirstMeetingDate(reporterId: string, employeeId: string, profiles: PairProfiles, upcomingDates: Date[], durationMinutes: number): Promise<Date> {
   try {
     if (!(await calendarsConnected(reporterId, employeeId)).either) return upcomingDates[0]!
-    const free = await firstFreeOccurrence(reporterId, employeeId, upcomingDates, profiles)
+    const free = await firstFreeOccurrence(reporterId, employeeId, upcomingDates, profiles, durationMinutes)
     if (free) return free
   } catch (err) {
     console.error('Recurring schedule calendar check:', err)
@@ -57,7 +57,7 @@ async function pickFirstMeetingDate(reporterId: string, employeeId: string, prof
  * Schedule create + first meeting + nextMeetingDate advance are atomic.
  */
 export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user }) => {
-  const { employeeId, frequency, dayOfWeek, timeOfDay, meetingType, meetingLink } = await parseBody(req, createRecurringScheduleSchema)
+  const { employeeId, frequency, dayOfWeek, timeOfDay, durationMinutes, meetingType, meetingLink } = await parseBody(req, createRecurringScheduleSchema)
   assertWorkingWeekday(dayOfWeek, (await getPolicies()).workingDays)
 
   const profileSelect = { name: true, email: true, timeZone: true, workDayStart: true, workDayEnd: true } as const
@@ -89,7 +89,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
   const profiles = pairProfiles(reporterProfile, employee)
   const reporterTz = profiles.reporter.timeZone
   const upcomingDates = getNextOccurrenceDates(dayOfWeek, timeOfDay, frequency, reporterTz, MAX_OCCURRENCES_TO_CHECK)
-  const firstMeetingDate = await pickFirstMeetingDate(user.id, employeeId, profiles, upcomingDates)
+  const firstMeetingDate = await pickFirstMeetingDate(user.id, employeeId, profiles, upcomingDates, durationMinutes)
   const link = meetingType === 'ZOOM' ? meetingLink ?? null : null
 
   const { schedule, meeting } = await prisma.$transaction(async (tx) => {
@@ -100,6 +100,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
         frequency,
         dayOfWeek,
         timeOfDay,
+        durationMinutes,
         nextMeetingDate: firstMeetingDate,
         meetingType,
         meetingLink: link,
@@ -112,6 +113,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
         employeeId,
         reporterId: user.id,
         meetingDate: firstMeetingDate,
+        durationMinutes: created.durationMinutes,
         recurringScheduleId: created.id,
         status: 'PROPOSED',
         proposedById: user.id,
@@ -134,10 +136,10 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
     action: 'CREATE',
     entityType: 'RecurringSchedule',
     entityId: schedule.id,
-    details: { employeeId, employeeName: employee.name, frequency: schedule.frequency, dayOfWeek, timeOfDay },
+    details: { employeeId, employeeName: employee.name, frequency: schedule.frequency, dayOfWeek, timeOfDay, durationMinutes },
   })
 
-  await notify.meetingProposed({ meetingId: meeting.id, date: firstMeetingDate, employee: { id: employeeId, email: employee.email, name: employee.name }, reporter: { email: user.email, name: user.name } })
+  await notify.meetingProposed({ meetingId: meeting.id, date: firstMeetingDate, employee: { id: employeeId, email: employee.email, name: employee.name }, reporter: { email: user.email, name: user.name }, durationMinutes })
 
   return NextResponse.json({ schedule, meeting }, { status: 201 })
 })

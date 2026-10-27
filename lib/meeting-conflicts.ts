@@ -1,46 +1,49 @@
 /**
- * Time-conflict check shared by POST /api/meetings and POST /api/meetings/[id]/suggest.
+ * Time-conflict check shared by POST /api/meetings, suggest and reschedule.
  *
  * A proposed time conflicts when either party (employee or reporter) already has an active
- * (PROPOSED or SCHEDULED) meeting, in any role, that starts within one meeting length of it.
+ * (PROPOSED or SCHEDULED) meeting, in any role, whose [start, start + its length) overlaps
+ * [date, date + durationMinutes). Back-to-back meetings (one ends as the next starts) are fine.
  */
 import { MeetingStatus } from '@prisma/client'
 import { prisma } from './prisma'
 import { conflict } from './api-errors'
-import { MEETING_DURATION_MINUTES } from './constants'
+import { MAX_MEETING_DURATION } from './meeting-duration'
 
 const ACTIVE_STATUSES: MeetingStatus[] = [MeetingStatus.PROPOSED, MeetingStatus.SCHEDULED]
 
-/** Two 30-minute meetings may start exactly 30 minutes apart, so the window is one minute short of the duration. */
-const CONFLICT_WINDOW_MS = (MEETING_DURATION_MINUTES - 1) * 60 * 1000
-
-/**
- * Throw a 409 if `employeeId` or `reporterId` already has an active meeting overlapping `date`.
- * Pass `excludeMeetingId` when re-timing an existing meeting so it does not conflict with itself.
- */
-export async function assertNoConflict(
-  employeeId: string,
-  reporterId: string,
-  date: Date,
+export interface ConflictOptions {
+  /** Length of the meeting being placed */
+  durationMinutes: number
+  /** When re-timing an existing meeting, so it does not conflict with itself */
   excludeMeetingId?: string
-): Promise<void> {
-  const windowStart = new Date(date.getTime() - CONFLICT_WINDOW_MS)
-  const windowEnd = new Date(date.getTime() + CONFLICT_WINDOW_MS)
+}
 
-  const conflicting = await prisma.meeting.findFirst({
+/** Pure: do [aStart, aStart + aMin) and [bStart, bStart + bMin) overlap? */
+export function overlaps(aStart: Date, aMinutes: number, bStart: Date, bMinutes: number): boolean {
+  return aStart.getTime() < bStart.getTime() + bMinutes * 60_000 && bStart.getTime() < aStart.getTime() + aMinutes * 60_000
+}
+
+/** Throw a 409 if `employeeId` or `reporterId` already has an active meeting overlapping the new one. */
+export async function assertNoConflict(employeeId: string, reporterId: string, date: Date, { durationMinutes, excludeMeetingId }: ConflictOptions): Promise<void> {
+  // Any overlapping meeting starts after (date - longest length) and before the new one ends
+  const candidates = await prisma.meeting.findMany({
     where: {
       ...(excludeMeetingId ? { id: { not: excludeMeetingId } } : {}),
       status: { in: ACTIVE_STATUSES },
-      meetingDate: { gte: windowStart, lte: windowEnd },
+      meetingDate: { gt: new Date(date.getTime() - MAX_MEETING_DURATION * 60_000), lt: new Date(date.getTime() + durationMinutes * 60_000) },
       OR: [{ employeeId }, { reporterId }, { employeeId: reporterId }, { reporterId: employeeId }],
     },
     select: {
+      meetingDate: true,
+      durationMinutes: true,
       employeeId: true,
       reporterId: true,
       employee: { select: { name: true } },
       reporter: { select: { name: true } },
     },
   })
+  const conflicting = candidates.find((m) => overlaps(m.meetingDate, m.durationMinutes, date, durationMinutes))
   if (!conflicting) return
 
   const employeeInvolved = conflicting.employeeId === employeeId || conflicting.reporterId === employeeId

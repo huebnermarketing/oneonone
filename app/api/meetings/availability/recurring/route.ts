@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic'
  * REPORTER may only query themselves or a direct report; ADMIN anyone.
  */
 export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user }) => {
-  const { employeeId, dayOfWeek, timeOfDay, frequency } = parseQuery(req, recurringAvailabilityQuery)
+  const { employeeId, dayOfWeek, timeOfDay, frequency, duration } = parseQuery(req, recurringAvailabilityQuery)
 
   if (!(await canActOnUser(user, employeeId))) {
     throw forbidden('You can only view availability for your own direct reports')
@@ -54,7 +54,7 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
   const upcomingDates = getNextOccurrenceDates(dayOfWeek, timeOfDay, frequency, reporterTz, MAX_OCCURRENCES_TO_CHECK)
   let firstFreeDate: Date | null
   try {
-    firstFreeDate = await firstFreeOccurrence(user.id, employeeId, upcomingDates, profiles)
+    firstFreeDate = await firstFreeOccurrence(user.id, employeeId, upcomingDates, profiles, duration)
   } catch (err) {
     if (!(err instanceof CalendarUnavailableError)) throw err
     return unavailable("Can't see the employee's calendar. You can still create the schedule.")

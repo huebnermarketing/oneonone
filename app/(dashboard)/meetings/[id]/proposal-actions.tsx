@@ -8,11 +8,15 @@ import { DatePicker } from '@/components/ui/date-picker'
 import { useToast } from '@/components/ui/toast'
 import { useFormat } from '@/components/providers/timezone-provider'
 import { SlotGrid } from '@/components/forms/slot-grid'
+import { DurationToggle } from '@/components/forms/duration-toggle'
+import { toMeetingDuration, type MeetingDuration } from '@/lib/meeting-duration'
 import { isSlotInPast, type FreeSlot } from '@/lib/slots'
 
 interface ProposalActionsProps {
   meetingId: string
   meetingDate: string
+  /** Current length; the suggester can change it along with the time */
+  durationMinutes: number
   proposedByName: string
   isReceiver: boolean
   isProposer: boolean
@@ -24,6 +28,7 @@ interface ProposalActionsProps {
 export function ProposalActions({
   meetingId,
   meetingDate,
+  durationMinutes,
   proposedByName,
   isReceiver,
   isProposer,
@@ -38,6 +43,7 @@ export function ProposalActions({
   const [showSuggest, setShowSuggest] = useState(false)
   const [suggestDate, setSuggestDate] = useState('')
   const [suggestTime, setSuggestTime] = useState('')
+  const [duration, setDuration] = useState<MeetingDuration>(toMeetingDuration(durationMinutes))
   const [submittingSuggest, setSubmittingSuggest] = useState(false)
 
   // Availability slots for suggest flow
@@ -73,7 +79,7 @@ export function ProposalActions({
   }
 
   // Fetch real mutual availability for this meeting's participants
-  const fetchSlots = useCallback(async (date: string) => {
+  const fetchSlots = useCallback(async (date: string, minutes: number) => {
     setSlotsLoading(true)
     setSlots([])
     setCalendarUnavailable(false)
@@ -82,7 +88,7 @@ export function ProposalActions({
 
     try {
       const res = await fetch(
-        `/api/meetings/${meetingId}/availability?date=${encodeURIComponent(date)}`
+        `/api/meetings/${meetingId}/availability?date=${encodeURIComponent(date)}&duration=${minutes}`
       )
       const data = await res.json()
 
@@ -102,9 +108,9 @@ export function ProposalActions({
 
   useEffect(() => {
     if (suggestDate) {
-      fetchSlots(suggestDate)
+      fetchSlots(suggestDate, duration)
     }
-  }, [suggestDate, fetchSlots])
+  }, [suggestDate, duration, fetchSlots])
 
   const handleSuggest = async () => {
     if (!suggestTime) {
@@ -116,7 +122,7 @@ export function ProposalActions({
       const res = await fetch(`/api/meetings/${meetingId}/suggest`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ meetingDate: suggestTime }),
+        body: JSON.stringify({ meetingDate: suggestTime, durationMinutes: duration }),
       })
       if (!res.ok) {
         const data = await res.json()
@@ -137,6 +143,7 @@ export function ProposalActions({
   // Shared slot-picker UI used by both receiver and proposer panels
   const slotPicker = (
     <div className="space-y-4">
+      <DurationToggle value={duration} onChange={setDuration} />
       <DatePicker
         label="Date"
         value={suggestDate}

@@ -3,7 +3,7 @@ import { fromZonedTime, toZonedTime } from 'date-fns-tz'
 import { RecurringFrequency } from '@prisma/client'
 import { prisma } from './prisma'
 import { DEFAULT_WORK_END, DEFAULT_WORK_START } from './timezones'
-import { MEETING_DURATION_MINUTES } from './constants'
+import { DEFAULT_MEETING_DURATION, slotStepMinutes } from './meeting-duration'
 import { busyFromFreeBusy, computeFreeSlots, isMeetingTimeFree, type FreeBusyCalendar, type Interval } from './free-slots'
 import { buildRecurrenceRule } from './recurring-dates'
 import { getGoogleTokens, saveGoogleTokens } from './oauth-tokens'
@@ -51,7 +51,8 @@ export async function createCalendarEvent(
   reporterId: string,
   meetingDate: Date,
   employeeName: string,
-  reporterName: string
+  reporterName: string,
+  durationMinutes: number = DEFAULT_MEETING_DURATION
 ) {
   try {
     const reporter = await prisma.user.findUnique({
@@ -71,7 +72,7 @@ export async function createCalendarEvent(
         timeZone: calendarTz,
       },
       end: {
-        dateTime: new Date(meetingDate.getTime() + MEETING_DURATION_MINUTES * 60_000).toISOString(),
+        dateTime: new Date(meetingDate.getTime() + durationMinutes * 60_000).toISOString(),
         timeZone: calendarTz,
       },
       attendees: [
@@ -147,7 +148,8 @@ export async function createRecurringCalendarEvent(
   employeeName: string,
   reporterName: string,
   frequency: RecurringFrequency,
-  timeZone: string
+  timeZone: string,
+  durationMinutes: number = DEFAULT_MEETING_DURATION
 ): Promise<{ eventId: string; calendarLink: string | null }> {
   const FALLBACK_TZ = 'Asia/Kolkata'
   const calendarTz = timeZone || FALLBACK_TZ
@@ -155,7 +157,7 @@ export async function createRecurringCalendarEvent(
   const oauth2Client = await getAuthenticatedClient(reporterId)
   const calendar = google.calendar({ version: 'v3', auth: oauth2Client })
 
-  const endDate = new Date(firstOccurrenceDate.getTime() + MEETING_DURATION_MINUTES * 60_000)
+  const endDate = new Date(firstOccurrenceDate.getTime() + durationMinutes * 60_000)
   const event = {
     summary: `One-on-One (recurring): ${employeeName} & ${reporterName}`,
     description: `AMI One-on-One Recurring Meeting\n\nView meeting details: ${process.env.NEXTAUTH_URL}/meetings/${firstMeetingId}`,
@@ -204,7 +206,8 @@ export async function updateCalendarEvent(
   userId: string,
   meetingDate: Date,
   employeeName: string,
-  reporterName: string
+  reporterName: string,
+  durationMinutes: number = DEFAULT_MEETING_DURATION
 ) {
   try {
     const userRecord = await prisma.user.findUnique({
@@ -223,7 +226,7 @@ export async function updateCalendarEvent(
         timeZone: calendarTz,
       },
       end: {
-        dateTime: new Date(meetingDate.getTime() + MEETING_DURATION_MINUTES * 60_000).toISOString(),
+        dateTime: new Date(meetingDate.getTime() + durationMinutes * 60_000).toISOString(),
         timeZone: calendarTz,
       },
     }
@@ -244,6 +247,23 @@ export async function updateCalendarEvent(
     console.error('Error updating calendar event:', error)
     throw error
   }
+}
+
+/**
+ * Change an event's (or a whole recurring series') length, keeping its start. For a series this moves
+ * the end of every occurrence that hasn't been individually edited.
+ */
+export async function setCalendarEventDuration(googleEventId: string, userId: string, durationMinutes: number) {
+  const calendar = google.calendar({ version: 'v3', auth: await getAuthenticatedClient(userId) })
+  const { data } = await calendar.events.get({ calendarId: 'primary', eventId: googleEventId })
+  const start = data.start?.dateTime
+  if (!start) return
+  await calendar.events.patch({
+    calendarId: 'primary',
+    eventId: googleEventId,
+    requestBody: { end: { dateTime: new Date(new Date(start).getTime() + durationMinutes * 60_000).toISOString(), timeZone: data.start?.timeZone ?? undefined } },
+    sendUpdates: 'all',
+  })
 }
 
 export async function deleteCalendarEvent(googleEventId: string, userId: string) {
@@ -443,7 +463,7 @@ export async function getMutualFreeSlots(
   reporterId: string,
   employeeId: string,
   date: Date,
-  slotMinutes = MEETING_DURATION_MINUTES,
+  slotMinutes: number = DEFAULT_MEETING_DURATION,
   options?: MutualFreeSlotsOptions
 ): Promise<FreeSlot[]> {
   const reporterTz = options?.reporterTimeZone ?? FALLBACK_TZ
@@ -474,13 +494,10 @@ export async function getMutualFreeSlots(
     window: { start: windowStart.getTime(), end: windowEnd.getTime() },
     busy,
     durationMs: slotMinutes * 60_000,
-    stepMs: SLOT_STEP_MINUTES * 60_000,
+    stepMs: slotStepMinutes(slotMinutes) * 60_000,
     accept: bothInWorkHours(options),
   }).map((slot) => ({ start: new Date(slot.start).toISOString(), end: new Date(slot.end).toISOString() }))
 }
-
-/** Candidate start times are offered every 30 minutes regardless of meeting length. */
-const SLOT_STEP_MINUTES = 30
 
 /** The whole meeting [start, end) must sit inside BOTH people's working hours in their own timezones. */
 function bothInWorkHours(options?: MutualFreeSlotsOptions) {
@@ -512,7 +529,7 @@ export async function isDateTimeFreeForBoth(
   reporterId: string,
   employeeId: string,
   dateTime: Date,
-  durationMinutes = MEETING_DURATION_MINUTES,
+  durationMinutes: number = DEFAULT_MEETING_DURATION,
   options?: MutualFreeSlotsOptions
 ): Promise<boolean> {
   const start = dateTime.getTime()

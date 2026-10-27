@@ -17,11 +17,11 @@ export const dynamic = 'force-dynamic'
  * Any participant (employee or reporter) or an admin can call this, so "Suggest New Time" works for everyone.
  */
 export const GET = withApiAuth(async (req: NextRequest, { user, params }) => {
-  const { date } = parseQuery(req, availabilityDateQuery)
+  const { date, duration } = parseQuery(req, availabilityDateQuery)
 
   const meeting = await prisma.meeting.findUnique({
     where: { id: params.id },
-    select: { id: true, employeeId: true, reporterId: true },
+    select: { id: true, employeeId: true, reporterId: true, durationMinutes: true },
   })
   if (!meeting) throw notFound('Meeting')
   assertAccess(canViewMeeting(user, meeting))
@@ -50,7 +50,7 @@ export const GET = withApiAuth(async (req: NextRequest, { user, params }) => {
   const profiles = await loadPairProfiles(meeting.reporterId, meeting.employeeId)
   let slots
   try {
-    slots = await freeSlotsForDay(meeting.reporterId, meeting.employeeId, parsedDate, profiles)
+    slots = await freeSlotsForDay(meeting.reporterId, meeting.employeeId, parsedDate, profiles, duration ?? meeting.durationMinutes)
   } catch (err) {
     if (!(err instanceof CalendarUnavailableError)) throw err
     return unavailable("Can't see the other person's calendar. They need to sign in to One-on-One once with Google.")
