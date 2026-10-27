@@ -9,7 +9,7 @@
  */
 import { MeetingStatus, Prisma } from '@prisma/client'
 import { prisma } from './prisma'
-import { badRequest } from './api'
+import { badRequest } from './api-errors'
 import { getPolicies } from './settings'
 import { logMeetingUpdated } from './audit'
 import * as notify from './notify'
@@ -28,7 +28,7 @@ export function assertTransition(from: MeetingStatus, to: MeetingStatus) {
   }
 }
 
-const meetingWithParties = Prisma.validator<Prisma.MeetingDefaultArgs>()({
+export const meetingWithParties = Prisma.validator<Prisma.MeetingDefaultArgs>()({
   include: {
     employee: { select: { id: true, name: true, email: true } },
     reporter: { select: { id: true, name: true, email: true } },
@@ -69,7 +69,9 @@ export async function completeMeeting(meeting: MeetingWithParties, actorId: stri
 export async function cancelMeeting(
   meeting: MeetingWithParties,
   actor: { id: string; name?: string | null },
-  reason?: string
+  reason?: string,
+  /** People not to notify (e.g. someone who has left the company) */
+  opts: { excludeUserIds?: string[] } = {}
 ) {
   assertTransition(meeting.status, 'CANCELLED')
 
@@ -93,7 +95,8 @@ export async function cancelMeeting(
 
   // Notify everyone who is not the actor (admin cancelling → both parties hear about it)
   const actorName = actor.name || 'An administrator'
-  const recipients = [meeting.employee, meeting.reporter].filter((p) => p.id !== actor.id)
+  const skip = new Set([actor.id, ...(opts.excludeUserIds ?? [])])
+  const recipients = [meeting.employee, meeting.reporter].filter((p) => !skip.has(p.id))
   await notify.meetingCancelled({ meetingId: meeting.id, date: meeting.meetingDate, recipients, actorName, reason })
 
   return updated

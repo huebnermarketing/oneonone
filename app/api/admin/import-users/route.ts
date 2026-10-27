@@ -4,6 +4,7 @@ import { createAuditLog, logBulkImport } from '@/lib/audit'
 import { importUsersQuery, importUsersSchema } from '@/lib/validation/users'
 import { applyImport, errorReportCsv, exportAllUsersCsv, loadImportContext, planImport, templateCsv } from '@/lib/user-import'
 import { toDateKey } from '@/lib/dates'
+import { annotateOffboarding } from '@/lib/offboarding'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,6 +41,7 @@ export const POST = withApiAuth(ADMIN, async (req: NextRequest, { user }) => {
   const ctx = await loadImportContext(user.email)
   const plan = planImport(csv, ctx)
   if (plan.fatal) throw badRequest(plan.fatal)
+  await annotateOffboarding(plan.rows)
 
   const preview = {
     summary: plan.summary,

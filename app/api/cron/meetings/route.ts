@@ -87,6 +87,9 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
   const schedules = await prisma.recurringSchedule.findMany({
     where: {
       isActive: true,
+      // Nobody who has left: offboarding cancels these, this is the safety net
+      employee: { isActive: true },
+      reporter: { isActive: true },
       nextMeetingDate: {
         lte: lookAhead,
       },
@@ -223,6 +226,9 @@ async function sendMeetingReminders(results: { recurringMeetingsCreated: number;
     where: {
       status: 'SCHEDULED',
       reminder24hSent: false,
+      // Nobody who has left: offboarding cancels these, this is the safety net
+      employee: { isActive: true },
+      reporter: { isActive: true },
       meetingDate: {
         gte: now,
         lte: in24h,
@@ -265,6 +271,9 @@ async function sendMeetingReminders(results: { recurringMeetingsCreated: number;
     where: {
       status: 'SCHEDULED',
       reminderSent: false,
+      // Nobody who has left: offboarding cancels these, this is the safety net
+      employee: { isActive: true },
+      reporter: { isActive: true },
       meetingDate: {
         gte: now,
         lte: in1h,
@@ -311,6 +320,9 @@ async function sendFormReminders(results: { formRemindersSent: number; errors: s
     where: {
       status: 'SCHEDULED',
       formSubmittedAt: null,
+      // Nobody who has left: offboarding cancels these, this is the safety net
+      employee: { isActive: true },
+      reporter: { isActive: true },
       formReminderSent: false,
       meetingDate: {
         gte: now,

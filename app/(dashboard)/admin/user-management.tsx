@@ -8,6 +8,7 @@ import {
 } from 'lucide-react'
 import { UserRole } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
+import { useConfirm } from '@/components/ui/confirm-modal'
 import { Avatar } from '@/components/ui/avatar'
 import { Pill, type PillTone } from '@/components/ui/pill'
 import { Select } from '@/components/ui/select'
@@ -90,6 +91,7 @@ export function UserManagement({ users, departments, reporters, currentUserId, e
   const router = useRouter()
   const f = useFormat()
   const { toastError, toastSuccess } = useToast()
+  const confirm = useConfirm()
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
   const [query, setQuery] = useState('')
@@ -190,6 +192,26 @@ export function UserManagement({ users, departments, reporters, currentUserId, e
   }
 
   const setActive = async (user: User, isActive: boolean) => {
+    if (!isActive) {
+      // Deactivating cancels their upcoming meetings and recurring schedules — say how many first
+      let detail = ''
+      try {
+        const res = await fetch(`/api/users/${user.id}/offboarding`)
+        if (res.ok) {
+          const { meetings, schedules } = (await res.json()) as { meetings: number; schedules: number }
+          const parts = [meetings ? plural(meetings, 'upcoming meeting') : '', schedules ? plural(schedules, 'recurring schedule') : ''].filter(Boolean)
+          if (parts.length) detail = ` ${parts.join(' and ')} will be cancelled and the other person notified.`
+        }
+      } catch {
+        // count is informational; the confirm still shows
+      }
+      const ok = await confirm(`${user.name} won't be able to sign in.${detail} Past meetings and recordings are kept.`, {
+        title: `Deactivate ${user.name}?`,
+        confirmText: 'Deactivate',
+        variant: 'danger',
+      })
+      if (!ok) return
+    }
     try {
       const response = await fetch(`/api/users/${user.id}`, {
         method: 'PATCH',
@@ -778,6 +800,9 @@ export function UserManagement({ users, departments, reporters, currentUserId, e
               />
               <label htmlFor={fid('isActive')} className="text-sm text-dark-gray dark:text-white">
                 Active user
+                {editingUser.isActive && !formData.isActive && (
+                  <span className="block text-xs text-amber-600 dark:text-amber-400">Saving will cancel their upcoming meetings and recurring schedules.</span>
+                )}
               </label>
             </div>
           )}

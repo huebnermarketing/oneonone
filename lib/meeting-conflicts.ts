@@ -6,7 +6,7 @@
  */
 import { MeetingStatus } from '@prisma/client'
 import { prisma } from './prisma'
-import { conflict } from './api'
+import { conflict } from './api-errors'
 import { MEETING_DURATION_MINUTES } from './constants'
 
 const ACTIVE_STATUSES: MeetingStatus[] = [MeetingStatus.PROPOSED, MeetingStatus.SCHEDULED]

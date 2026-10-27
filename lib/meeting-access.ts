@@ -9,7 +9,7 @@
  *  - admin: SUPER_ADMIN, superset of everything
  */
 import { UserRole } from '@prisma/client'
-import { forbidden } from './api'
+import { forbidden } from './api-errors'
 import { getPolicies } from './settings'
 
 export interface MeetingRef {

@@ -4,6 +4,7 @@ import { ADMIN, ApiError, badRequest, parseBody, withApiAuth } from '@/lib/api'
 import { logBulkImport } from '@/lib/audit'
 import { getKekaSyncStatus, runKekaSync } from '@/lib/keka-sync'
 import { KekaUnavailableError } from '@/lib/keka-employees'
+import { annotateOffboarding } from '@/lib/offboarding'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,6 +31,7 @@ export const POST = withApiAuth(ADMIN, async (req: NextRequest, { user }) => {
     throw err
   }
   const { plan, result } = run
+  if (!result) await annotateOffboarding(plan.rows)
   if (result) {
     await logBulkImport(user.id, 'User', result.created + result.updated, {
       source: 'keka',
