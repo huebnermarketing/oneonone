@@ -63,7 +63,8 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
       meeting.reporterId,
       body.meetingDate,
       meeting.employee.name,
-      meeting.reporter.name
+      meeting.reporter.name,
+      meeting.durationMinutes
     ).catch((error) => console.error('Failed to update calendar event:', error))
   }
 

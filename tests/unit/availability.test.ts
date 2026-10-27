@@ -38,13 +38,16 @@ describe('profiles + label', () => {
 describe('appMeetingsBusy', () => {
   it('queries the reporter-local calendar day and returns meeting-length intervals', async () => {
     const at = new Date('2026-11-10T06:00:00.000Z')
-    prismaMock.meeting.findMany.mockResolvedValue([{ meetingDate: at }])
+    prismaMock.meeting.findMany.mockResolvedValue([{ meetingDate: at, durationMinutes: 30 }, { meetingDate: new Date(at.getTime() + 3600_000), durationMinutes: 15 }])
     const busy = await appMeetingsBusy('r', 'e', new Date('2026-11-10T00:00:00.000Z'), 'Asia/Kolkata')
     const where = prismaMock.meeting.findMany.mock.calls[0][0].where
-    expect(where.meetingDate.gte.toISOString()).toBe('2026-11-09T18:30:00.000Z') // 10 Nov 00:00 IST
+    expect(where.meetingDate.gte.toISOString()).toBe('2026-11-09T18:00:00.000Z') // 10 Nov 00:00 IST minus the longest meeting
     expect(where.meetingDate.lt.toISOString()).toBe('2026-11-10T18:30:00.000Z')  // 11 Nov 00:00 IST
     expect(where.OR).toHaveLength(4)
-    expect(busy).toEqual([{ start: at.getTime(), end: at.getTime() + 30 * 60_000 }])
+    expect(busy).toEqual([
+      { start: at.getTime(), end: at.getTime() + 30 * 60_000 },
+      { start: at.getTime() + 3600_000, end: at.getTime() + 3600_000 + 15 * 60_000 },
+    ])
   })
 })
 
@@ -55,8 +58,9 @@ describe('freeSlotsForDay', () => {
       { start: '2026-11-10T06:30:00.000Z', end: '2026-11-10T07:00:00.000Z' },
       { start: '2026-11-10T07:00:00.000Z', end: '2026-11-10T07:30:00.000Z' },
     ])
-    prismaMock.meeting.findMany.mockResolvedValue([{ meetingDate: new Date('2026-11-10T06:30:00.000Z') }])
-    const slots = await freeSlotsForDay('r', 'e', new Date('2026-11-10'), pairProfiles(IST, IST))
+    prismaMock.meeting.findMany.mockResolvedValue([{ meetingDate: new Date('2026-11-10T06:30:00.000Z'), durationMinutes: 30 }])
+    const slots = await freeSlotsForDay('r', 'e', new Date('2026-11-10'), pairProfiles(IST, IST), 30)
+    expect(vi.mocked(gcal.getMutualFreeSlots).mock.calls[0][3]).toBe(30)
     expect(slots.map((s) => s.start)).toEqual(['2026-11-10T06:00:00.000Z', '2026-11-10T07:00:00.000Z'])
   })
 })
@@ -66,12 +70,12 @@ describe('firstFreeOccurrence', () => {
   it('skips Keka-unavailable days and busy times', async () => {
     vi.mocked(keka.isDateUnavailableForEitherUser).mockImplementation(async (_r, _e, d) => d.getTime() === dates[0].getTime())
     vi.mocked(gcal.isDateTimeFreeForBoth).mockImplementation(async (_r, _e, d) => d.getTime() === dates[2].getTime())
-    expect(await firstFreeOccurrence('r', 'e', dates, pairProfiles(IST, IST))).toEqual(dates[2])
+    expect(await firstFreeOccurrence('r', 'e', dates, pairProfiles(IST, IST), 15)).toEqual(dates[2])
     expect(gcal.isDateTimeFreeForBoth).toHaveBeenCalledTimes(2) // the leave day never hit the calendar API
   })
   it('null when all are blocked', async () => {
     vi.mocked(gcal.isDateTimeFreeForBoth).mockImplementation(async () => false)
-    expect(await firstFreeOccurrence('r', 'e', dates, pairProfiles(IST, IST))).toBeNull()
+    expect(await firstFreeOccurrence('r', 'e', dates, pairProfiles(IST, IST), 15)).toBeNull()
   })
 })
 

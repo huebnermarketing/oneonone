@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { dateOnly, isoDate, meetingLink, meetingType, optionalText, recurringFrequency, dayOfWeek, hhmm, uuid } from './common'
+import { dateOnly, isoDate, meetingDuration, meetingDurationWithDefault, meetingLink, meetingType, optionalText, recurringFrequency, dayOfWeek, hhmm, uuid } from './common'
 
 const zoomLinkRule = <T extends { meetingType?: 'IN_PERSON' | 'ZOOM' | null; meetingLink?: string | null }>(v: T, ctx: z.RefinementCtx) => {
   if (v.meetingType === 'ZOOM' && !v.meetingLink) {
@@ -16,6 +16,7 @@ export const createMeetingSchema = z
   .object({
     employeeId: uuid,
     meetingDate: isoDate,
+    durationMinutes: meetingDurationWithDefault,
     meetingType: meetingType.default('IN_PERSON'),
     meetingLink: meetingLink.nullish(),
   })
@@ -32,6 +33,8 @@ export const updateMeetingSchema = z
 
 export const suggestMeetingSchema = z.object({
   meetingDate: isoDate,
+  /** Omit to keep the meeting's current length */
+  durationMinutes: meetingDuration.optional(),
 })
 
 export const cancelMeetingSchema = z.object({
@@ -66,11 +69,12 @@ export const createAttachmentSchema = z.object({
   fileSize: z.number().int().positive().max(MAX_ATTACHMENT_BYTES, 'File must be 10 MB or smaller'),
 })
 
-export const availabilityDateQuery = z.object({ date: dateOnly })
+export const availabilityDateQuery = z.object({ date: dateOnly, /** Omit to use the meeting's own length */ duration: meetingDuration.optional() })
 
 export const availabilityQuery = z.object({
   employeeId: uuid,
   date: dateOnly.optional(),
+  duration: meetingDurationWithDefault,
 })
 
 export const recurringAvailabilityQuery = z.object({
@@ -78,6 +82,7 @@ export const recurringAvailabilityQuery = z.object({
   dayOfWeek,
   timeOfDay: hhmm,
   frequency: recurringFrequency.default('BIWEEKLY'),
+  duration: meetingDurationWithDefault,
 })
 
 export const processRecordingSchema = z.object({

@@ -4,6 +4,7 @@ import { APP_NAME } from './constants'
 import { maskRecipients } from './redact'
 import { prisma } from './prisma'
 import { formatDateOnly, formatMeetingLong, resolveTimeZone, timeZoneAbbrev } from './dates'
+import { formatDuration } from './meeting-duration'
 
 // --- Transport: SMTP or AWS SES ---
 
@@ -464,7 +465,8 @@ export async function sendMeetingProposalEmail(
   employeeName: string | null,
   reporterName: string | null,
   meetingDate: Date,
-  meetingId: string
+  meetingId: string,
+  durationMinutes?: number
 ) {
   const empName = employeeName || 'Team Member'
   const mgrName = reporterName || 'Your Manager'
@@ -478,6 +480,7 @@ export async function sendMeetingProposalEmail(
       <p style="margin:0 0 20px;"><strong>${esc(mgrName)}</strong> has proposed a one-on-one meeting with you. Please review the details and either accept the proposed time or suggest an alternative.</p>
       ${detailRow('Proposed By', mgrName)}
       ${detailRow('Date & Time', when)}
+      ${durationMinutes ? detailRow('Length', formatDuration(durationMinutes)) : ''}
     `,
     ctaText: 'Accept or Suggest New Time',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
@@ -492,7 +495,8 @@ export async function sendMeetingAcceptedEmail(
   proposerName: string | null,
   acceptorName: string | null,
   meetingDate: Date,
-  meetingId: string
+  meetingId: string,
+  durationMinutes?: number
 ) {
   const pName = proposerName || 'Manager'
   const aName = acceptorName || 'Team Member'
@@ -506,6 +510,7 @@ export async function sendMeetingAcceptedEmail(
       <p style="margin:0 0 20px;"><strong>${esc(aName)}</strong> has accepted the proposed one-on-one meeting. The meeting has been added to your calendar.</p>
       ${detailRow('Accepted By', aName)}
       ${detailRow('Date & Time', when)}
+      ${durationMinutes ? detailRow('Length', formatDuration(durationMinutes)) : ''}
     `,
     ctaText: 'View Meeting',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
@@ -520,7 +525,8 @@ export async function sendProposalConfirmationEmail(
   reporterName: string | null,
   employeeName: string | null,
   meetingDate: Date,
-  meetingId: string
+  meetingId: string,
+  durationMinutes?: number
 ) {
   const mgrName = reporterName || 'Manager'
   const empName = employeeName || 'Team Member'
@@ -534,6 +540,7 @@ export async function sendProposalConfirmationEmail(
       <p style="margin:0 0 20px;">Your one-on-one meeting proposal with <strong>${esc(empName)}</strong> has been sent. You'll be notified when they accept or suggest a new time.</p>
       ${detailRow('Proposed To', empName)}
       ${detailRow('Date & Time', when)}
+      ${durationMinutes ? detailRow('Length', formatDuration(durationMinutes)) : ''}
     `,
     ctaText: 'View Meeting',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
@@ -604,7 +611,8 @@ export async function sendMeetingSuggestionEmail(
   recipientName: string | null,
   suggestorName: string | null,
   newDate: Date,
-  meetingId: string
+  meetingId: string,
+  durationMinutes?: number
 ) {
   const rName = recipientName || 'Manager'
   const sName = suggestorName || 'Team Member'
@@ -618,6 +626,7 @@ export async function sendMeetingSuggestionEmail(
       <p style="margin:0 0 20px;"><strong>${esc(sName)}</strong> has suggested a different time for the one-on-one meeting. Please review and either accept or propose another time.</p>
       ${detailRow('Suggested By', sName)}
       ${detailRow('New Date & Time', when)}
+      ${durationMinutes ? detailRow('Length', formatDuration(durationMinutes)) : ''}
     `,
     ctaText: 'Accept or Suggest Another Time',
     ctaUrl: `${baseUrl()}/meetings/${meetingId}`,

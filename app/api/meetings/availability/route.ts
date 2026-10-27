@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic'
  * REPORTER may only query themselves or a direct report; ADMIN anyone.
  */
 export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user }) => {
-  const { employeeId, date } = parseQuery(req, availabilityQuery)
+  const { employeeId, date, duration } = parseQuery(req, availabilityQuery)
 
   if (!(await canActOnUser(user, employeeId))) {
     throw forbidden('You can only view availability for your own direct reports')
@@ -89,7 +89,7 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
   const profiles = pairProfiles(reporter, employee)
   let slots
   try {
-    slots = await freeSlotsForDay(user.id, employeeId, parsedDate, profiles)
+    slots = await freeSlotsForDay(user.id, employeeId, parsedDate, profiles, duration)
   } catch (err) {
     if (!(err instanceof CalendarUnavailableError)) throw err
     return unavailable(`Can't see ${who}'s calendar. Ask them to sign in to One-on-One once with Google, or propose a time below.`)

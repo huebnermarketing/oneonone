@@ -51,7 +51,7 @@ export const GET = withApiAuth(async (req: NextRequest, { user }) => {
  * employee's manager.
  */
 export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user }) => {
-  const { employeeId, meetingDate, meetingType, meetingLink } = await parseBody(req, createMeetingSchema)
+  const { employeeId, meetingDate, durationMinutes, meetingType, meetingLink } = await parseBody(req, createMeetingSchema)
 
   const employee = await prisma.user.findUnique({ where: { id: employeeId }, select: { id: true } })
   if (!employee) throw notFound('Employee')
@@ -60,7 +60,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
   const reporterId = user.id
   assertWorkingDay(meetingDate, resolveTimeZone(user.timeZone), (await getPolicies()).workingDays)
 
-  await assertNoConflict(employeeId, reporterId, meetingDate)
+  await assertNoConflict(employeeId, reporterId, meetingDate, { durationMinutes })
 
   const link = meetingType === 'ZOOM' ? meetingLink ?? null : null
   const meeting = await prisma.meeting.create({
@@ -68,6 +68,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
       employeeId,
       reporterId,
       meetingDate,
+      durationMinutes,
       status: 'PROPOSED',
       proposedById: user.id,
       meetingType,
@@ -82,6 +83,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
     employeeName: meeting.employee.name,
     reporterName: meeting.reporter.name,
     meetingDate: meetingDate.toISOString(),
+    durationMinutes,
   })
 
   // No calendar event at proposal stage — created when accepted. Notifications are best effort.
@@ -91,6 +93,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
     employee: meeting.employee,
     reporter: meeting.reporter,
     confirmToReporter: true,
+    durationMinutes,
   })
 
   return NextResponse.json(meeting, { status: 201 })

@@ -104,6 +104,8 @@ model Meeting {
   employeeId               String
   reporterId               String
   meetingDate              DateTime
+  /// Meeting length in minutes (15 or 30). Rows created before this column existed are 30.
+  durationMinutes          Int                @default(15)
   checkInPersonal          String?
   checkInProfessional      String?
   priorityGoalProfessional String?
@@ -284,6 +286,8 @@ model RecurringSchedule {
   frequency              RecurringFrequency @default(BIWEEKLY)
   dayOfWeek              Int
   timeOfDay              String
+  /// Length of each generated meeting in minutes (15 or 30)
+  durationMinutes        Int                @default(15)
   meetingType            MeetingType        @default(IN_PERSON)
   meetingLink            String?
   isActive               Boolean            @default(true)

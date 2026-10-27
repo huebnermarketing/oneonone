@@ -13,6 +13,8 @@ import { useToast } from '@/components/ui/toast'
 import { useFormat } from '@/components/providers/timezone-provider'
 import { EmployeePicker } from '@/components/forms/employee-picker'
 import { SlotGrid } from '@/components/forms/slot-grid'
+import { DurationToggle } from '@/components/forms/duration-toggle'
+import { DEFAULT_MEETING_DURATION, type MeetingDuration } from '@/lib/meeting-duration'
 import { buildFallbackSlots, isSlotInPast, type FreeSlot } from '@/lib/slots'
 
 const formSchema = z.object({
@@ -61,6 +63,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
     employeeName: string | null
     message: string
   } | null>(null)
+  const [duration, setDuration] = useState<MeetingDuration>(DEFAULT_MEETING_DURATION)
   const [meetingType, setMeetingType] = useState<'IN_PERSON' | 'ZOOM'>('IN_PERSON')
   const [meetingLink, setMeetingLink] = useState('')
 
@@ -123,7 +126,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
   }, [watchedEmployee, fetchCalendarStatus])
 
   // Fetch availability when both employee and date are selected
-  const fetchAvailability = useCallback(async (employeeId: string, date: string) => {
+  const fetchAvailability = useCallback(async (employeeId: string, date: string, minutes: number) => {
     setSlotsLoading(true)
     setSlots([])
     setSlotsFetched(false)
@@ -133,7 +136,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
     setValue('meetingTime', '')
 
     try {
-      const res = await fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(employeeId)}&date=${encodeURIComponent(date)}`)
+      const res = await fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(employeeId)}&date=${encodeURIComponent(date)}&duration=${minutes}`)
       const data = await res.json()
 
       if (data.calendarUnavailable) {
@@ -156,14 +159,14 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
 
   useEffect(() => {
     if (watchedEmployee && watchedDate) {
-      fetchAvailability(watchedEmployee, watchedDate)
+      fetchAvailability(watchedEmployee, watchedDate, duration)
     } else {
       setSlots([])
       setSlotsFetched(false)
       setCalendarUnavailable(false)
       setWorkingHoursLabel(null)
     }
-  }, [watchedEmployee, watchedDate, fetchAvailability])
+  }, [watchedEmployee, watchedDate, duration, fetchAvailability])
 
   const onSubmit = async (data: FormData) => {
     if (meetingType === 'ZOOM' && !meetingLink.trim()) {
@@ -178,6 +181,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
         body: JSON.stringify({
           employeeId: data.employeeId,
           meetingDate: data.meetingTime,
+          durationMinutes: duration,
           meetingType,
           meetingLink: meetingType === 'ZOOM' ? meetingLink.trim() : undefined,
         }),
@@ -202,11 +206,11 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
   const isToday = watchedDate === minDate
   const slotIsPast = useCallback((iso: string) => isToday && isSlotInPast(iso), [isToday])
 
-  // Fallback when a calendar is not connected: every 30-min slot inside the viewer's work hours, built in
+  // Fallback when a calendar is not connected: every slot of the chosen length inside the viewer's work hours, built in
   // the VIEWER's timezone (profile), not the browser's
   const fallbackSlots = useMemo(
-    () => (watchedDate && calendarUnavailable ? buildFallbackSlots(watchedDate, f.timeZone, workDayStart, workDayEnd) : []),
-    [watchedDate, calendarUnavailable, f.timeZone, workDayStart, workDayEnd]
+    () => (watchedDate && calendarUnavailable ? buildFallbackSlots(watchedDate, f.timeZone, workDayStart, workDayEnd, duration) : []),
+    [watchedDate, calendarUnavailable, f.timeZone, workDayStart, workDayEnd, duration]
   )
 
   const selectTime = (iso: string) => setValue('meetingTime', iso, { shouldValidate: true })
@@ -286,6 +290,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
                 </div>
               </div>
               <div className="p-6 space-y-5">
+                <DurationToggle value={duration} onChange={setDuration} />
                 <div className="max-w-xs">
                 <DatePicker
                   label="Date"

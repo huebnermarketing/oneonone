@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic'
  * When the proposer edits their own proposal, `proposedById` is unchanged.
  */
 export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
-  const { meetingDate } = await parseBody(req, suggestMeetingSchema)
+  const { meetingDate, durationMinutes: newDuration } = await parseBody(req, suggestMeetingSchema)
 
   const meeting = await loadMeeting(params.id)
   if (!meeting) throw notFound('Meeting')
@@ -27,7 +27,8 @@ export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
   assertAccess(canSuggest(user, meeting), 'Only meeting participants can change the time')
   assertWorkingDay(meetingDate, resolveTimeZone(user.timeZone), (await getPolicies()).workingDays)
 
-  await assertNoConflict(meeting.employeeId, meeting.reporterId, meetingDate, meeting.id)
+  const durationMinutes = newDuration ?? meeting.durationMinutes
+  await assertNoConflict(meeting.employeeId, meeting.reporterId, meetingDate, { durationMinutes, excludeMeetingId: meeting.id })
 
   const receiver = isReceiver(user, meeting)
   const proposerIsThirdParty =
@@ -36,7 +37,7 @@ export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
 
   const updated = await prisma.meeting.update({
     where: { id: meeting.id },
-    data: { meetingDate, ...(receiver ? { proposedById: user.id } : {}) },
+    data: { meetingDate, durationMinutes, ...(receiver ? { proposedById: user.id } : {}) },
     include: {
       employee: { select: { id: true, name: true, email: true } },
       reporter: { select: { id: true, name: true, email: true } },
@@ -47,10 +48,11 @@ export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
   const suggestor = user.id === meeting.employeeId ? meeting.employee : meeting.reporter
 
   await Promise.all([
-    notify.meetingTimeSuggested({ meetingId: meeting.id, date: meetingDate, to: otherParty, from: suggestor, isProposer }),
+    notify.meetingTimeSuggested({ meetingId: meeting.id, date: meetingDate, to: otherParty, from: suggestor, isProposer, durationMinutes }),
     logMeetingUpdated(user.id, meeting.id, {
       action: isProposer ? 'updated_proposal' : 'suggested_new_time',
       newMeetingDate: meetingDate.toISOString(),
+      ...(durationMinutes !== meeting.durationMinutes && { durationMinutes }),
       suggestedBy: suggestor.name,
     }),
   ])

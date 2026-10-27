@@ -75,14 +75,15 @@ export function meetingProposed(args: {
   employee: Party
   reporter: Pick<Party, 'email' | 'name'>
   confirmToReporter?: boolean
+  durationMinutes?: number
 }): Promise<NotifyResult> {
-  const { meetingId, date, employee, reporter } = args
+  const { meetingId, date, employee, reporter, durationMinutes } = args
   const deliveries: Delivery[] = [
-    ['email:employee', () => sendMeetingProposalEmail(employee.email, employee.name, reporter.name, date, meetingId)],
+    ['email:employee', () => sendMeetingProposalEmail(employee.email, employee.name, reporter.name, date, meetingId, durationMinutes)],
     ['in-app:employee', () => notifyMeetingProposed(employee.id, displayName(reporter.name, 'Your manager'), date, meetingId)],
   ]
   if (args.confirmToReporter) {
-    deliveries.push(['email:reporter', () => sendProposalConfirmationEmail(reporter.email, reporter.name, employee.name, date, meetingId)])
+    deliveries.push(['email:reporter', () => sendProposalConfirmationEmail(reporter.email, reporter.name, employee.name, date, meetingId, durationMinutes)])
   }
   return fanOut('meetingProposed', meetingId, deliveries)
 }
@@ -91,20 +92,20 @@ export function meetingProposed(args: {
  * Someone moved a pending meeting to a new time. When the original proposer edits their own
  * proposal the other side gets a fresh proposal email; otherwise a "new time suggested" email.
  */
-export function meetingTimeSuggested(args: { meetingId: string; date: Date; to: Party; from: Pick<Party, 'name'>; isProposer: boolean }): Promise<NotifyResult> {
-  const { meetingId, date, to, from } = args
+export function meetingTimeSuggested(args: { meetingId: string; date: Date; to: Party; from: Pick<Party, 'name'>; isProposer: boolean; durationMinutes?: number }): Promise<NotifyResult> {
+  const { meetingId, date, to, from, durationMinutes } = args
   const sendEmail = args.isProposer ? sendMeetingProposalEmail : sendMeetingSuggestionEmail
   return fanOut('meetingTimeSuggested', meetingId, [
-    ['email', () => sendEmail(to.email, to.name, from.name, date, meetingId)],
+    ['email', () => sendEmail(to.email, to.name, from.name, date, meetingId, durationMinutes)],
     ['in-app', () => notifyMeetingSuggested(to.id, displayName(from.name, 'Someone'), date, meetingId)],
   ])
 }
 
 /** A proposal was accepted (or cron auto-scheduled the next recurring meeting); tell `to`. */
-export function meetingAccepted(args: { meetingId: string; date: Date; to: Party; acceptorName: string | null; acceptorFallback?: string }): Promise<NotifyResult> {
-  const { meetingId, date, to, acceptorName } = args
+export function meetingAccepted(args: { meetingId: string; date: Date; to: Party; acceptorName: string | null; acceptorFallback?: string; durationMinutes?: number }): Promise<NotifyResult> {
+  const { meetingId, date, to, acceptorName, durationMinutes } = args
   return fanOut('meetingAccepted', meetingId, [
-    ['email', () => sendMeetingAcceptedEmail(to.email, to.name, acceptorName, date, meetingId)],
+    ['email', () => sendMeetingAcceptedEmail(to.email, to.name, acceptorName, date, meetingId, durationMinutes)],
     ['in-app', () => notifyMeetingAccepted(to.id, displayName(acceptorName, args.acceptorFallback ?? 'Your colleague'), date, meetingId)],
   ])
 }
