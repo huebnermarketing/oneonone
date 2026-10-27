@@ -5,6 +5,7 @@ import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const SIZES = { sm: 'max-w-md', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' } as const
+const FIELDS = 'input:not([disabled]):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),select:not([disabled]),textarea:not([disabled])'
 const FOCUSABLE = 'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])'
 
 export interface ModalProps {
@@ -30,21 +31,31 @@ export function Modal({ open, onClose, title, description, children, footer, siz
   const descId = useId()
   const panelRef = useRef<HTMLDivElement>(null)
   const restoreRef = useRef<HTMLElement | null>(null)
+  // Latest onClose/busy without re-running the open effect: callers pass inline closures, and re-running
+  // it on every parent render (i.e. every keystroke in a form) moved focus back to the first control.
+  const onCloseRef = useRef(onClose)
+  const busyRef = useRef(busy)
+  useEffect(() => {
+    onCloseRef.current = onClose
+    busyRef.current = busy
+  })
 
   useEffect(() => {
     if (!open) return
     restoreRef.current = document.activeElement as HTMLElement | null
     const panel = panelRef.current
-    const first = panel?.querySelector<HTMLElement>(FOCUSABLE)
+    // Prefer the first form field so a form dialog is ready to type in; else the first control (e.g. Close)
+    const field = panel?.querySelector<HTMLElement>(FIELDS)
+    const first = field ?? panel?.querySelector<HTMLElement>(FOCUSABLE)
     ;(first ?? panel)?.focus()
 
     const prevOverflow = document.body.style.overflow
     document.body.style.overflow = 'hidden'
 
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !busy) {
+      if (e.key === 'Escape' && !busyRef.current) {
         e.stopPropagation()
-        onClose()
+        onCloseRef.current()
         return
       }
       if (e.key !== 'Tab' || !panel) return
@@ -66,7 +77,7 @@ export function Modal({ open, onClose, title, description, children, footer, siz
       document.body.style.overflow = prevOverflow
       restoreRef.current?.focus?.()
     }
-  }, [open, busy, onClose])
+  }, [open])
 
   if (!open) return null
 
