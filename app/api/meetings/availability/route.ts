@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { REPORTER_OR_ADMIN, forbidden, notFound, parseQuery, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { canActOnUser } from '@/lib/team'
-import { isCalendarEnabled } from '@/lib/google-calendar'
+import { CalendarUnavailableError, isCalendarEnabled } from '@/lib/google-calendar'
 import { isDateUnavailableForEitherUser } from '@/lib/keka'
 import { freeSlotsForDay, pairProfiles, workingHoursLabel } from '@/lib/availability'
 import { availabilityQuery } from '@/lib/validation/meetings'
@@ -34,17 +34,22 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
     isCalendarEnabled(employeeId),
   ])
 
-  // Calendar status only (no date): when picking an employee, say whether their calendar is connected
+  // One connected calendar is enough: it reads the other person's free/busy (lib/google-calendar.getPairBusy)
+  const availabilityReady = yourCalendarConnected || employeeCalendarConnected
+  const who = employee.name ?? 'this person'
+
+  // Calendar status only (no date): when picking an employee
   if (!date) {
     return NextResponse.json({
       yourCalendarConnected,
       employeeCalendarConnected,
+      availabilityReady,
       employeeName: employee.name ?? null,
-      message: !yourCalendarConnected
-        ? 'Your Google Calendar is not connected. Sign out and sign in again with Google to see mutual availability.'
-        : !employeeCalendarConnected
-          ? `${employee.name ?? 'This person'}'s Google Calendar is not connected. You can still propose a time; they can accept or suggest another.`
-          : 'Both calendars connected. Pick a date to see free slots.',
+      message: yourCalendarConnected
+        ? `Pick a date to see times free on both your and ${who}'s calendars.`
+        : employeeCalendarConnected
+          ? `Using ${who}'s calendar to check both of you. Sign out and back in with Google to connect yours.`
+          : 'Your Google Calendar is not connected. Sign out and sign in again with Google to see mutual availability.',
     })
   }
 
@@ -59,19 +64,19 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
     })
   }
 
-  if (!yourCalendarConnected || !employeeCalendarConnected) {
-    return NextResponse.json({
-      slots: [],
-      calendarUnavailable: true,
-      workingHoursLabel: null,
-      message: !yourCalendarConnected
-        ? 'Your Google Calendar is not connected. Please sign out and sign in again to grant calendar access.'
-        : 'The selected employee has not connected their Google Calendar.',
-    })
+  const unavailable = (message: string) => NextResponse.json({ slots: [], calendarUnavailable: true, workingHoursLabel: null, message })
+  if (!availabilityReady) {
+    return unavailable('Your Google Calendar is not connected. Please sign out and sign in again to grant calendar access.')
   }
 
   const profiles = pairProfiles(reporter, employee)
-  const slots = await freeSlotsForDay(user.id, employeeId, parsedDate, profiles)
+  let slots
+  try {
+    slots = await freeSlotsForDay(user.id, employeeId, parsedDate, profiles)
+  } catch (err) {
+    if (!(err instanceof CalendarUnavailableError)) throw err
+    return unavailable(`Can't see ${who}'s calendar. Ask them to sign in to One-on-One once with Google, or propose a time below.`)
+  }
 
   return NextResponse.json({
     slots,

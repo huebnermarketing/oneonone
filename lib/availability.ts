@@ -65,9 +65,13 @@ export async function loadPairProfiles(reporterId: string, employeeId: string): 
   return pairProfiles(reporter, employee)
 }
 
-export async function calendarsConnected(reporterId: string, employeeId: string): Promise<{ reporter: boolean; employee: boolean; both: boolean }> {
+/**
+ * Whose Google Calendar is connected. Availability needs only `either`: the connected calendar reads
+ * the other person's free/busy (lib/google-calendar.getPairBusy).
+ */
+export async function calendarsConnected(reporterId: string, employeeId: string): Promise<{ reporter: boolean; employee: boolean; both: boolean; either: boolean }> {
   const [reporter, employee] = await Promise.all([isCalendarEnabled(reporterId), isCalendarEnabled(employeeId)])
-  return { reporter, employee, both: reporter && employee }
+  return { reporter, employee, both: reporter && employee, either: reporter || employee }
 }
 
 /**
