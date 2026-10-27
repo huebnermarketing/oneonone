@@ -37,7 +37,7 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (_req: NextRequest, { us
  */
 async function pickFirstMeetingDate(reporterId: string, employeeId: string, profiles: PairProfiles, upcomingDates: Date[]): Promise<Date> {
   try {
-    if (!(await calendarsConnected(reporterId, employeeId)).both) return upcomingDates[0]!
+    if (!(await calendarsConnected(reporterId, employeeId)).either) return upcomingDates[0]!
     const free = await firstFreeOccurrence(reporterId, employeeId, upcomingDates, profiles)
     if (free) return free
   } catch (err) {

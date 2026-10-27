@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { REPORTER_OR_ADMIN, forbidden, notFound, parseQuery, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { canActOnUser } from '@/lib/team'
-import { isCalendarEnabled } from '@/lib/google-calendar'
+import { CalendarUnavailableError, isCalendarEnabled } from '@/lib/google-calendar'
 import { MAX_OCCURRENCES_TO_CHECK, firstFreeOccurrence, pairProfiles } from '@/lib/availability'
 import { getNextOccurrenceDates } from '@/lib/recurring-dates'
 import { formatMeetingLong } from '@/lib/dates'
@@ -33,17 +33,18 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
     isCalendarEnabled(user.id),
     isCalendarEnabled(employeeId),
   ])
-  if (!reporterConnected || !employeeConnected) {
-    return NextResponse.json({
+  const unavailable = (message: string) =>
+    NextResponse.json({
       available: null,
       firstDate: null,
       calendarUnavailable: true,
       yourCalendarConnected: reporterConnected,
       employeeCalendarConnected: employeeConnected,
-      message: !reporterConnected
-        ? 'Your Google Calendar is not connected. Connect it to see mutual availability.'
-        : "The employee's Google Calendar is not connected. You can still create the schedule.",
+      message,
     })
+  // One connected calendar is enough: it reads the other person's free/busy
+  if (!reporterConnected && !employeeConnected) {
+    return unavailable('Your Google Calendar is not connected. Connect it to see mutual availability.')
   }
 
   const profiles = pairProfiles(reporter, employee)
@@ -51,7 +52,13 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
 
   // Use the first free occurrence among the next few
   const upcomingDates = getNextOccurrenceDates(dayOfWeek, timeOfDay, frequency, reporterTz, MAX_OCCURRENCES_TO_CHECK)
-  const firstFreeDate = await firstFreeOccurrence(user.id, employeeId, upcomingDates, profiles)
+  let firstFreeDate: Date | null
+  try {
+    firstFreeDate = await firstFreeOccurrence(user.id, employeeId, upcomingDates, profiles)
+  } catch (err) {
+    if (!(err instanceof CalendarUnavailableError)) throw err
+    return unavailable("Can't see the employee's calendar. You can still create the schedule.")
+  }
   const firstDate = firstFreeDate ?? upcomingDates[0]!
   const available = firstFreeDate !== null
 

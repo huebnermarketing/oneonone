@@ -68,3 +68,21 @@ export function isMeetingTimeFree(start: number, durationMs: number, window: Int
   if (!isIntervalFree(start, end, mergeBusy(busy))) return false
   return accept ? accept(start, end) : true
 }
+
+/** One calendar in a Google free/busy response. */
+export interface FreeBusyCalendar {
+  busy?: { start?: string | null; end?: string | null }[] | null
+  errors?: { domain?: string | null; reason?: string | null }[] | null
+}
+
+/**
+ * Busy intervals of one calendar from a free/busy response, or null when Google could not show it
+ * (missing, or `errors` such as notFound / no free/busy sharing).
+ */
+export function busyFromFreeBusy(calendars: Record<string, FreeBusyCalendar> | null | undefined, id: string): Interval[] | null {
+  const cal = calendars?.[id] ?? calendars?.[id.toLowerCase()]
+  if (!cal || (cal.errors && cal.errors.length > 0)) return null
+  return (cal.busy ?? [])
+    .filter((b): b is { start: string; end: string } => !!b.start && !!b.end)
+    .map((b) => ({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() }))
+}
