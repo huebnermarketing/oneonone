@@ -34,15 +34,40 @@ export function MicPicker({ value, onChange }: { value: string; onChange: (devic
     const devices = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput')
     const osDefault = devices.find((d) => d.deviceId === 'default')
     if (osDefault?.label) setDefaultName(defaultLabel(osDefault.label))
+    // Before mic permission is granted for this site, Chrome lists one input with no id and no name
+    // (Safari/Firefox: ids but no names) — the real list needs permission first
+    setLabelsHidden(devices.length === 0 || devices.every((d) => !d.label))
     const inputs = devices.filter((d) => d.deviceId && d.deviceId !== 'default' && d.deviceId !== 'communications')
-    setLabelsHidden(inputs.length > 0 && inputs.every((d) => !d.label))
     setMics(inputs.map((d, i) => ({ deviceId: d.deviceId, label: d.label || `Microphone ${i + 1}` })))
   }, [])
+
+  // Ask for mic permission once (the browser prompt), then release the mic and load the real list
+  const unlock = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      stream.getTracks().forEach((t) => t.stop())
+    } catch {
+      // denied: the recorder's own troubleshooting covers this when recording starts
+    }
+    await refresh()
+  }, [refresh])
 
   useEffect(() => {
     void refresh()
     navigator.mediaDevices?.addEventListener?.('devicechange', refresh)
-    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', refresh)
+    // Permission granted in the browser's site settings → load the list without a reload
+    let perm: PermissionStatus | null = null
+    navigator.permissions
+      ?.query({ name: 'microphone' as PermissionName })
+      .then((status) => {
+        perm = status
+        status.addEventListener('change', refresh)
+      })
+      .catch(() => {})
+    return () => {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', refresh)
+      perm?.removeEventListener('change', refresh)
+    }
   }, [refresh])
 
   // If the chosen mic is unplugged, fall back to the system default
@@ -103,14 +128,20 @@ export function MicPicker({ value, onChange }: { value: string; onChange: (devic
           <Mic className="w-3.5 h-3.5" aria-hidden="true" />
           Microphone
         </label>
-        <button
-          type="button"
-          onClick={() => setMeterOn((v) => !v)}
-          aria-pressed={meterOn}
-          className="text-xs font-medium text-blue-500 hover:underline"
-        >
-          {meterOn ? 'Stop test' : labelsHidden ? 'Show my microphones' : 'Test mic'}
-        </button>
+        {labelsHidden && !meterOn ? (
+          <button type="button" onClick={unlock} className="text-xs font-medium text-blue-500 hover:underline">
+            Show my microphones
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setMeterOn((v) => !v)}
+            aria-pressed={meterOn}
+            className="text-xs font-medium text-blue-500 hover:underline"
+          >
+            {meterOn ? 'Stop test' : 'Test mic'}
+          </button>
+        )}
       </div>
       <Select id={selectId} value={value} onChange={(e) => onChange(e.target.value)} className="px-3 py-2.5 truncate focus:ring-orange/50">
         <option value="">{defaultName ? `${defaultName} (system default)` : 'System default microphone'}</option>
@@ -121,6 +152,9 @@ export function MicPicker({ value, onChange }: { value: string; onChange: (devic
           </option>
         ))}
       </Select>
+      {labelsHidden && (
+        <p className="mt-1.5 text-xs text-medium-gray">Allow microphone access to see and pick a specific mic.</p>
+      )}
       {meterOn && (
         <div className="mt-2 h-1.5 rounded-full bg-off-white dark:bg-dark-gray overflow-hidden" role="meter" aria-label="Microphone level" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(level * 100)}>
           <div className="h-full bg-green-500 transition-[width] duration-75" style={{ width: `${Math.round(level * 100)}%` }} />
