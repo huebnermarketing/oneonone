@@ -19,7 +19,7 @@ Keka is the source of truth for employees. Code: `lib/keka-employees.ts` (API cl
 |---|---|
 | Name, email, job title, department (`groups` type 2), manager (`reportsTo.email`), phone (work, else mobile), country, Keka ID, employee number, joining date, left the company | Role (auto-promoted to Manager when someone reports to them, never auto-demoted), time zone, working hours, avatar, manual deactivation |
 
-- Leavers (`employmentStatus` ≠ 0 or exit date passed) are deactivated and their sessions revoked. Users linked to Keka but missing from the directory listing are looked up one by one.
+- Leavers (`employmentStatus` ≠ 0 or exit date passed) are deactivated and their sessions revoked; their upcoming meetings are cancelled (the other person is notified) and recurring schedules stopped (`lib/offboarding.ts`). The sync preview shows how many per leaver. Users linked to Keka but missing from the directory listing are looked up one by one.
 - Users not in Keka (added manually or by CSV) are never deactivated for being absent.
 - A manager who isn't in the app yet is left blank with a warning and linked on a later sync.
 - Non-company emails in Keka are skipped; leavers who were never in the app are ignored.

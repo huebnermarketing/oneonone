@@ -100,6 +100,14 @@ describe('cancelMeeting', () => {
     expect(deleteCalendarEvent).not.toHaveBeenCalled()
   })
 
+  it('does not notify excluded people (someone who has left)', async () => {
+    const m = meeting({ status: 'PROPOSED' })
+    prismaMock.meeting.update.mockResolvedValue({ ...m, status: 'CANCELLED' })
+    await cancelMeeting(m as never, admin, 'left', { excludeUserIds: [ids.employee] })
+    expect(notifyMeetingCancelled).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(notifyMeetingCancelled).mock.calls[0][0]).not.toBe(ids.employee)
+  })
+
   it('refuses to cancel a COMPLETED meeting', async () => {
     await expect(cancelMeeting(meeting({ status: 'COMPLETED' }) as never, reporter)).rejects.toMatchObject({ status: 400 })
   })

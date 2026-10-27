@@ -19,17 +19,8 @@ import { getCurrentUser, ForbiddenError, UnauthorizedError } from './auth-helper
 
 export type SessionUser = NonNullable<Awaited<ReturnType<typeof getCurrentUser>>>
 
-export class ApiError extends Error {
-  constructor(public status: number, message: string, public details?: unknown) {
-    super(message)
-    this.name = 'ApiError'
-  }
-}
-
-export const notFound = (what = 'Resource') => new ApiError(404, `${what} not found`)
-export const forbidden = (message = 'Insufficient permissions') => new ApiError(403, message)
-export const badRequest = (message: string, details?: unknown) => new ApiError(400, message, details)
-export const conflict = (message: string) => new ApiError(409, message)
+import { ApiError, badRequest } from './api-errors'
+export { ApiError, notFound, forbidden, badRequest, conflict } from './api-errors'
 
 /** Next 15+: dynamic route params arrive as a Promise. */
 type RouteContext = { params: Promise<Record<string, string>> }

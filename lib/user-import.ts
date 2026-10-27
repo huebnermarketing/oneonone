@@ -18,6 +18,7 @@
  */
 import type { Prisma, UserRole } from '@prisma/client'
 import { prisma } from './prisma'
+import { offboardUsers } from './offboarding'
 import { isAllowedEmail, ALLOWED_EMAIL_DOMAIN } from './constants'
 import { isValidTimeZone } from './dates'
 import { IMPORT_COLUMNS, type ImportColumn } from './user-import-columns'
@@ -618,6 +619,9 @@ export interface ImportResult {
   departmentsCreated: number
   /** Users switched to inactive (their sessions are revoked) */
   deactivated: number
+  /** Upcoming meetings cancelled / recurring schedules stopped because their person was deactivated */
+  meetingsCancelled: number
+  schedulesStopped: number
   failed: number
 }
 
@@ -637,7 +641,7 @@ export async function loadImportContext(actorEmail: string): Promise<ImportConte
 /** Write every create/update row of the plan in one transaction. Error and unchanged rows are skipped. */
 export async function applyImport(plan: ImportPlan, ctx: ImportContext): Promise<ImportResult> {
   const work = plan.rows.filter((r) => r.action === 'create' || r.action === 'update')
-  const result: ImportResult = { created: 0, updated: 0, promoted: plan.promotions.length, departmentsCreated: 0, deactivated: 0, failed: plan.summary.error }
+  const result: ImportResult = { created: 0, updated: 0, promoted: plan.promotions.length, departmentsCreated: 0, deactivated: 0, meetingsCancelled: 0, schedulesStopped: 0, failed: plan.summary.error }
   if (work.length === 0 && plan.promotions.length === 0) return result
 
   await prisma.$transaction(
@@ -695,6 +699,15 @@ export async function applyImport(plan: ImportPlan, ctx: ImportContext): Promise
     },
     { timeout: 120_000 }
   )
+
+  // People switched off: cancel their upcoming meetings and stop their recurring schedules
+  const deactivatedIds = work.filter((r) => r.action === 'update' && r.data.isActive === false).map((r) => r.existingId!)
+  if (deactivatedIds.length > 0) {
+    const actor = ctx.users.find((u) => ctx.actorEmail && u.email.toLowerCase() === ctx.actorEmail.toLowerCase())
+    const off = await offboardUsers(deactivatedIds, actor ? { id: actor.id, name: actor.name } : null)
+    result.meetingsCancelled = off.cancelledMeetings
+    result.schedulesStopped = off.stoppedSchedules
+  }
   return result
 }
 
