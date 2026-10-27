@@ -69,10 +69,10 @@ describe('users / profile', () => {
     ok(updateProfileSchema.safeParse({ phone: '+91 98765 43210' }))
     ok(updateProfileSchema.safeParse({ phone: '' }))
   })
-  it('import: lowercases emails, requires at least one row', () => {
-    fail(importUsersSchema.safeParse({ users: [] }))
-    const d = ok(importUsersSchema.safeParse({ users: [{ name: 'A', email: 'A@Example.com' }] }))
-    expect(d.users[0].email).toBe('a@example.com')
+  it('import: takes raw CSV text, commit optional', () => {
+    fail(importUsersSchema.safeParse({ csv: '' }))
+    expect(ok(importUsersSchema.safeParse({ csv: 'email\na@example.com' })).commit).toBeUndefined()
+    expect(ok(importUsersSchema.safeParse({ csv: 'x', commit: true })).commit).toBe(true)
   })
 })
 

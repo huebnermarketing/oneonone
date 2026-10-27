@@ -53,19 +53,11 @@ export const departmentSchema = z.object({
   name: trimmedString(80),
 })
 
+/** POST /api/admin/import-users — raw CSV text; parsing and row validation live in lib/user-import.ts. */
 export const importUsersSchema = z.object({
-  users: z
-    .array(
-      z.object({
-        name: trimmedString(120),
-        email,
-        role: z.string().trim().optional(),
-        department: z.string().trim().max(80).optional(),
-        reportsTo: z.string().trim().toLowerCase().optional(),
-        title: z.string().trim().max(120).optional(),
-        phone: z.string().trim().max(30).optional(),
-      })
-    )
-    .min(1)
-    .max(1000),
+  csv: z.string().min(1, 'The file is empty').max(2_000_000, 'File is larger than 2 MB'),
+  /** false/absent = preview only; true = write the valid rows */
+  commit: z.boolean().optional(),
 })
+
+export const importUsersQuery = z.object({ format: z.enum(['template', 'export']) })
