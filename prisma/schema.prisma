@@ -234,6 +234,8 @@ model RecordingJob {
   attempt       Int                @default(1)
   error         String?
   totalChunks   Int?
+  /// Multi-part recordings: [{start, end}] chunk ranges to keep, in order (null = all chunks, one part)
+  parts         Json?
   language      String?
   triggeredById String?
   startedAt     DateTime?
