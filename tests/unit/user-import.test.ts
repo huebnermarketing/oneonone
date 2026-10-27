@@ -209,7 +209,7 @@ describe('applyImport', () => {
     const c = ctx([u('l', 'lead@example.com', 'Lead')])
     const plan = planImport('email,first_name,department,manager_email\nnew@example.com,New,QA,lead@example.com\n', c)
     const res = await applyImport(plan, c)
-    expect(res).toEqual({ created: 1, updated: 0, promoted: 1, departmentsCreated: 1, deactivated: 0, failed: 0 })
+    expect(res).toEqual({ created: 1, updated: 0, promoted: 1, departmentsCreated: 1, deactivated: 0, meetingsCancelled: 0, schedulesStopped: 0, failed: 0 })
     expect(prismaMock.user.create).toHaveBeenCalledWith({ data: expect.objectContaining({ email: 'new@example.com', name: 'New', departmentId: 'dept-QA' }) })
     expect(prismaMock.user.update).toHaveBeenCalledWith({ where: { id: 'id-new@example.com' }, data: { reportsToId: 'l' } })
     expect(prismaMock.user.update).toHaveBeenCalledWith({ where: { id: 'l' }, data: { role: 'REPORTER' } })

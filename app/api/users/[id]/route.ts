@@ -5,6 +5,7 @@ import { logUserUpdated, logUserDeleted } from '@/lib/audit'
 import { ALLOWED_EMAIL_DOMAIN, isAllowedEmail } from '@/lib/constants'
 import { updateUserSchema } from '@/lib/validation/users'
 import { lockedFieldChanges, lockedMessage } from '@/lib/keka-sync'
+import { offboardUser } from '@/lib/offboarding'
 
 export const dynamic = 'force-dynamic'
 
@@ -62,6 +63,11 @@ export const PATCH = withApiAuth(ADMIN, async (req: NextRequest, { user: admin, 
     },
     include: userInclude,
   })
+
+  // Switched off: cancel their upcoming meetings and stop their recurring schedules
+  if (existingUser.isActive && body.isActive === false) {
+    await offboardUser(params.id, { id: admin.id, name: admin.name ?? null })
+  }
 
   await logUserUpdated(admin.id, params.id, {
     changes: {
