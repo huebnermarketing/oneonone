@@ -2,18 +2,28 @@
 
 import { useState, useMemo, useId } from 'react'
 import { useRouter } from 'next/navigation'
-import { Edit2, Trash2, UserPlus, Users, Building2, ChevronUp, ChevronDown, Globe, Clock, AlertTriangle, Loader2 } from 'lucide-react'
+import {
+  Edit2, Trash2, UserPlus, ChevronUp, ChevronDown, Globe, Clock, AlertTriangle, Loader2, MoreHorizontal, Search, RefreshCw,
+  Upload, Download, UserX, UserCheck, X,
+} from 'lucide-react'
 import { UserRole } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
 import { Avatar } from '@/components/ui/avatar'
 import { Pill, type PillTone } from '@/components/ui/pill'
 import { Select } from '@/components/ui/select'
 import { Modal } from '@/components/ui/modal'
-import { StatCard } from '@/components/ui/stat-card'
+import { Menu } from '@/components/ui/menu'
+import { Pagination } from '@/components/ui/pagination'
+import { BulkImport } from '@/components/admin/bulk-import'
+import { KekaSync } from '@/components/admin/keka-sync'
+import { useFormat } from '@/components/providers/timezone-provider'
+import { plural } from '@/lib/ui'
+import { cn } from '@/lib/utils'
 import { COUNTRY_OPTIONS, TIMEZONE_OPTIONS, getDefaultTimeZoneForCountry, getDefaultWorkHoursForCountry, DEFAULT_WORK_START, DEFAULT_WORK_END } from '@/lib/timezones'
 
-type SortKey = 'name' | 'role' | 'department' | 'reportsTo' | 'status'
+type SortKey = 'name' | 'role' | 'department' | 'reportsTo'
 type SortDir = 'asc' | 'desc'
+type StatusFilter = 'active' | 'inactive' | 'all'
 
 interface User {
   id: string
@@ -49,38 +59,51 @@ const RolePill = ({ role }: { role: UserRole }) => {
   return <Pill tone={meta.tone}>{meta.label}</Pill>
 }
 
-const ActivePill = ({ active }: { active: boolean }) => <Pill tone={active ? 'green' : 'red'}>{active ? 'Active' : 'Inactive'}</Pill>
-
 const FIELD = 'w-full rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white dark:bg-charcoal px-4 py-3 text-dark-gray dark:text-white focus:border-orange focus:outline-none focus:ring-2 focus:ring-orange/20 disabled:opacity-60 disabled:cursor-not-allowed'
 const LABEL = 'block text-sm font-medium text-dark-gray dark:text-white mb-1'
+const BTN_SECONDARY =
+  'inline-flex items-center gap-2 h-10 px-4 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-charcoal text-sm font-medium text-dark-gray dark:text-white hover:bg-off-white dark:hover:bg-dark-gray transition-colors'
+const ICON_BTN = 'inline-flex items-center justify-center w-10 h-10 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-charcoal text-dark-gray dark:text-white hover:bg-off-white dark:hover:bg-dark-gray transition-colors'
+
+const PAGE_SIZE = 25
+const STATUS_LABEL: Record<StatusFilter, string> = { active: 'Active', inactive: 'Inactive', all: 'All' }
 
 const SORT_COLUMNS: { key: SortKey; label: string }[] = [
   { key: 'role', label: 'Role' },
   { key: 'department', label: 'Department' },
-  { key: 'reportsTo', label: 'Reports To' },
-  { key: 'status', label: 'Status' },
+  { key: 'reportsTo', label: 'Reports to' },
 ]
 
 interface UserManagementProps {
   users: User[]
   departments: Department[]
   reporters: User[]
+  currentUserId: string
+  /** e.g. "@whitelabeliq.com" — new users must use it */
+  emailDomain: string
   /** Keka configured on the server: synced users' HR fields are read-only */
   kekaConfigured?: boolean
+  kekaLastSyncAt?: string | null
 }
 
-export function UserManagement({ users, departments, reporters, kekaConfigured = false }: UserManagementProps) {
+export function UserManagement({ users, departments, reporters, currentUserId, emailDomain, kekaConfigured = false, kekaLastSyncAt = null }: UserManagementProps) {
   const router = useRouter()
-  const { toastError } = useToast()
+  const f = useFormat()
+  const { toastError, toastSuccess } = useToast()
   const [sortKey, setSortKey] = useState<SortKey>('name')
   const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [query, setQuery] = useState('')
+  const [roleFilter, setRoleFilter] = useState<'' | UserRole>('')
+  const [deptFilter, setDeptFilter] = useState('')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('active')
+  const [offset, setOffset] = useState(0)
   const [isAddOpen, setIsAddOpen] = useState(false)
   const [editingUser, setEditingUser] = useState<User | null>(null)
   // Name, email, department, manager, country and Keka ID of Keka-synced users are owned by Keka
   const locked = !!editingUser && kekaConfigured && !!editingUser.kekaSyncedAt
   const [isLoading, setIsLoading] = useState(false)
   const [emailError, setEmailError] = useState('')
-  const ALLOWED_EMAIL_DOMAIN = '@whitelabeliq.com'
+  const ALLOWED_EMAIL_DOMAIN = emailDomain
   const formId = useId()
   const fid = (name: string) => `${formId}-${name}`
   const [formData, setFormData] = useState({
@@ -166,6 +189,24 @@ export function UserManagement({ users, departments, reporters, kekaConfigured =
     }
   }
 
+  const setActive = async (user: User, isActive: boolean) => {
+    try {
+      const response = await fetch(`/api/users/${user.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ isActive }),
+      })
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}))
+        throw new Error(data.error || 'Failed to update user')
+      }
+      toastSuccess(`${user.name} ${isActive ? 'reactivated' : 'deactivated'}`)
+      router.refresh()
+    } catch (error) {
+      toastError(error instanceof Error ? error.message : 'Failed to update user')
+    }
+  }
+
   const handleSort = (key: SortKey) => {
     if (sortKey === key) {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
@@ -175,45 +216,65 @@ export function UserManagement({ users, departments, reporters, kekaConfigured =
     }
   }
 
-  const sortedUsers = useMemo(() => {
-    const list = [...users]
-    list.sort((a, b) => {
-      let aVal: string | number, bVal: string | number
+  const counts = useMemo(() => {
+    const active = users.filter((u) => u.isActive)
+    return {
+      active: active.length,
+      inactive: users.length - active.length,
+      managers: active.filter((u) => u.role === 'REPORTER').length,
+      admins: active.filter((u) => u.role === 'SUPER_ADMIN').length,
+    }
+  }, [users])
+
+  const visibleUsers = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    const list = users.filter(
+      (u) =>
+        (statusFilter === 'all' || u.isActive === (statusFilter === 'active')) &&
+        (!roleFilter || u.role === roleFilter) &&
+        (!deptFilter || (deptFilter === 'none' ? !u.departmentId : u.departmentId === deptFilter)) &&
+        (!q || u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q))
+    )
+    const key = (u: User): string => {
       switch (sortKey) {
-        case 'name':
-          aVal = a.name.toLowerCase()
-          bVal = b.name.toLowerCase()
-          break
         case 'role':
-          aVal = a.role
-          bVal = b.role
-          break
+          return u.role
         case 'department':
-          aVal = (a.department?.name ?? '').toLowerCase()
-          bVal = (b.department?.name ?? '').toLowerCase()
-          break
+          return (u.department?.name ?? '').toLowerCase()
         case 'reportsTo':
-          aVal = (a.reportsTo?.name ?? '').toLowerCase()
-          bVal = (b.reportsTo?.name ?? '').toLowerCase()
-          break
-        case 'status':
-          aVal = a.isActive ? 'active' : 'inactive'
-          bVal = b.isActive ? 'active' : 'inactive'
-          break
+          return (u.reportsTo?.name ?? '').toLowerCase()
         default:
-          return 0
+          return u.name.toLowerCase()
       }
-      if (aVal < bVal) return sortDir === 'asc' ? -1 : 1
-      if (aVal > bVal) return sortDir === 'asc' ? 1 : -1
-      return 0
+    }
+    list.sort((a, b) => {
+      const av = key(a)
+      const bv = key(b)
+      if (av !== bv) return (av < bv ? -1 : 1) * (sortDir === 'asc' ? 1 : -1)
+      return a.name.localeCompare(b.name)
     })
     return list
-  }, [users, sortKey, sortDir])
+  }, [users, query, roleFilter, deptFilter, statusFilter, sortKey, sortDir])
+
+  const filtered = query.trim() !== '' || roleFilter !== '' || deptFilter !== '' || statusFilter !== 'active'
+  const clearFilters = () => {
+    setQuery('')
+    setRoleFilter('')
+    setDeptFilter('')
+    setStatusFilter('active')
+    setOffset(0)
+  }
+  // Filter changes reset to page 1 (set together with the filter, not in an effect)
+  const onFilter = <T,>(set: (v: T) => void) => (v: T) => {
+    set(v)
+    setOffset(0)
+  }
+  const page = visibleUsers.slice(offset, offset + PAGE_SIZE)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    if (!formData.email.toLowerCase().endsWith(ALLOWED_EMAIL_DOMAIN)) {
+    if (!locked && !formData.email.toLowerCase().endsWith(ALLOWED_EMAIL_DOMAIN)) {
       setEmailError(`Only ${ALLOWED_EMAIL_DOMAIN} email addresses are allowed`)
       return
     }
@@ -269,135 +330,224 @@ export function UserManagement({ users, departments, reporters, kekaConfigured =
       type="button"
       onClick={() => handleSort(col)}
       aria-label={`Sort by ${label}`}
-      className="flex items-center gap-1 hover:text-dark-gray dark:hover:text-white transition-colors"
+      className="inline-flex items-center gap-1 hover:text-dark-gray dark:hover:text-white transition-colors"
     >
       {label}
-      {sortKey === col && (sortDir === 'asc' ? <ChevronUp className="w-4 h-4" aria-hidden="true" /> : <ChevronDown className="w-4 h-4" aria-hidden="true" />)}
+      {sortKey === col && (sortDir === 'asc' ? <ChevronUp className="w-3.5 h-3.5" aria-hidden="true" /> : <ChevronDown className="w-3.5 h-3.5" aria-hidden="true" />)}
     </button>
   )
 
   const ariaSort = (col: SortKey) => (sortKey === col ? (sortDir === 'asc' ? 'ascending' : 'descending') : undefined)
 
-  const rowActions = (user: User, large?: boolean) => (
-    <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => openEditModal(user)}
-        aria-label={`Edit ${user.name}`}
-        className={`p-2 ${large ? 'min-w-[44px] min-h-[44px] ' : ''}flex items-center justify-center hover:bg-off-white dark:hover:bg-charcoal rounded-lg transition-colors`}
-      >
-        <Edit2 className="w-4 h-4 text-medium-gray" aria-hidden="true" />
-      </button>
-      <button
-        type="button"
-        onClick={() => setDeletingUser(user)}
-        aria-label={`Delete ${user.name}`}
-        className={`p-2 ${large ? 'min-w-[44px] min-h-[44px] ' : ''}flex items-center justify-center hover:bg-red-500/10 rounded-lg transition-colors`}
-      >
-        <Trash2 className="w-4 h-4 text-medium-gray hover:text-red-500" aria-hidden="true" />
-      </button>
+  const rowMenu = (user: User) => (
+    <Menu
+      label={`Actions for ${user.name}`}
+      triggerClassName="inline-flex items-center justify-center w-9 h-9 rounded-lg text-medium-gray hover:text-dark-gray dark:hover:text-white hover:bg-off-white dark:hover:bg-dark-gray transition-colors"
+      trigger={<MoreHorizontal className="w-4 h-4" aria-hidden="true" />}
+      items={[
+        { label: 'Edit', icon: Edit2, onSelect: () => openEditModal(user) },
+        user.isActive
+          ? { label: 'Deactivate', icon: UserX, onSelect: () => setActive(user, false), disabled: user.id === currentUserId }
+          : { label: 'Reactivate', icon: UserCheck, onSelect: () => setActive(user, true) },
+        { label: 'Delete', icon: Trash2, onSelect: () => setDeletingUser(user), danger: true, disabled: user.id === currentUserId },
+      ]}
+    />
+  )
+
+  const nameCell = (user: User) => (
+    <div className="flex items-center gap-3 min-w-0">
+      <Avatar name={user.name} size="sm" alt="" className="bg-transparent dark:bg-transparent bg-gradient-to-br from-orange/20 to-orange/10 text-orange dark:text-orange font-medium shrink-0" />
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="font-medium text-dark-gray dark:text-white truncate">{user.name}</span>
+          {!user.isActive && <Pill tone="red">Inactive</Pill>}
+        </div>
+        <div className="text-xs text-medium-gray truncate">{user.email}</div>
+      </div>
     </div>
   )
 
+  const summary = [
+    `${counts.active} active`,
+    plural(counts.managers, 'reporter'),
+    plural(counts.admins, 'admin'),
+    plural(departments.length, 'department'),
+  ].join(' · ')
+
   return (
-    <>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-8">
+    <div className="space-y-6">
+      {/* Header: title + the page's only actions */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-dark-gray dark:text-white mb-2">
-            User Management
-          </h1>
-          <p className="text-medium-gray">Manage employees, roles, and reporting structure</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-dark-gray dark:text-white">User Management</h1>
+          <p className="mt-1 text-sm text-medium-gray">
+            {summary}
+            {kekaConfigured && (
+              <>
+                {' · '}
+                {kekaLastSyncAt ? `Synced from Keka ${f.dateTime(kekaLastSyncAt, 'short')}` : 'Not synced from Keka yet'}
+              </>
+            )}
+          </p>
         </div>
-        <button
-          type="button"
-          onClick={openAddModal}
-          className="flex items-center gap-2 px-5 py-3 bg-orange text-white rounded-xl font-medium hover:bg-orange/90 transition-all shadow-lg shadow-orange/25"
-        >
-          <UserPlus className="w-5 h-5" aria-hidden="true" />
-          Add User
-        </button>
+        <div className="flex items-center gap-2">
+          {kekaConfigured && (
+            <KekaSync
+              trigger={(open) => (
+                <button type="button" onClick={open} className={BTN_SECONDARY}>
+                  <RefreshCw className="w-4 h-4" aria-hidden="true" />
+                  Sync from Keka
+                </button>
+              )}
+            />
+          )}
+          <BulkImport
+            trigger={(openImport) => (
+              <Menu
+                label="More user actions"
+                triggerClassName={ICON_BTN}
+                trigger={<MoreHorizontal className="w-4 h-4" aria-hidden="true" />}
+                items={[
+                  { label: 'Import from CSV', icon: Upload, onSelect: openImport },
+                  { label: 'Export users (CSV)', icon: Download, href: '/api/admin/import-users?format=export', download: true },
+                ]}
+              />
+            )}
+          />
+          <button
+            type="button"
+            onClick={openAddModal}
+            className="inline-flex items-center gap-2 h-10 px-4 bg-orange text-white rounded-xl text-sm font-medium hover:bg-orange/90 transition-colors"
+          >
+            <UserPlus className="w-4 h-4" aria-hidden="true" />
+            Add user
+          </button>
+        </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid gap-4 md:grid-cols-3 mb-8">
-        <StatCard label="Total Users" value={users.length} icon={Users} accent="blue" />
-        <StatCard label="Active" value={users.filter((u) => u.isActive).length} icon={Users} accent="green" />
-        <StatCard label="Departments" value={departments.length} icon={Building2} accent="neutral" />
+      {/* Toolbar */}
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+        <div className="relative flex-1 min-w-0">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-medium-gray pointer-events-none" aria-hidden="true" />
+          <input
+            type="search"
+            value={query}
+            onChange={(e) => onFilter(setQuery)(e.target.value)}
+            placeholder="Search name or email"
+            aria-label="Search users"
+            className="w-full h-10 pl-9 pr-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-charcoal text-sm text-dark-gray dark:text-white placeholder:text-medium-gray focus:outline-none focus:ring-2 focus:ring-dark-gray/20 dark:focus:ring-white/20"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:flex sm:items-center">
+          <Select aria-label="Filter by role" value={roleFilter} onChange={(e) => onFilter(setRoleFilter)(e.target.value as '' | UserRole)} wrapperClassName="sm:w-40">
+            <option value="">All roles</option>
+            <option value="EMPLOYEE">Employee</option>
+            <option value="REPORTER">Reporter</option>
+            <option value="SUPER_ADMIN">Super Admin</option>
+          </Select>
+          <Select aria-label="Filter by department" value={deptFilter} onChange={(e) => onFilter(setDeptFilter)(e.target.value)} wrapperClassName="sm:w-48">
+            <option value="">All departments</option>
+            {departments.map((d) => (
+              <option key={d.id} value={d.id}>{d.name}</option>
+            ))}
+            <option value="none">No department</option>
+          </Select>
+          <div role="tablist" aria-label="Status" className="col-span-2 inline-flex h-10 rounded-xl border border-off-white dark:border-medium-gray/20 bg-white dark:bg-charcoal p-1">
+            {(['active', 'inactive', 'all'] as StatusFilter[]).map((s) => (
+              <button
+                key={s}
+                type="button"
+                role="tab"
+                aria-selected={statusFilter === s}
+                onClick={() => onFilter(setStatusFilter)(s)}
+                className={cn(
+                  'flex-1 sm:flex-none px-3 rounded-lg text-sm font-medium transition-colors',
+                  statusFilter === s ? 'bg-dark-gray text-white dark:bg-white dark:text-dark-gray' : 'text-medium-gray hover:text-dark-gray dark:hover:text-white'
+                )}
+              >
+                {STATUS_LABEL[s]}
+                {s === 'inactive' && counts.inactive > 0 && <span className="ml-1 opacity-70">{counts.inactive}</span>}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
-      {/* Users Table */}
+      {/* Users */}
       <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">
-        <div className="px-6 py-4 border-b border-off-white dark:border-medium-gray/20">
-          <h2 className="font-semibold text-dark-gray dark:text-white">All Users</h2>
-        </div>
-        {/* Desktop table */}
-        <div className="hidden sm:block overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-off-white dark:border-medium-gray/20 bg-off-white/50 dark:bg-charcoal/50">
-                <th scope="col" aria-sort={ariaSort('name')} className="text-left py-3 px-6 text-sm font-medium text-medium-gray">
-                  {sortButton('name', 'Name')}
-                </th>
-                <th scope="col" className="text-left py-3 px-6 text-sm font-medium text-medium-gray">Email</th>
-                {SORT_COLUMNS.map((c) => (
-                  <th key={c.key} scope="col" aria-sort={ariaSort(c.key)} className="text-left py-3 px-6 text-sm font-medium text-medium-gray">
-                    {sortButton(c.key, c.label)}
-                  </th>
-                ))}
-                <th scope="col" className="text-left py-3 px-6 text-sm font-medium text-medium-gray">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {sortedUsers.map((user) => (
-                <tr
-                  key={user.id}
-                  className="border-b border-off-white/50 dark:border-medium-gray/10 even:bg-off-white/40 dark:even:bg-charcoal/40 hover:bg-off-white/70 dark:hover:bg-charcoal/60 transition-colors"
-                >
-                  <td className="py-4 px-6">
-                    <div className="flex items-center gap-3">
-                      <Avatar name={user.name} size="sm" alt="" className="bg-transparent dark:bg-transparent bg-gradient-to-br from-orange/20 to-orange/10 text-orange dark:text-orange font-medium" />
-                      <span className="font-medium text-dark-gray dark:text-white">{user.name}</span>
-                    </div>
-                  </td>
-                  <td className="py-4 px-6 text-sm text-medium-gray">{user.email}</td>
-                  <td className="py-4 px-6"><RolePill role={user.role} /></td>
-                  <td className="py-4 px-6 text-sm text-medium-gray">
-                    {user.department?.name || '-'}
-                  </td>
-                  <td className="py-4 px-6 text-sm text-medium-gray">
-                    {user.reportsTo?.name || '-'}
-                  </td>
-                  <td className="py-4 px-6"><ActivePill active={user.isActive} /></td>
-                  <td className="py-4 px-6">{rowActions(user, true)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Mobile cards */}
-        <div className="sm:hidden divide-y divide-off-white dark:divide-medium-gray/20">
-          {sortedUsers.map((user) => (
-            <div key={user.id} className="p-4 space-y-2 even:bg-off-white/40 dark:even:bg-charcoal/40">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Avatar name={user.name} size="sm" alt="" className="bg-transparent dark:bg-transparent bg-gradient-to-br from-orange/20 to-orange/10 text-orange dark:text-orange font-medium" />
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="font-medium text-dark-gray dark:text-white">{user.name}</span>
-                    <RolePill role={user.role} />
-                  </div>
-                </div>
-                {rowActions(user)}
-              </div>
-              <p className="text-sm text-medium-gray">{user.email}</p>
-              <div className="flex items-center gap-3 text-sm">
-                <span className="text-medium-gray">{user.department?.name || 'No department'}</span>
-                <ActivePill active={user.isActive} />
-              </div>
+        {visibleUsers.length === 0 ? (
+          <div className="px-6 py-14 text-center">
+            <p className="text-dark-gray dark:text-white font-medium">No users match</p>
+            {filtered && (
+              <button type="button" onClick={clearFilters} className="mt-2 inline-flex items-center gap-1 text-sm text-blue-500 hover:underline">
+                <X className="w-3.5 h-3.5" aria-hidden="true" />
+                Clear filters
+              </button>
+            )}
+          </div>
+        ) : (
+          <>
+            {/* Desktop table */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full table-fixed">
+                <thead>
+                  <tr className="border-b border-off-white dark:border-medium-gray/20 text-xs uppercase tracking-wide">
+                    <th scope="col" aria-sort={ariaSort('name')} className="w-[38%] text-left py-3 px-5 font-medium text-medium-gray">
+                      {sortButton('name', 'Name')}
+                    </th>
+                    {SORT_COLUMNS.map((c) => (
+                      <th key={c.key} scope="col" aria-sort={ariaSort(c.key)} className="text-left py-3 px-4 font-medium text-medium-gray">
+                        {sortButton(c.key, c.label)}
+                      </th>
+                    ))}
+                    <th scope="col" className="w-14 py-3 px-3"><span className="sr-only">Actions</span></th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-off-white dark:divide-medium-gray/10">
+                  {page.map((user) => (
+                    <tr
+                      key={user.id}
+                      onClick={() => openEditModal(user)}
+                      className={cn('cursor-pointer hover:bg-off-white/60 dark:hover:bg-dark-gray/40 transition-colors', !user.isActive && 'opacity-70')}
+                    >
+                      <td className="py-3 px-5">{nameCell(user)}</td>
+                      <td className="py-3 px-4"><RolePill role={user.role} /></td>
+                      <td className="py-3 px-4 text-sm text-medium-gray truncate">{user.department?.name || '—'}</td>
+                      <td className="py-3 px-4 text-sm text-medium-gray truncate">{user.reportsTo?.name || '—'}</td>
+                      <td className="py-3 px-3 text-right" onClick={(e) => e.stopPropagation()}>{rowMenu(user)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-        </div>
+
+            {/* Mobile list */}
+            <ul className="md:hidden divide-y divide-off-white dark:divide-medium-gray/20">
+              {page.map((user) => (
+                <li key={user.id} className="flex items-start gap-2 p-4">
+                  <button type="button" onClick={() => openEditModal(user)} className="flex-1 min-w-0 text-left space-y-2" aria-label={`Edit ${user.name}`}>
+                    {nameCell(user)}
+                    <div className="flex flex-wrap items-center gap-2 pl-11 text-xs text-medium-gray">
+                      <RolePill role={user.role} />
+                      <span>{user.department?.name || 'No department'}</span>
+                      {user.reportsTo && <span>· {user.reportsTo.name}</span>}
+                    </div>
+                  </button>
+                  {rowMenu(user)}
+                </li>
+              ))}
+            </ul>
+
+            <Pagination
+              offset={offset}
+              limit={PAGE_SIZE}
+              total={visibleUsers.length}
+              onChange={setOffset}
+              noun="users"
+              className="px-5 py-3 border-t border-off-white dark:border-medium-gray/20"
+            />
+          </>
+        )}
       </div>
 
       {/* Add / Edit Modal */}
@@ -689,6 +839,6 @@ export function UserManagement({ users, departments, reporters, kekaConfigured =
           </div>
         )}
       </Modal>
-    </>
+    </div>
   )
 }

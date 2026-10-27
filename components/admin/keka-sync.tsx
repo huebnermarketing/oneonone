@@ -25,7 +25,7 @@ const btnGhost = 'px-4 py-2 text-medium-gray hover:text-dark-gray dark:hover:tex
  * Admin → "Sync from Keka". Preview what the sync would change, then apply. The first confirmed
  * sync switches on the daily automatic sync (cron).
  */
-export function KekaSync() {
+export function KekaSync({ trigger }: { /** Custom opener; defaults to the "Sync from Keka" button */ trigger?: (open: () => void) => React.ReactNode } = {}) {
   const router = useRouter()
   const f = useFormat()
   const { toastError } = useToast()
@@ -112,14 +112,18 @@ export function KekaSync() {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={openDialog}
-        className="flex items-center gap-2 px-4 py-2 bg-off-white dark:bg-charcoal text-dark-gray dark:text-white rounded-xl font-medium hover:bg-light-gray/20 dark:hover:bg-dark-gray transition-colors"
-      >
-        <RefreshCw className="w-4 h-4" aria-hidden="true" />
-        Sync from Keka
-      </button>
+      {trigger ? (
+        trigger(openDialog)
+      ) : (
+        <button
+          type="button"
+          onClick={openDialog}
+          className="flex items-center gap-2 px-4 py-2 bg-off-white dark:bg-charcoal text-dark-gray dark:text-white rounded-xl font-medium hover:bg-light-gray/20 dark:hover:bg-dark-gray transition-colors"
+        >
+          <RefreshCw className="w-4 h-4" aria-hidden="true" />
+          Sync from Keka
+        </button>
+      )}
 
       <Modal
         open={open}
