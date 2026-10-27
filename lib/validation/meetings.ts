@@ -66,6 +66,9 @@ export const meetingFormSchema = z.object({
   anythingElse: optionalText(),
 })
 
+/** Owner/admin correction of submitted answers: any subset of the form fields */
+export const meetingFormEditSchema = meetingFormSchema.omit({ draft: true })
+
 export const attachmentQuery = z.object({ attachmentId: uuid.optional() })
 export const attachmentDeleteQuery = z.object({ attachmentId: uuid })
 

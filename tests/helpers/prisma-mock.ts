@@ -20,10 +20,12 @@ const MODELS = [
   'account',
   'backupHistory',
   'recordingJob',
+  'meetingFormRevision',
 ] as const
 
 const METHODS = [
   'findUnique',
+  'findUniqueOrThrow',
   'findFirst',
   'findMany',
   'create',

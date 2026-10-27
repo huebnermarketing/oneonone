@@ -28,6 +28,7 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationMeta> = {
   TODO_DUE_SOON: { icon: CheckSquare, tone: 'text-amber-500 bg-amber-500/10', label: 'Due Soon', filterLabel: 'Task Due Soon' },
   TODO_OVERDUE: { icon: AlertCircle, tone: 'text-red-500 bg-red-500/10', label: 'Overdue', filterLabel: 'Task Overdue' },
   FORM_SUBMITTED: { icon: FileText, tone: 'text-teal-500 bg-teal-500/10', label: 'Form', filterLabel: 'Form Submitted' },
+  FORM_EDITED: { icon: FileText, tone: 'text-indigo-500 bg-indigo-500/10', label: 'Form', filterLabel: 'Form Answers Updated' },
   FORM_REMINDER: { icon: FileText, tone: 'text-amber-500 bg-amber-500/10', label: 'Form Reminder', filterLabel: 'Form Reminders' },
   RECORDING_READY: { icon: Mic, tone: 'text-pink-500 bg-pink-500/10', label: 'Recording', filterLabel: 'Recording Ready' },
   SYSTEM: { icon: Bell, tone: 'text-gray-500 bg-gray-500/10', label: 'System', filterLabel: 'System' },

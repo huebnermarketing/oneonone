@@ -36,6 +36,8 @@ interface OneOnOneFormProps {
   isLoading?: boolean
   isReadOnly?: boolean
   draftSaved?: boolean
+  /** Submit button text (default "Submit Form") */
+  submitLabel?: string
 }
 
 export function OneOnOneForm({
@@ -45,6 +47,7 @@ export function OneOnOneForm({
   isLoading,
   isReadOnly = false,
   draftSaved = false,
+  submitLabel = 'Submit Form',
 }: OneOnOneFormProps) {
   const {
     register,
@@ -288,7 +291,7 @@ export function OneOnOneForm({
             </Button>
           )}
           <Button type="submit" variant="primary" disabled={isLoading}>
-            {isLoading ? 'Submitting...' : 'Submit Form'}
+            {isLoading ? 'Saving...' : submitLabel}
           </Button>
         </div>
       )}

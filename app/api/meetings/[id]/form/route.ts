@@ -2,18 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { badRequest, forbidden, notFound, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { createAuditLog } from '@/lib/audit'
-import { assertAccess, canFillForm } from '@/lib/meeting-access'
+import { assertAccess, canFillForm, canViewMeeting } from '@/lib/meeting-access'
 import * as notify from '@/lib/notify'
-import { meetingFormSchema } from '@/lib/validation/meetings'
+import { editFormAnswers, formAnswerSelect, initialChanges, recordRevision, requireComplete } from '@/lib/form-answers'
+import { diffAnswers, pickAnswers } from '@/lib/form-fields'
+import { meetingFormEditSchema, meetingFormSchema } from '@/lib/validation/meetings'
 
 export const dynamic = 'force-dynamic'
-
-const REQUIRED_ON_SUBMIT = [
-  ['checkInPersonal', 'Personal best since we last met'],
-  ['checkInProfessional', 'Professional best since we last met'],
-  ['priorityGoalProfessional', 'Professional growth goals'],
-  ['progressReport', 'Report on progress'],
-] as const
 
 const formInclude = {
   employee: { select: { name: true } },
@@ -21,50 +16,54 @@ const formInclude = {
 } as const
 
 /**
- * POST /api/meetings/[id]/form — the employee saves a draft (`draft: true`) or submits their check-in form.
- * Submitting sets `formSubmittedAt` once; the reporter marks the meeting completed separately.
+ * POST /api/meetings/[id]/form — the employee saves a draft (`draft: true`, only before submitting)
+ * or submits / resubmits their check-in form. Every submit is recorded in the answer history.
  */
 export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
   const { draft, ...fields } = await parseBody(req, meetingFormSchema)
 
   const meeting = await prisma.meeting.findUnique({
     where: { id: params.id },
-    select: { id: true, employeeId: true, reporterId: true, meetingDate: true, formSubmittedAt: true },
+    select: { id: true, employeeId: true, reporterId: true, meetingDate: true, formSubmittedAt: true, ...formAnswerSelect },
   })
   if (!meeting) throw notFound('Meeting')
   assertAccess(canFillForm(user, meeting), 'Only the employee can fill in this form')
 
-  // After the meeting time, a submitted form is locked
+  // After the meeting time, a submitted form is locked for the employee (owner/admin can still correct it)
   if (meeting.formSubmittedAt && meeting.meetingDate.getTime() < Date.now()) {
     throw forbidden('Form cannot be edited after the meeting time.')
   }
 
-  // Empty strings are stored as null
-  const data = Object.fromEntries(
-    Object.entries(fields).map(([key, value]) => [key, value ? value : null])
-  ) as { [K in keyof typeof fields]: string | null }
+  const answers = pickAnswers(fields)
 
   if (draft) {
-    const saved = await prisma.meeting.update({ where: { id: meeting.id }, data, include: formInclude })
+    // Once submitted, changes go through a (recorded) resubmit, never a silent draft overwrite
+    if (meeting.formSubmittedAt) throw badRequest('This form is already submitted. Use "Update answers" to change it.')
+    const saved = await prisma.meeting.update({ where: { id: meeting.id }, data: answers, include: formInclude })
     return NextResponse.json(saved)
   }
 
-  const missing = REQUIRED_ON_SUBMIT.filter(([key]) => !data[key]).map(([, label]) => label)
-  if (missing.length > 0) throw badRequest(`Please fill in the required fields: ${missing.join(', ')}`)
+  requireComplete(answers)
 
   const wasAlreadySubmitted = !!meeting.formSubmittedAt
-  const updated = await prisma.meeting.update({
-    where: { id: meeting.id },
-    data: { ...data, formSubmittedAt: wasAlreadySubmitted ? meeting.formSubmittedAt : new Date() },
-    include: formInclude,
-  })
+  const changes = wasAlreadySubmitted ? diffAnswers(pickAnswers(meeting), answers) : initialChanges(answers)
+  const [updated] = await prisma.$transaction([
+    prisma.meeting.update({
+      where: { id: meeting.id },
+      data: { ...answers, formSubmittedAt: wasAlreadySubmitted ? meeting.formSubmittedAt : new Date() },
+      include: formInclude,
+    }),
+    ...(changes.length > 0
+      ? [recordRevision(prisma, { meetingId: meeting.id, editedById: user.id, kind: wasAlreadySubmitted ? 'RESUBMITTED' : 'SUBMITTED', changes })]
+      : []),
+  ])
 
   await createAuditLog({
     userId: user.id,
     action: 'UPDATE',
     entityType: 'Meeting',
     entityId: meeting.id,
-    details: { action: wasAlreadySubmitted ? 'form_resubmitted' : 'form_submitted' },
+    details: { action: wasAlreadySubmitted ? 'form_resubmitted' : 'form_submitted', fields: changes.map((c) => c.field) },
   })
 
   if (!wasAlreadySubmitted) {
@@ -72,4 +71,21 @@ export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
   }
 
   return NextResponse.json(updated)
+})
+
+/**
+ * PATCH /api/meetings/[id]/form — the meeting owner (who scheduled it) or a super admin corrects the
+ * employee's submitted answers. Any time after submission (also after the meeting); recorded in the
+ * history and the employee gets an in-app note.
+ */
+export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
+  const input = await parseBody(req, meetingFormEditSchema)
+  const meeting = await prisma.meeting.findUnique({
+    where: { id: params.id },
+    select: { id: true, employeeId: true, reporterId: true, formSubmittedAt: true, status: true },
+  })
+  if (!meeting) throw notFound('Meeting')
+  assertAccess(canViewMeeting(user, meeting))
+  const changes = await editFormAnswers(meeting, user, input)
+  return NextResponse.json({ changed: changes.map((c) => c.field) })
 })

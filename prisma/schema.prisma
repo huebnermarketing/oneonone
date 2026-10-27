@@ -8,18 +8,18 @@ datasource db {
 }
 
 model User {
-  id                           String              @id @default(uuid())
-  email                        String              @unique
-  name                         String              @default("")
+  id                           String                @id @default(uuid())
+  email                        String                @unique
+  name                         String                @default("")
   image                        String?
   emailVerified                DateTime?
   avatar                       String?
-  role                         UserRole            @default(EMPLOYEE)
+  role                         UserRole              @default(EMPLOYEE)
   reportsToId                  String?
   departmentId                 String?
-  isActive                     Boolean             @default(true)
-  createdAt                    DateTime            @default(now())
-  updatedAt                    DateTime            @updatedAt
+  isActive                     Boolean               @default(true)
+  createdAt                    DateTime              @default(now())
+  updatedAt                    DateTime              @updatedAt
   bio                          String?
   phone                        String?
   title                        String?
@@ -31,23 +31,24 @@ model User {
   kekaEmployeeId               String?
   // Keka-owned HR fields (lib/keka-sync.ts)
   employeeNumber               String?
-  joiningDate                  DateTime?           @db.Date
+  joiningDate                  DateTime?             @db.Date
   // Last time this user was matched in a Keka sync; null = never synced (manual / CSV user)
   kekaSyncedAt                 DateTime?
   accounts                     Account[]
   auditLogs                    AuditLog[]
-  recordingJobsTriggered       RecordingJob[]      @relation("RecordingJobTrigger")
-  meetingsAsEmployee           Meeting[]           @relation("EmployeeMeetings")
-  meetingsAsReporter           Meeting[]           @relation("ReporterMeetings")
+  recordingJobsTriggered       RecordingJob[]        @relation("RecordingJobTrigger")
+  meetingsAsEmployee           Meeting[]             @relation("EmployeeMeetings")
+  meetingsAsReporter           Meeting[]             @relation("ReporterMeetings")
   notifications                Notification[]
-  recurringSchedules           RecurringSchedule[] @relation("RecurringScheduleReporter")
-  recurringSchedulesAsEmployee RecurringSchedule[] @relation("RecurringScheduleEmployee")
+  recurringSchedules           RecurringSchedule[]   @relation("RecurringScheduleReporter")
+  recurringSchedulesAsEmployee RecurringSchedule[]   @relation("RecurringScheduleEmployee")
   sessions                     Session[]
-  todosAssigned                Todo[]              @relation("AssignedTodos")
-  todosCreated                 Todo[]              @relation("CreatedTodos")
-  department                   Department?         @relation(fields: [departmentId], references: [id])
-  reportsTo                    User?               @relation("ReportingHierarchy", fields: [reportsToId], references: [id])
-  directReports                User[]              @relation("ReportingHierarchy")
+  todosAssigned                Todo[]                @relation("AssignedTodos")
+  todosCreated                 Todo[]                @relation("CreatedTodos")
+  formRevisions                MeetingFormRevision[] @relation("FormRevisionEditor")
+  department                   Department?           @relation(fields: [departmentId], references: [id])
+  reportsTo                    User?                 @relation("ReportingHierarchy", fields: [reportsToId], references: [id])
+  directReports                User[]                @relation("ReportingHierarchy")
 
   @@index([reportsToId])
   @@index([departmentId])
@@ -100,12 +101,12 @@ model Department {
 }
 
 model Meeting {
-  id                       String             @id @default(uuid())
+  id                       String                @id @default(uuid())
   employeeId               String
   reporterId               String
   meetingDate              DateTime
   /// Meeting length in minutes (15 or 30). Rows created before this column existed are 30.
-  durationMinutes          Int                @default(15)
+  durationMinutes          Int                   @default(15)
   /// Pending reschedule of a SCHEDULED meeting: the old time stays until the other participant accepts
   rescheduleDate           DateTime?
   rescheduleDuration       Int?
@@ -123,25 +124,26 @@ model Meeting {
   headsUp                  String?
   anythingElse             String?
   formSubmittedAt          DateTime?
-  status                   MeetingStatus      @default(PROPOSED)
+  status                   MeetingStatus         @default(PROPOSED)
   proposedById             String?
-  createdAt                DateTime           @default(now())
-  updatedAt                DateTime           @updatedAt
+  createdAt                DateTime              @default(now())
+  updatedAt                DateTime              @updatedAt
   notes                    String?
   recurringScheduleId      String?
-  meetingType              MeetingType        @default(IN_PERSON)
+  meetingType              MeetingType           @default(IN_PERSON)
   meetingLink              String?
   zoomMeetingId            String?
-  reminder24hSent          Boolean            @default(false)
-  reminderSent             Boolean            @default(false)
-  formReminderSent         Boolean            @default(false)
+  reminder24hSent          Boolean               @default(false)
+  reminderSent             Boolean               @default(false)
+  formReminderSent         Boolean               @default(false)
   attachments              Attachment[]
   calendarEvent            CalendarEvent?
-  employee                 User               @relation("EmployeeMeetings", fields: [employeeId], references: [id])
-  recurringSchedule        RecurringSchedule? @relation(fields: [recurringScheduleId], references: [id])
-  reporter                 User               @relation("ReporterMeetings", fields: [reporterId], references: [id])
+  employee                 User                  @relation("EmployeeMeetings", fields: [employeeId], references: [id])
+  recurringSchedule        RecurringSchedule?    @relation(fields: [recurringScheduleId], references: [id])
+  reporter                 User                  @relation("ReporterMeetings", fields: [reporterId], references: [id])
   recording                MeetingRecording?
   todos                    Todo[]
+  formRevisions            MeetingFormRevision[]
 
   @@index([employeeId])
   @@index([reporterId])
@@ -455,6 +457,28 @@ enum RecurringFrequency {
   MONTHLY
 }
 
+/// History of the employee's check-in answers: every submit/resubmit by the employee and every
+/// edit by the meeting owner or a super admin, with field-level before/after.
+model MeetingFormRevision {
+  id         String           @id @default(uuid())
+  meetingId  String
+  editedById String?
+  kind       FormRevisionKind
+  /// [{ field, before, after }] — only the fields that changed
+  changes    Json
+  createdAt  DateTime         @default(now())
+  meeting    Meeting          @relation(fields: [meetingId], references: [id], onDelete: Cascade)
+  editedBy   User?            @relation("FormRevisionEditor", fields: [editedById], references: [id], onDelete: SetNull)
+
+  @@index([meetingId, createdAt])
+}
+
+enum FormRevisionKind {
+  SUBMITTED
+  RESUBMITTED
+  EDITED
+}
+
 enum NotificationType {
   MEETING_REMINDER
   MEETING_SCHEDULED // legacy rows only; new events use the specific types below
@@ -472,6 +496,7 @@ enum NotificationType {
   TODO_OVERDUE
   FORM_SUBMITTED
   FORM_REMINDER
+  FORM_EDITED
   RECORDING_READY
   SYSTEM
 }

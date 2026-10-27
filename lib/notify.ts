@@ -24,6 +24,7 @@ import {
 } from './email'
 import {
   createNotification,
+  notifyFormEdited,
   notifyFormReminder,
   notifyFormSubmitted,
   notifyMeetingAccepted,
@@ -202,6 +203,13 @@ export function meetingReminder(args: { meetingId: string; date: Date; employee:
 // ── Forms ───────────────────────────────────────────────────────────
 
 /** Employee submitted the pre-meeting form for the first time; tell the reporter. */
+/** Owner/admin changed the employee's submitted answers — in-app note to the employee (history is on the meeting). */
+export function formEdited(args: { meetingId: string; employeeId: string; editorName: string | null; fieldCount: number }): Promise<NotifyResult> {
+  return fanOut('formEdited', args.meetingId, [
+    ['in-app', () => notifyFormEdited(args.employeeId, displayName(args.editorName, 'Your manager'), args.fieldCount, args.meetingId)],
+  ])
+}
+
 export function formSubmitted(args: { meetingId: string; date: Date; reporter: Party; employeeName: string | null }): Promise<NotifyResult> {
   const { meetingId, date, reporter, employeeName } = args
   return fanOut('formSubmitted', meetingId, [
