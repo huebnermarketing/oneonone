@@ -907,24 +907,29 @@ export function MeetingRecorder({
 
       {/* ---- Start recording ---- */}
       {!isRecording && !audioBlob && !micBlocked && (
-        <div className="text-center space-y-4">
-          <div className="flex items-center justify-center gap-2">
-            <Globe className="w-4 h-4 text-medium-gray" />
-            <Select
-              value={selectedLanguage}
-              onChange={(e) => setSelectedLanguage(e.target.value)}
-              aria-label="Select recording language"
-              wrapperClassName="inline-block"
-              className="w-auto px-3 py-2 focus:ring-orange/50"
-            >
-              {LANGUAGE_OPTIONS.map((lang) => (
-                <option key={lang.code} value={lang.code}>
-                  {lang.label}
-                </option>
-              ))}
-            </Select>
+        <div className="text-center space-y-5">
+          {/* Recording setup: language + microphone side by side */}
+          <div className="grid gap-4 sm:grid-cols-2 max-w-xl mx-auto text-left">
+            <div className="min-w-0">
+              <label htmlFor="recording-language" className="flex items-center gap-1.5 text-xs font-medium text-medium-gray mb-1.5">
+                <Globe className="w-3.5 h-3.5" aria-hidden="true" />
+                Language
+              </label>
+              <Select
+                id="recording-language"
+                value={selectedLanguage}
+                onChange={(e) => setSelectedLanguage(e.target.value)}
+                className="px-3 py-2.5 truncate focus:ring-orange/50"
+              >
+                {LANGUAGE_OPTIONS.map((lang) => (
+                  <option key={lang.code} value={lang.code}>
+                    {lang.label}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <MicPicker value={selectedMic} onChange={setSelectedMic} />
           </div>
-          <MicPicker value={selectedMic} onChange={setSelectedMic} />
           <button
             onClick={startRecording}
             aria-label="Start recording"

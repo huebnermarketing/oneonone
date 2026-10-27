@@ -18,8 +18,11 @@ import {
   Users,
   Calendar,
   FileText,
-  Building2
+  Building2,
+  ShieldCheck,
+  Sparkles,
 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { useToast } from '@/components/ui/toast'
 import { PoliciesSection, type Policies } from './policies-section'
 import { AiProviderSection, type AiSettings } from './ai-provider-section'
@@ -34,7 +37,29 @@ interface Settings extends Policies, AiSettings {
   maxRecordingMins: number
 }
 
+const TABS = [
+  { id: 'policies', label: 'Policies', icon: ShieldCheck },
+  { id: 'ai', label: 'AI Provider', icon: Sparkles },
+  { id: 'recording', label: 'Recording & Storage', icon: Cloud },
+  { id: 'data', label: 'Data', icon: Database },
+] as const
+type TabId = (typeof TABS)[number]['id']
+
+/** ?tab=… keeps the open tab across reloads and makes each tab linkable */
+function tabFromUrl(): TabId {
+  if (typeof window === 'undefined') return 'policies'
+  const t = new URLSearchParams(window.location.search).get('tab')
+  return TABS.some((x) => x.id === t) ? (t as TabId) : 'policies'
+}
+
 export function SettingsClient() {
+  const [tab, setTabState] = useState<TabId>(tabFromUrl)
+  const setTab = (t: TabId) => {
+    setTabState(t)
+    const url = new URL(window.location.href)
+    url.searchParams.set('tab', t)
+    window.history.replaceState(null, '', url)
+  }
   const { toastError } = useToast()
   // Read through a ref so the mount-only effect below keeps its empty deps
   const toastErrorRef = useRef(toastError)
@@ -252,9 +277,38 @@ export function SettingsClient() {
         </div>
       )}
 
-      {/* AI Provider */}
+      <div role="tablist" aria-label="Settings sections" className="flex gap-1 border-b border-off-white dark:border-medium-gray/20 overflow-x-auto">
+        {TABS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            id={`settings-tab-${id}`}
+            type="button"
+            role="tab"
+            aria-selected={tab === id}
+            aria-controls={`settings-panel-${id}`}
+            onClick={() => setTab(id)}
+            className={cn(
+              '-mb-px flex items-center gap-2 px-4 py-3 text-sm font-medium whitespace-nowrap border-b-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange/50 rounded-t-lg',
+              tab === id ? 'border-orange text-dark-gray dark:text-white' : 'border-transparent text-medium-gray hover:text-dark-gray dark:hover:text-white'
+            )}
+          >
+            <Icon className="w-4 h-4" aria-hidden="true" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Panels stay mounted (hidden) so switching tabs never loses unsaved edits */}
+      <div role="tabpanel" id="settings-panel-policies" aria-labelledby="settings-tab-policies" hidden={tab !== 'policies'}>
+        <PoliciesSection initial={settings} />
+      </div>
+
+      <div role="tabpanel" id="settings-panel-ai" aria-labelledby="settings-tab-ai" hidden={tab !== 'ai'}>
       <AiProviderSection initial={settings} onSaved={(data) => setSettings((prev) => ({ ...(prev as Settings), ...data }))} />
 
+      </div>
+
+      <div role="tabpanel" id="settings-panel-recording" aria-labelledby="settings-tab-recording" hidden={tab !== 'recording'} className="space-y-6">
       {/* AWS S3 Configuration */}
       <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">
         <div className="p-5 border-b border-off-white dark:border-medium-gray/20 flex items-center gap-3">
@@ -453,10 +507,10 @@ export function SettingsClient() {
         </div>
       </div>
 
-      {/* Policies */}
-      <PoliciesSection initial={settings} />
+      </div>
 
       {/* Data Management */}
+      <div role="tabpanel" id="settings-panel-data" aria-labelledby="settings-tab-data" hidden={tab !== 'data'}>
       <div className="rounded-2xl bg-white dark:bg-charcoal border border-red-500/20 overflow-hidden">
         <div className="p-5 border-b border-red-500/20 bg-red-500/5 flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-red-500/10 flex items-center justify-center">
@@ -617,6 +671,7 @@ export function SettingsClient() {
             </div>
           )}
         </div>
+      </div>
       </div>
     </div>
   )
