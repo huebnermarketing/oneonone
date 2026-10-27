@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma, UserRole } from '@prisma/client'
-import { REPORTER_OR_ADMIN, notFound, parseBody, parseQuery, withApiAuth } from '@/lib/api'
+import { REPORTER_OR_ADMIN, badRequest, notFound, parseBody, parseQuery, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { logMeetingCreated } from '@/lib/audit'
 import { parseZoomMeetingId } from '@/lib/zoom'
@@ -43,16 +43,18 @@ export const GET = withApiAuth(async (req: NextRequest, { user }) => {
 })
 
 /**
- * POST /api/meetings — propose a 1:1. Reporter or admin.
- * An admin proposing on behalf of a manager becomes the proposer, the employee's manager the reporter.
+ * POST /api/meetings — propose a 1:1. Reporter or admin. Whoever schedules it is the meeting owner
+ * (reporter): an admin scheduling with someone is having that 1:1 themselves, not booking it for the
+ * employee's manager.
  */
 export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user }) => {
   const { employeeId, meetingDate, meetingType, meetingLink } = await parseBody(req, createMeetingSchema)
 
-  const employee = await prisma.user.findUnique({ where: { id: employeeId }, select: { id: true, reportsToId: true } })
+  const employee = await prisma.user.findUnique({ where: { id: employeeId }, select: { id: true } })
   if (!employee) throw notFound('Employee')
+  if (employeeId === user.id) throw badRequest("You can't schedule a 1:1 with yourself")
 
-  const reporterId = user.role === UserRole.SUPER_ADMIN && employee.reportsToId ? employee.reportsToId : user.id
+  const reporterId = user.id
 
   await assertNoConflict(employeeId, reporterId, meetingDate)
 
