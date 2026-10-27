@@ -136,6 +136,18 @@ check "admin /admin not redirected" no "$(curl -s -b "$ADMIN" "$B/admin" | grep 
 check "access-denied page renders" 200 $(code -b "$ALEX" $B/access-denied)
 grep -q "have access to that page" /tmp/body && echo "  ok   access-denied copy" || { echo "  FAIL access-denied copy"; fail=$((fail+1)); }
 
+echo "## user import"
+check "employee cannot download template" 403 $(code -b "$ALEX" "$B/api/admin/import-users?format=template")
+check "admin template 200" 200 $(code -b "$ADMIN" "$B/api/admin/import-users?format=template")
+check "template header" "email,first_name,last_name" "$(head -1 /tmp/body | cut -d, -f1-3)"
+check "admin export 200" 200 $(code -b "$ADMIN" "$B/api/admin/import-users?format=export")
+cp /tmp/body /tmp/users-export.csv
+IMP_BODY=$(python3 -c "import json;print(json.dumps({'csv':open('/tmp/users-export.csv').read()}))")
+check "export re-import preview 200" 200 $(code -b "$ADMIN" -X POST $B/api/admin/import-users -H 'content-type: application/json' -d "$IMP_BODY")
+check "export re-import is all unchanged" "0 0 0" "$(python3 -c "import json;s=json.load(open('/tmp/body'))['summary'];print(s['create'],s['update'],s['error'])")"
+check "import without email column 400" 400 $(code -b "$ADMIN" -X POST $B/api/admin/import-users -H 'content-type: application/json' -d '{"csv":"first_name\nA"}')
+check "preview writes nothing" 0 "$(code -b "$ADMIN" -X POST $B/api/admin/import-users -H 'content-type: application/json' -d '{"csv":"email,first_name\nsmoke.import@whitelabeliq.com,Smoke"}' >/dev/null; $PSQL -c "select count(*) from \"User\" where email='smoke.import@whitelabeliq.com'")"
+
 # cleanup: restore cancelled fixtures, remove temp rows, reset policies
 $PSQL -c "update \"Meeting\" set status='SCHEDULED' where id in ('$MID','$MID2'); delete from \"Notification\" where link in ('/meetings/$MID','/meetings/$MID2') and type='MEETING_CANCELLED'; update \"User\" set title=null where id='$ALEX_ID'; delete from \"Todo\" where id='$TODO_ID'; delete from \"AuditLog\" where \"entityId\" in ('$MID','$MID2') and action='UPDATE' and details->>'status'='CANCELLED'; delete from \"Session\" where expires < now()+interval '2 days';" >/dev/null
 curl -s -o /dev/null -b "$ADMIN" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"cancelPolicy":"REPORTER_AND_ADMIN","employeeCanViewRecording":false}'
