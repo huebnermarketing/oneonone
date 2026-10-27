@@ -20,10 +20,15 @@ vi.mock('@/lib/openai', () => ({
   })),
 }))
 vi.mock('@/lib/notifications', () => ({ notifyRecordingReady: vi.fn(async () => undefined) }))
+vi.mock('@/lib/recording-parts', async (orig) => ({
+  ...(await orig<typeof import('@/lib/recording-parts')>()),
+  joinAudioParts: vi.fn(async (parts: Buffer[]) => Buffer.concat(parts)),
+}))
 
 import * as s3 from '@/lib/s3'
 import * as openai from '@/lib/openai'
 import { notifyRecordingReady } from '@/lib/notifications'
+import { joinAudioParts } from '@/lib/recording-parts'
 import {
   resolveStartStage,
   isSilentTranscript,
@@ -179,6 +184,17 @@ describe('runJob', () => {
     const jobUpdates = prismaMock.recordingJob.update.mock.calls.map((c) => c[0].data)
     expect(jobUpdates.map((d) => d.stage).filter(Boolean)).toEqual(['COMBINE', 'TRANSCRIBE', 'ANALYZE', 'DONE'])
     expect(jobUpdates.at(-1)).toMatchObject({ status: 'DONE' })
+  })
+
+  it('multi-part: downloads only the kept parts, joins them, cleans up every chunk', async () => {
+    vi.mocked(joinAudioParts).mockImplementation(async (parts: Buffer[]) => Buffer.concat(parts))
+    prismaMock.recordingJob.findUnique.mockResolvedValue(jobRow({ totalChunks: 5, parts: [{ start: 0, end: 2 }, { start: 3, end: 5 }] }))
+    await runJob('job1')
+    const keys = vi.mocked(s3.downloadFromS3).mock.calls.map((c) => c[0])
+    expect(keys.filter((k) => k.includes('chunk_'))).toEqual([0, 1, 3, 4].map((i) => `${SESSION}/chunk_000${i}.webm`))
+    expect(vi.mocked(joinAudioParts).mock.calls[0][0]).toHaveLength(2)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(vi.mocked(s3.deleteFromS3).mock.calls.map((c) => c[0])).toContain(`${SESSION}/chunk_0002.webm`) // the deleted part's chunk too
   })
 
   it('REPROCESS from ANALYZE touches neither S3 nor Whisper and does not notify', async () => {

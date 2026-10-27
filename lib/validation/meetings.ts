@@ -99,6 +99,8 @@ export const processRecordingSchema = z.object({
   totalChunks: z.number().int().min(1).max(10000),
   duration: z.number().int().min(0).max(24 * 60 * 60).optional().default(0),
   language: z.string().trim().min(2).max(10).optional(),
+  /** Multi-part recording: chunk ranges [start, end) to keep, in order (omit = one part, all chunks) */
+  parts: z.array(z.object({ start: z.number().int().min(0), end: z.number().int().min(1) })).max(50).optional(),
 })
 
 export const reprocessRecordingSchema = z.object({

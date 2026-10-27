@@ -205,6 +205,14 @@ check "edit recorded before/after" "s -> fixed by manager" "$($PSQL -c "select c
 check "employee told about the edit" 2 "$($PSQL -c "select count(*) from \"Notification\" where link='/meetings/$D4' and type='FORM_EDITED'")"
 $PSQL -c "delete from \"Notification\" where link like '/meetings/$D4%'; delete from \"AuditLog\" where \"entityId\"='$D4'; delete from \"Meeting\" where id='$D4';" >/dev/null
 
+echo "## recording parts (validation only; no S3 here)"
+check "meeting for recording created" 201 $(mk 12:00 '')
+D5=$(python3 -c "import json;print(json.load(open('/tmp/body'))['id'])")
+check "overlapping parts rejected" 400 $(code -b "$REP" -X POST $B/api/meetings/$D5/recording/process -H 'content-type: application/json' -d '{"totalChunks":4,"duration":60,"parts":[{"start":0,"end":3},{"start":2,"end":4}]}')
+check "part past uploaded chunks rejected" 400 $(code -b "$REP" -X POST $B/api/meetings/$D5/recording/process -H 'content-type: application/json' -d '{"totalChunks":2,"duration":60,"parts":[{"start":0,"end":3}]}')
+check "total over the max length rejected" 400 $(code -b "$REP" -X POST $B/api/meetings/$D5/recording/process -H 'content-type: application/json' -d '{"totalChunks":2,"duration":36000,"parts":[{"start":0,"end":1},{"start":1,"end":2}]}')
+$PSQL -c "delete from \"Notification\" where link like '/meetings/$D5%'; delete from \"AuditLog\" where \"entityId\"='$D5'; delete from \"Meeting\" where id='$D5';" >/dev/null
+
 echo "## user import"
 check "employee cannot download template" 403 $(code -b "$ALEX" "$B/api/admin/import-users?format=template")
 check "admin template 200" 200 $(code -b "$ADMIN" "$B/api/admin/import-users?format=template")

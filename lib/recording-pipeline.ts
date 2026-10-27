@@ -15,9 +15,10 @@
  *     and re-run it from the stage it was in, up to MAX_ATTEMPTS
  *   - `startJob()` refuses to start while another job on the same recording is QUEUED/RUNNING
  */
-import { RecordingJob, RecordingStage, RecordingJobKind, RecordingStatus } from '@prisma/client'
+import { Prisma, RecordingJob, RecordingStage, RecordingJobKind, RecordingStatus } from '@prisma/client'
 import { prisma } from './prisma'
 import { chunkKey, finalRecordingKey, downloadFromS3, uploadToS3, deleteFromS3 } from './s3'
+import { joinAudioParts, partChunkIndexes, type ChunkRange } from './recording-parts'
 import { transcribeAudio, analyzeTranscript } from './openai'
 import * as notify from './notify'
 
@@ -94,6 +95,8 @@ export interface StartJobInput {
   /** Stage to start from. Omit to let the pipeline pick the earliest stage whose output is missing. */
   fromStage?: RecordingStage
   totalChunks?: number
+  /** Multi-part recording: chunk ranges to keep, in order (lib/recording-parts.ts) */
+  parts?: ChunkRange[] | null
   language?: string
   triggeredById?: string
 }
@@ -125,6 +128,7 @@ export async function startJob(input: StartJobInput): Promise<RecordingJob> {
       fromStage,
       stage: fromStage,
       totalChunks: input.totalChunks ?? null,
+      ...(input.parts ? { parts: input.parts as unknown as Prisma.InputJsonValue } : {}),
       language: input.language ?? null,
       triggeredById: input.triggeredById ?? null,
     },
@@ -188,10 +192,17 @@ export async function runJob(jobId: string): Promise<void> {
       const totalChunks = job.totalChunks ?? 0
       if (totalChunks < 1) throw new Error('COMBINE stage needs totalChunks')
 
-      log(`combining ${totalChunks} chunks under ${audioKey}`)
-      const buffers: Buffer[] = []
-      for (let i = 0; i < totalChunks; i++) buffers.push(await downloadFromS3(chunkKey(audioKey, i)))
-      const combined = Buffer.concat(buffers)
+      // Chunks inside one part are one continuous WebM stream → byte concat; separate parts are
+      // separate files → decoded and joined (lib/recording-parts.ts)
+      const parts = (job.parts as ChunkRange[] | null) ?? [{ start: 0, end: totalChunks }]
+      log(`combining ${totalChunks} chunks in ${parts.length} part(s) under ${audioKey}`)
+      const partBuffers: Buffer[] = []
+      for (const indexes of partChunkIndexes(parts)) {
+        const buffers: Buffer[] = []
+        for (const i of indexes) buffers.push(await downloadFromS3(chunkKey(audioKey, i)))
+        partBuffers.push(Buffer.concat(buffers))
+      }
+      const combined = await joinAudioParts(partBuffers)
       if (combined.length < 1000) throw new Error('Combined audio is too small or empty')
 
       const finalKey = finalRecordingKey(audioKey)
