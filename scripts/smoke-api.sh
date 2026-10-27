@@ -154,6 +154,20 @@ check "recurring on Sunday rejected" 400 $(code -b "$REP" -X POST $B/api/recurri
 check "availability on a Saturday explains why" yes "$(code -b "$REP" "$B/api/meetings/availability?employeeId=$ALEX_ID&date=${SAT:0:10}" >/dev/null; grep -q 'not a working day' /tmp/body && echo yes || echo no)"
 check "empty working days rejected" 400 $(code -b "$ADMIN" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"workingDays":[]}')
 
+echo "## meeting duration"
+MON=$(python3 -c "import datetime as d;t=d.datetime.now(d.UTC)+d.timedelta(days=21);t+=d.timedelta(days=(0-t.weekday())%7);print(t.strftime('%Y-%m-%d'))")
+mk() { code -b "$REP" -X POST $B/api/meetings -H 'content-type: application/json' -d "{\"employeeId\":\"$ALEX_ID\",\"meetingDate\":\"${MON}T$1:00.000Z\"$2}"; }
+check "15-min meeting created" 201 $(mk 05:00 ',"durationMinutes":15')
+D1=$(python3 -c "import json;print(json.load(open('/tmp/body'))['id'])")
+check "stored length 15" 15 "$($PSQL -c "select \"durationMinutes\" from \"Meeting\" where id='$D1'")"
+check "back-to-back (default length) allowed" 201 $(mk 05:15 '')
+D2=$(python3 -c "import json;print(json.load(open('/tmp/body'))['id'])")
+check "default length is 15" 15 "$($PSQL -c "select \"durationMinutes\" from \"Meeting\" where id='$D2'")"
+check "overlapping 30-min meeting 409" 409 $(mk 04:50 ',"durationMinutes":30')
+check "45-min length rejected" 400 $(mk 07:00 ',"durationMinutes":45')
+check "availability duration=45 rejected" 400 $(code -b "$REP" "$B/api/meetings/availability?employeeId=$ALEX_ID&date=$MON&duration=45")
+$PSQL -c "delete from \"Notification\" where link in ('/meetings/$D1','/meetings/$D2'); delete from \"AuditLog\" where \"entityId\" in ('$D1','$D2'); delete from \"Meeting\" where id in ('$D1','$D2');" >/dev/null
+
 echo "## user import"
 check "employee cannot download template" 403 $(code -b "$ALEX" "$B/api/admin/import-users?format=template")
 check "admin template 200" 200 $(code -b "$ADMIN" "$B/api/admin/import-users?format=template")

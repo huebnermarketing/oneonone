@@ -14,6 +14,7 @@ import { TranscriptViewer } from './transcript-viewer'
 import { MeetingNotes } from './meeting-notes'
 import { FileAttachments } from './file-attachments'
 import { ProposalActions } from './proposal-actions'
+import { formatDuration } from '@/lib/meeting-duration'
 import { getPolicies } from '@/lib/settings'
 import { CancelMeetingButton } from './cancel-meeting-button'
 import { canCancel, canManageMeeting, canViewMeeting, canViewNotes, canViewRecording } from '@/lib/meeting-access'
@@ -127,6 +128,8 @@ export default async function MeetingDetailPage({
           <p className="text-sm sm:text-base text-medium-gray flex items-center gap-2">
             <Calendar className="w-4 h-4 flex-shrink-0" />
             {meetingDateLabel}
+            <span className="text-light-gray" aria-hidden="true">·</span>
+            <span>{formatDuration(meeting.durationMinutes)}</span>
           </p>
           <div className="flex flex-wrap items-center gap-2 mt-2">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-off-white dark:bg-dark-gray text-medium-gray dark:text-light-gray">
@@ -174,6 +177,7 @@ export default async function MeetingDetailPage({
         <ProposalActions
           meetingId={meeting.id}
           meetingDate={meetingDate.toISOString()}
+          durationMinutes={meeting.durationMinutes}
           proposedByName={proposedByName || 'Someone'}
           isReceiver={!!isProposalReceiver}
           isProposer={!!isProposalProposer}

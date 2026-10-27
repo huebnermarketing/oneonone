@@ -25,6 +25,8 @@ import { Select } from '@/components/ui/select'
 import { Avatar } from '@/components/ui/avatar'
 import { EmployeePicker } from '@/components/forms/employee-picker'
 import { SlotGrid } from '@/components/forms/slot-grid'
+import { DurationToggle } from '@/components/forms/duration-toggle'
+import { DEFAULT_MEETING_DURATION, formatDuration, toMeetingDuration, type MeetingDuration } from '@/lib/meeting-duration'
 import { useFormat } from '@/components/providers/timezone-provider'
 import { DAY_NAMES } from '@/lib/ui'
 import { DEFAULT_WORKING_DAYS, WEEK_ORDER } from '@/lib/working-days'
@@ -44,6 +46,7 @@ interface Schedule {
   frequency: RecurringFrequency
   dayOfWeek: number
   timeOfDay: string
+  durationMinutes: number
   isActive: boolean
   nextMeetingDate: string | null
   createdAt: string
@@ -81,6 +84,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
     frequency: RecurringFrequency
     dayOfWeek: number
     timeOfDay: string
+    durationMinutes: MeetingDuration
   } | null>(null)
   const [editLoading, setEditLoading] = useState(false)
   const [editSlots, setEditSlots] = useState<FreeSlot[]>([])
@@ -92,6 +96,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
     frequency: 'BIWEEKLY' as RecurringFrequency,
     dayOfWeek: workingDays.includes(1) ? 1 : workingDays[0] ?? 1,
     timeOfDay: '',
+    durationMinutes: DEFAULT_MEETING_DURATION as MeetingDuration,
   })
   const [recurringAvailabilityLoading, setRecurringAvailabilityLoading] = useState(false)
   const [recurringAvailability, setRecurringAvailability] = useState<{
@@ -117,7 +122,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
     setRecurringSlots([])
     // Which day's availability to fetch is decided on the VIEWER's calendar, not the browser's
     const date = getNextOccurrenceDate(formData.dayOfWeek, f.timeZone)
-    fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(formData.employeeId)}&date=${encodeURIComponent(date)}`)
+    fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(formData.employeeId)}&date=${encodeURIComponent(date)}&duration=${formData.durationMinutes}`)
       .then((res) => res.json())
       .then((data) => {
         if (cancelled) return
@@ -138,7 +143,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
       })
       .finally(() => { if (!cancelled) setRecurringSlotsLoading(false) })
     return () => { cancelled = true }
-  }, [formData.employeeId, formData.dayOfWeek, f.timeZone, toastError])
+  }, [formData.employeeId, formData.dayOfWeek, formData.durationMinutes, f.timeZone, toastError])
 
   // Create form: check the first occurrence on both calendars once a time is picked
   useEffect(() => {
@@ -154,6 +159,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
       dayOfWeek: String(formData.dayOfWeek),
       timeOfDay: formData.timeOfDay,
       frequency: formData.frequency,
+      duration: String(formData.durationMinutes),
     })
     fetch(`/api/meetings/availability/recurring?${params}`)
       .then((res) => res.json())
@@ -173,7 +179,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
       })
       .finally(() => { if (!cancelled) setRecurringAvailabilityLoading(false) })
     return () => { cancelled = true }
-  }, [formData.employeeId, formData.dayOfWeek, formData.timeOfDay, formData.frequency, toastError])
+  }, [formData.employeeId, formData.dayOfWeek, formData.timeOfDay, formData.frequency, formData.durationMinutes, toastError])
 
   // Edit form: fetch available slots when the day changes
   useEffect(() => {
@@ -190,7 +196,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
     setEditSlots([])
     setEditWorkingHoursLabel(null)
     const date = getNextOccurrenceDate(editData.dayOfWeek, f.timeZone)
-    fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(schedule.employeeId)}&date=${encodeURIComponent(date)}`)
+    fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(schedule.employeeId)}&date=${encodeURIComponent(date)}&duration=${editData.durationMinutes}`)
       .then((res) => res.json())
       .then((data) => {
         if (cancelled) return
@@ -213,7 +219,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
     return () => { cancelled = true }
     // Only re-fetch when the schedule being edited or its chosen day changes (frequency/time edits keep the slots)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editingId, editData?.dayOfWeek, f.timeZone, toastError])
+  }, [editingId, editData?.dayOfWeek, editData?.durationMinutes, f.timeZone, toastError])
 
   const availableEmployees = useMemo(
     () => employees.filter((emp) => !schedules.some((s) => s.employeeId === emp.id && s.isActive)),
@@ -254,6 +260,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
           frequency: 'BIWEEKLY',
           dayOfWeek: workingDays.includes(1) ? 1 : workingDays[0] ?? 1,
           timeOfDay: '',
+          durationMinutes: DEFAULT_MEETING_DURATION,
         })
         toastSuccess('Schedule created')
         router.refresh()
@@ -274,6 +281,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
       frequency: schedule.frequency,
       dayOfWeek: schedule.dayOfWeek,
       timeOfDay: schedule.timeOfDay,
+      durationMinutes: toMeetingDuration(schedule.durationMinutes),
     })
   }
 
@@ -472,6 +480,8 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
             description="Search by name or email"
           />
 
+          <DurationToggle value={formData.durationMinutes} onChange={(d) => setFormData({ ...formData, durationMinutes: d })} />
+
           {/* Frequency + Day */}
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
@@ -633,7 +643,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
                           {schedule.employee?.name || 'Unknown'}
                         </p>
                         <p className="text-sm text-medium-gray">
-                          {frequencyLabels[schedule.frequency]} · {DAY_NAMES[schedule.dayOfWeek]}s · {formatTimeOfDay(schedule.timeOfDay)}
+                          {frequencyLabels[schedule.frequency]} · {DAY_NAMES[schedule.dayOfWeek]}s · {formatTimeOfDay(schedule.timeOfDay)} · {formatDuration(schedule.durationMinutes ?? 30)}
                         </p>
                         {schedule.nextMeetingDate && schedule.isActive && (
                           <p className="text-xs text-medium-gray mt-1 flex items-center gap-1">
@@ -696,6 +706,8 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
                           <p className="text-xs text-medium-gray">Editing schedule</p>
                         </div>
                       </div>
+
+                      <DurationToggle value={editData!.durationMinutes} onChange={(d) => setEditData({ ...editData!, durationMinutes: d })} />
 
                       <div className="grid gap-3 sm:grid-cols-3">
                         <div>

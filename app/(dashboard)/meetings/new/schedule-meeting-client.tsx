@@ -9,6 +9,8 @@ import { useToast } from '@/components/ui/toast'
 import { Select } from '@/components/ui/select'
 import { EmployeePicker } from '@/components/forms/employee-picker'
 import { SlotGrid } from '@/components/forms/slot-grid'
+import { DurationToggle } from '@/components/forms/duration-toggle'
+import { DEFAULT_MEETING_DURATION, type MeetingDuration } from '@/lib/meeting-duration'
 import { useFormat } from '@/components/providers/timezone-provider'
 import { DAY_NAMES } from '@/lib/ui'
 import { DEFAULT_WORKING_DAYS, WEEK_ORDER } from '@/lib/working-days'
@@ -48,6 +50,7 @@ export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, 
     frequency: 'BIWEEKLY' as RecurringFrequency,
     dayOfWeek: workingDays.includes(1) ? 1 : workingDays[0] ?? 1,
     timeOfDay: '',
+    durationMinutes: DEFAULT_MEETING_DURATION as MeetingDuration,
     meetingType: 'IN_PERSON' as 'IN_PERSON' | 'ZOOM',
     meetingLink: '',
   })
@@ -77,7 +80,7 @@ export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, 
     setRecurringSlots([])
     // Which day's availability to fetch is decided on the VIEWER's calendar, not the browser's
     const date = getNextOccurrenceDate(recurringForm.dayOfWeek, f.timeZone)
-    fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(recurringForm.employeeId)}&date=${encodeURIComponent(date)}`)
+    fetch(`/api/meetings/availability?employeeId=${encodeURIComponent(recurringForm.employeeId)}&date=${encodeURIComponent(date)}&duration=${recurringForm.durationMinutes}`)
       .then((res) => res.json())
       .then((data) => {
         if (cancelled) return
@@ -98,7 +101,7 @@ export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, 
       })
       .finally(() => { if (!cancelled) setRecurringSlotsLoading(false) })
     return () => { cancelled = true }
-  }, [recurringForm.employeeId, recurringForm.dayOfWeek, f.timeZone, toastError])
+  }, [recurringForm.employeeId, recurringForm.dayOfWeek, recurringForm.durationMinutes, f.timeZone, toastError])
 
   // Check first-occurrence availability when time is selected
   const fetchRecurringAvailability = useCallback(async () => {
@@ -111,6 +114,7 @@ export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, 
         dayOfWeek: String(recurringForm.dayOfWeek),
         timeOfDay: recurringForm.timeOfDay,
         frequency: recurringForm.frequency,
+        duration: String(recurringForm.durationMinutes),
       })
       const res = await fetch(`/api/meetings/availability/recurring?${params}`)
       const data = await res.json()
@@ -127,7 +131,7 @@ export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, 
     } finally {
       setRecurringAvailabilityLoading(false)
     }
-  }, [recurringForm.employeeId, recurringForm.dayOfWeek, recurringForm.timeOfDay, recurringForm.frequency, toastError])
+  }, [recurringForm.employeeId, recurringForm.dayOfWeek, recurringForm.timeOfDay, recurringForm.frequency, recurringForm.durationMinutes, toastError])
 
   useEffect(() => {
     if (recurringForm.employeeId && recurringForm.timeOfDay) {
@@ -305,6 +309,8 @@ export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, 
               </Select>
             </div>
           </div>
+
+          <DurationToggle value={recurringForm.durationMinutes} onChange={(d) => setRecurringForm({ ...recurringForm, durationMinutes: d })} />
 
           <div className="rounded-2xl border border-off-white dark:border-medium-gray/20 p-4 sm:p-5">
             <p className="font-semibold text-dark-gray dark:text-white mb-3">Meeting type</p>

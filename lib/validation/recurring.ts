@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { boolString, dayOfWeek, hhmm, meetingLink, meetingType, recurringFrequency, uuid } from './common'
+import { boolString, dayOfWeek, hhmm, meetingDuration, meetingDurationWithDefault, meetingLink, meetingType, recurringFrequency, uuid } from './common'
 
 export const createRecurringScheduleSchema = z
   .object({
@@ -7,6 +7,7 @@ export const createRecurringScheduleSchema = z
     frequency: recurringFrequency.default('BIWEEKLY'),
     dayOfWeek,
     timeOfDay: hhmm,
+    durationMinutes: meetingDurationWithDefault,
     meetingType: meetingType.default('IN_PERSON'),
     meetingLink: meetingLink.nullish(),
   })
@@ -20,6 +21,7 @@ export const updateRecurringScheduleSchema = z.object({
   frequency: recurringFrequency.optional(),
   dayOfWeek: dayOfWeek.optional(),
   timeOfDay: hhmm.optional(),
+  durationMinutes: meetingDuration.optional(),
   isActive: z.boolean().optional(),
   cancelFutureMeetings: z.boolean().optional(),
   meetingType: meetingType.optional(),

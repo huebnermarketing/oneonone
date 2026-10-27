@@ -165,7 +165,7 @@ Cascade summary: `Account`, `Session`, `Notification`, `AuditLog`, `RecurringSch
 | `meeting-state.ts` | State machine (`assertTransition`), `completeMeeting`, `cancelMeeting` (calendar delete + notify + email), `loadMeeting` | Status changes |
 | `meeting-conflicts.ts` | `assertNoConflict(employeeId, reporterId, date, excludeId?)` — 30-min overlap → 409 | Scheduling |
 | `team.ts` | `getTeamUserIds(user)` (null = admin), `canActOnUser(user, targetId)` — one-level hierarchy | Scoping lists, assigning todos |
-| `constants.ts` | `DEFAULT_TIMEZONE`, `MEETING_DURATION_MINUTES`, `ALLOWED_EMAIL_DOMAIN` (from `GOOGLE_WORKSPACE_DOMAIN`), `APP_NAME` | — |
+| `constants.ts` | `DEFAULT_TIMEZONE`, `ALLOWED_EMAIL_DOMAIN` (from `GOOGLE_WORKSPACE_DOMAIN`), `APP_NAME` | — |
 | `auth-helpers.ts` | `getCurrentUser()`, `requireAuth()` (redirects — **page use only**), `requireRole`/`requireAdmin` (throw), `canAccessEmployeeData` (legacy; pages still use it) | Pages |
 | `settings.ts` | `getSettings()` / `getPolicies()` — DB `SystemSettings` row wins over env, per field; 5-min cache (defaults cached too); `updateSettings()` encrypts secrets; `safeDecrypt` logs instead of throwing when the encryption secret changed | OpenAI/S3 config, policies |
 | `encryption.ts` | AES-256-GCM; v2 key = HKDF(`ENCRYPTION_SECRET`), legacy scrypt format still readable; `isEncrypted`/`isLegacyCiphertext`; `ENCRYPTION_SECRET_PREVIOUS` for rotation; `scripts/reencrypt-secrets.ts` | Secrets, rotation |

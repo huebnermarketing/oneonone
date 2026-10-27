@@ -46,12 +46,13 @@ describe('fanOut', () => {
 describe('meeting events', () => {
   it('meetingProposed: email + in-app to employee, receipt to reporter only when asked', async () => {
     await notify.meetingProposed({ meetingId: 'm1', date, employee, reporter })
-    expect(email.sendMeetingProposalEmail).toHaveBeenCalledWith('emp@example.com', 'Emp', 'Rep', date, 'm1')
+    expect(email.sendMeetingProposalEmail).toHaveBeenCalledWith('emp@example.com', 'Emp', 'Rep', date, 'm1', undefined)
     expect(inApp.notifyMeetingProposed).toHaveBeenCalledWith('e1', 'Rep', date, 'm1')
     expect(email.sendProposalConfirmationEmail).not.toHaveBeenCalled()
 
-    await notify.meetingProposed({ meetingId: 'm1', date, employee, reporter, confirmToReporter: true })
-    expect(email.sendProposalConfirmationEmail).toHaveBeenCalledWith('rep@example.com', 'Rep', 'Emp', date, 'm1')
+    await notify.meetingProposed({ meetingId: 'm1', date, employee, reporter, confirmToReporter: true, durationMinutes: 15 })
+    expect(email.sendMeetingProposalEmail).toHaveBeenLastCalledWith('emp@example.com', 'Emp', 'Rep', date, 'm1', 15)
+    expect(email.sendProposalConfirmationEmail).toHaveBeenCalledWith('rep@example.com', 'Rep', 'Emp', date, 'm1', 15)
   })
 
   it('falls back to a display name when the actor has none', async () => {
@@ -64,8 +65,8 @@ describe('meeting events', () => {
     expect(email.sendMeetingProposalEmail).toHaveBeenCalledTimes(1)
     expect(email.sendMeetingSuggestionEmail).not.toHaveBeenCalled()
 
-    await notify.meetingTimeSuggested({ meetingId: 'm1', date, to: reporter, from: employee, isProposer: false })
-    expect(email.sendMeetingSuggestionEmail).toHaveBeenCalledWith('rep@example.com', 'Rep', 'Emp', date, 'm1')
+    await notify.meetingTimeSuggested({ meetingId: 'm1', date, to: reporter, from: employee, isProposer: false, durationMinutes: 30 })
+    expect(email.sendMeetingSuggestionEmail).toHaveBeenCalledWith('rep@example.com', 'Rep', 'Emp', date, 'm1', 30)
     expect(inApp.notifyMeetingSuggested).toHaveBeenLastCalledWith('r1', 'Emp', date, 'm1')
   })
 

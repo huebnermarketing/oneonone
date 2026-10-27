@@ -9,7 +9,8 @@ import { prisma } from './prisma'
 import { getMutualFreeSlots, isCalendarEnabled, isDateTimeFreeForBoth, type MutualFreeSlotsOptions } from './google-calendar'
 import { isDateUnavailableForEitherUser } from './keka'
 import { DEFAULT_WORK_END, DEFAULT_WORK_START, formatWorkHoursLabel } from './timezones'
-import { DEFAULT_TIMEZONE, MEETING_DURATION_MINUTES } from './constants'
+import { DEFAULT_TIMEZONE } from './constants'
+import { MAX_MEETING_DURATION } from './meeting-duration'
 import { startOfDayInTz, toDateKey } from './dates'
 import { isIntervalFree, type Interval } from './free-slots'
 import { addDaysToKey } from './slots'
@@ -94,22 +95,22 @@ export async function appMeetingsBusy(reporterId: string, employeeId: string, da
   const meetings = await prisma.meeting.findMany({
     where: {
       status: { in: [MeetingStatus.PROPOSED, MeetingStatus.SCHEDULED] },
-      meetingDate: { gte: dayStart, lt: dayEnd },
+      // a meeting that starts just before midnight still blocks the start of the day
+      meetingDate: { gte: new Date(dayStart.getTime() - MAX_MEETING_DURATION * 60_000), lt: dayEnd },
       OR: [{ employeeId }, { reporterId }, { employeeId: reporterId }, { reporterId: employeeId }],
     },
-    select: { meetingDate: true },
+    select: { meetingDate: true, durationMinutes: true },
   })
-  const durationMs = MEETING_DURATION_MINUTES * 60_000
-  return meetings.map((m) => ({ start: m.meetingDate.getTime(), end: m.meetingDate.getTime() + durationMs }))
+  return meetings.map((m) => ({ start: m.meetingDate.getTime(), end: m.meetingDate.getTime() + m.durationMinutes * 60_000 }))
 }
 
 /**
- * Mutual free slots on a date: free on both Google Calendars, inside both people's working hours,
- * and not overlapping an existing PROPOSED/SCHEDULED meeting of either person.
+ * Mutual free slots of `durationMinutes` on a date: free on both Google Calendars, inside both
+ * people's working hours, and not overlapping an existing PROPOSED/SCHEDULED meeting of either person.
  */
-export async function freeSlotsForDay(reporterId: string, employeeId: string, date: Date, profiles: PairProfiles) {
+export async function freeSlotsForDay(reporterId: string, employeeId: string, date: Date, profiles: PairProfiles, durationMinutes: number) {
   const [calendarSlots, busy] = await Promise.all([
-    getMutualFreeSlots(reporterId, employeeId, date, MEETING_DURATION_MINUTES, profiles.options),
+    getMutualFreeSlots(reporterId, employeeId, date, durationMinutes, profiles.options),
     appMeetingsBusy(reporterId, employeeId, date, profiles.reporter.timeZone),
   ])
   return calendarSlots.filter((s) => isIntervalFree(new Date(s.start).getTime(), new Date(s.end).getTime(), busy))
@@ -122,10 +123,10 @@ export const MAX_OCCURRENCES_TO_CHECK = 6
  * First of `candidates` that is not a Keka holiday/leave day for either person and is free on both
  * calendars; null when every candidate is blocked. Callers decide what to do when calendars aren't connected.
  */
-export async function firstFreeOccurrence(reporterId: string, employeeId: string, candidates: Date[], profiles: PairProfiles): Promise<Date | null> {
+export async function firstFreeOccurrence(reporterId: string, employeeId: string, candidates: Date[], profiles: PairProfiles, durationMinutes: number): Promise<Date | null> {
   for (const date of candidates) {
     if (await isDateUnavailableForEitherUser(reporterId, employeeId, date)) continue
-    if (await isDateTimeFreeForBoth(reporterId, employeeId, date, MEETING_DURATION_MINUTES, profiles.options)) return date
+    if (await isDateTimeFreeForBoth(reporterId, employeeId, date, durationMinutes, profiles.options)) return date
   }
   return null
 }

@@ -1,5 +1,6 @@
 import '@/lib/zod-messages'
 import { z } from 'zod'
+import { MEETING_DURATIONS, DEFAULT_MEETING_DURATION } from '@/lib/meeting-duration'
 import { MeetingType, RecurringFrequency, TodoPriority, TodoStatus, UserRole } from '@prisma/client'
 
 export const uuid = z.string().uuid()
@@ -38,3 +39,10 @@ export const boolString = z
 
 /** Zoom link must be a URL. Kept permissive on host so other video links are not rejected outright. */
 export const meetingLink = z.string().trim().url().max(2000)
+
+/** Meeting length in minutes: 15 or 30 (numbers or numeric strings). */
+export const meetingDuration = z.coerce
+  .number()
+  .int()
+  .refine((n) => (MEETING_DURATIONS as readonly number[]).includes(n), `Meeting length must be ${MEETING_DURATIONS.join(' or ')} minutes`)
+export const meetingDurationWithDefault = meetingDuration.default(DEFAULT_MEETING_DURATION)

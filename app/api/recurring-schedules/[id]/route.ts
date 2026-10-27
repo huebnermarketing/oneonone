@@ -4,7 +4,7 @@ import { notFound, parseBody, parseQuery, withApiAuth, SessionUser } from '@/lib
 import { prisma } from '@/lib/prisma'
 import { createAuditLog } from '@/lib/audit'
 import { calculateFirstOccurrence } from '@/lib/recurring-dates'
-import { deleteCalendarEvent } from '@/lib/google-calendar'
+import { deleteCalendarEvent, setCalendarEventDuration } from '@/lib/google-calendar'
 import * as notify from '@/lib/notify'
 import { getPolicies } from '@/lib/settings'
 import { assertWorkingWeekday } from '@/lib/working-days'
@@ -63,6 +63,24 @@ async function afterFutureMeetingsCancelled(schedule: ScheduleWithParties, meeti
   )
 }
 
+/** Best effort: stretch/shrink the Google series and any one-off events of upcoming meetings. */
+async function applyDurationToCalendar(schedule: ScheduleWithParties, durationMinutes: number) {
+  if (schedule.googleRecurringEventId) {
+    await setCalendarEventDuration(schedule.googleRecurringEventId, schedule.reporterId, durationMinutes).catch((e) =>
+      console.error('Failed to change recurring series length', e)
+    )
+  }
+  const events = await prisma.calendarEvent.findMany({
+    where: { meeting: { recurringScheduleId: schedule.id, status: MeetingStatus.SCHEDULED, meetingDate: { gt: new Date() } } },
+    select: { googleEventId: true },
+  })
+  await Promise.all(
+    events.map((e) =>
+      setCalendarEventDuration(e.googleEventId, schedule.reporterId, durationMinutes).catch((err) => console.error('Failed to change event length', err))
+    )
+  )
+}
+
 /** GET /api/recurring-schedules/[id] — schedule with its last 10 meetings and the count of upcoming ones. */
 export const GET = withApiAuth(async (_req: NextRequest, { user, params }) => {
   const schedule = await prisma.recurringSchedule.findFirst({
@@ -88,7 +106,7 @@ export const GET = withApiAuth(async (_req: NextRequest, { user, params }) => {
  */
 export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
   const body = await parseBody(req, updateRecurringScheduleSchema)
-  const { frequency, dayOfWeek, timeOfDay, isActive, cancelFutureMeetings, meetingType, meetingLink } = body
+  const { frequency, dayOfWeek, timeOfDay, durationMinutes, isActive, cancelFutureMeetings, meetingType, meetingLink } = body
 
   const existing = await loadSchedule(params.id, user)
   // Moving to another day must land on a working day (an existing schedule on its old day stays editable)
@@ -103,6 +121,7 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
     (dayOfWeek !== undefined && dayOfWeek !== existing.dayOfWeek) ||
     (timeOfDay !== undefined && timeOfDay !== existing.timeOfDay)
 
+  const durationChanged = durationMinutes !== undefined && durationMinutes !== existing.durationMinutes && !cancelling
   const newDay = dayOfWeek ?? existing.dayOfWeek
   const newTime = timeOfDay ?? existing.timeOfDay
   const newFreq = frequency ?? existing.frequency
@@ -113,6 +132,7 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
     ...(frequency !== undefined && { frequency }),
     ...(dayOfWeek !== undefined && { dayOfWeek }),
     ...(timeOfDay !== undefined && { timeOfDay }),
+    ...(durationMinutes !== undefined && { durationMinutes }),
     ...(isActive !== undefined && { isActive }),
     ...(meetingType !== undefined && { meetingType }),
     ...(meetingType === 'ZOOM' && meetingLink !== undefined && { meetingLink: meetingLink ?? null }),
@@ -126,6 +146,13 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
       await tx.meeting.updateMany({
         where: { id: { in: futureMeetings.map((m) => m.id) } },
         data: { status: MeetingStatus.CANCELLED },
+      })
+    }
+    if (durationChanged) {
+      // Upcoming meetings of the series take the new length (past ones keep theirs)
+      await tx.meeting.updateMany({
+        where: { recurringScheduleId: existing.id, status: { in: [MeetingStatus.PROPOSED, MeetingStatus.SCHEDULED] }, meetingDate: { gt: new Date() } },
+        data: { durationMinutes },
       })
     }
     if (newNextDate) {
@@ -147,6 +174,8 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
 
   // ---- Side effects (best effort) ----
   if (cancelling) await afterFutureMeetingsCancelled(existing, futureMeetings, actorName)
+
+  if (durationChanged) await applyDurationToCalendar(existing, durationMinutes!)
 
   if (scheduleChanged) {
     await notify.recurringScheduleUpdated({
