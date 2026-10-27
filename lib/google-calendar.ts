@@ -266,6 +266,48 @@ export async function setCalendarEventDuration(googleEventId: string, userId: st
   })
 }
 
+/**
+ * The single occurrence of a recurring series that currently starts at `start` (Google applies
+ * timeMin/timeMax to an occurrence's actual time, so an already-moved occurrence is found at its new time).
+ */
+async function findSeriesOccurrence(calendar: ReturnType<typeof google.calendar>, seriesEventId: string, start: Date) {
+  const { data } = await calendar.events.instances({
+    calendarId: 'primary',
+    eventId: seriesEventId,
+    timeMin: new Date(start.getTime() - 60_000).toISOString(),
+    timeMax: new Date(start.getTime() + 60_000).toISOString(),
+    maxResults: 5,
+  })
+  return (data.items ?? []).find((i) => i.start?.dateTime && new Date(i.start.dateTime).getTime() === start.getTime()) ?? null
+}
+
+/** Move one occurrence of a recurring series (the rest of the series is untouched). False when not found. */
+export async function moveCalendarOccurrence(seriesEventId: string, userId: string, from: Date, to: Date, durationMinutes: number): Promise<boolean> {
+  const calendar = google.calendar({ version: 'v3', auth: await getAuthenticatedClient(userId) })
+  const occurrence = await findSeriesOccurrence(calendar, seriesEventId, from)
+  if (!occurrence?.id) return false
+  const timeZone = occurrence.start?.timeZone ?? undefined
+  await calendar.events.patch({
+    calendarId: 'primary',
+    eventId: occurrence.id,
+    requestBody: {
+      start: { dateTime: to.toISOString(), timeZone },
+      end: { dateTime: new Date(to.getTime() + durationMinutes * 60_000).toISOString(), timeZone },
+    },
+    sendUpdates: 'all',
+  })
+  return true
+}
+
+/** Cancel one occurrence of a recurring series. False when not found. */
+export async function cancelCalendarOccurrence(seriesEventId: string, userId: string, start: Date): Promise<boolean> {
+  const calendar = google.calendar({ version: 'v3', auth: await getAuthenticatedClient(userId) })
+  const occurrence = await findSeriesOccurrence(calendar, seriesEventId, start)
+  if (!occurrence?.id) return false
+  await calendar.events.delete({ calendarId: 'primary', eventId: occurrence.id, sendUpdates: 'all' })
+  return true
+}
+
 export async function deleteCalendarEvent(googleEventId: string, userId: string) {
   try {
     const oauth2Client = await getAuthenticatedClient(userId)

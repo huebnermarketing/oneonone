@@ -705,3 +705,98 @@ export async function sendMeetingCancelledEmail(
 
   await sendEmail({ to: recipientEmail, subject: `Meeting Cancelled - ${when}`, html })
 }
+
+// ---------------------------------------------------------------------------
+// Reschedule of a scheduled meeting
+// ---------------------------------------------------------------------------
+
+/** To the other participant: someone wants to move a confirmed meeting. */
+export async function sendRescheduleRequestEmail(
+  recipientEmail: string,
+  recipientName: string | null,
+  requesterName: string | null,
+  currentDate: Date,
+  newDate: Date,
+  durationMinutes: number,
+  meetingId: string,
+  reason?: string | null
+) {
+  const name = recipientName || 'Team Member'
+  const who = requesterName || 'Your colleague'
+  const tz = await recipientTimeZone(recipientEmail)
+  const now = whenFor(currentDate, tz)
+  const next = whenFor(newDate, tz)
+
+  const html = emailLayout({
+    preheader: `${esc(who)} asked to move your one-on-one to ${next}`,
+    heading: 'Reschedule Request',
+    body: `
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(who)}</strong> asked to move your one-on-one. The current time stays on your calendar until you accept.</p>
+      ${detailRow('Current Time', now)}
+      ${detailRow('Proposed New Time', next)}
+      ${detailRow('Length', formatDuration(durationMinutes))}
+      ${reason ? detailRow('Reason', reason) : ''}
+    `,
+    ctaText: 'Accept or Decline',
+    ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
+  })
+
+  await sendEmail({ to: recipientEmail, subject: `Reschedule Request - ${who}, ${next}`, html })
+}
+
+/** To the requester: the other participant accepted; the meeting moved. */
+export async function sendRescheduleAcceptedEmail(
+  recipientEmail: string,
+  recipientName: string | null,
+  acceptorName: string | null,
+  newDate: Date,
+  durationMinutes: number,
+  meetingId: string
+) {
+  const name = recipientName || 'Team Member'
+  const who = acceptorName || 'Your colleague'
+  const when = whenFor(newDate, await recipientTimeZone(recipientEmail))
+
+  const html = emailLayout({
+    preheader: `Your one-on-one moved to ${when}`,
+    heading: 'Meeting Rescheduled',
+    body: `
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(who)}</strong> accepted the new time. Your calendar has been updated.</p>
+      ${detailRow('New Date & Time', when)}
+      ${detailRow('Length', formatDuration(durationMinutes))}
+    `,
+    ctaText: 'View Meeting',
+    ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
+  })
+
+  await sendEmail({ to: recipientEmail, subject: `Meeting Rescheduled - ${when}`, html })
+}
+
+/** To the requester: the other participant declined; the meeting keeps its time. */
+export async function sendRescheduleDeclinedEmail(
+  recipientEmail: string,
+  recipientName: string | null,
+  declinerName: string | null,
+  keptDate: Date,
+  meetingId: string
+) {
+  const name = recipientName || 'Team Member'
+  const who = declinerName || 'Your colleague'
+  const when = whenFor(keptDate, await recipientTimeZone(recipientEmail))
+
+  const html = emailLayout({
+    preheader: `${esc(who)} declined the new time; the meeting stays at ${when}`,
+    heading: 'Reschedule Declined',
+    body: `
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(who)}</strong> declined the new time. The meeting stays as scheduled; you can request another time from the meeting page.</p>
+      ${detailRow('Date & Time', when)}
+    `,
+    ctaText: 'View Meeting',
+    ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
+  })
+
+  await sendEmail({ to: recipientEmail, subject: `Reschedule Declined - meeting stays ${when}`, html })
+}

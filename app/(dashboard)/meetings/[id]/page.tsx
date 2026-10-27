@@ -10,6 +10,7 @@ import { getSettings } from '@/lib/settings'
 import { AddTodoForm } from './add-todo-form'
 import { MeetingRecorder } from './meeting-recorder'
 import { MarkCompletedButton } from './mark-completed-button'
+import { FORM_REQUIRED_MESSAGE } from './messages'
 import { TranscriptViewer } from './transcript-viewer'
 import { MeetingNotes } from './meeting-notes'
 import { FileAttachments } from './file-attachments'
@@ -17,6 +18,8 @@ import { ProposalActions } from './proposal-actions'
 import { formatDuration } from '@/lib/meeting-duration'
 import { getPolicies } from '@/lib/settings'
 import { CancelMeetingButton } from './cancel-meeting-button'
+import { RescheduleBanner, RescheduleButton } from './reschedule'
+import { rescheduleRole } from '@/lib/reschedule'
 import { canCancel, canManageMeeting, canViewMeeting, canViewNotes, canViewRecording } from '@/lib/meeting-access'
 import { MeetingStatusPill, Pill, TodoPriorityPill, TodoStatusPill } from '@/components/ui/pill'
 
@@ -92,6 +95,13 @@ export default async function MeetingDetailPage({
     ? meeting.reporter.name
     : proposedById === meeting.reporterId ? meeting.reporter.name : meeting.employee.name
   const otherPartyName = user.id === meeting.employeeId ? meeting.reporter.name : meeting.employee.name
+  const { workingDays } = await getPolicies()
+
+  // Reschedule of a SCHEDULED meeting (lib/reschedule.ts)
+  const isMeetingParticipant = user.id === meeting.employeeId || user.id === meeting.reporterId
+  const reschedulePending = meeting.status === 'SCHEDULED' && !!meeting.rescheduleDate && !!meeting.rescheduleRequestedById
+  const canRequestReschedule = meeting.status === 'SCHEDULED' && isMeetingParticipant && !reschedulePending
+  const rescheduleRequester = meeting.rescheduleRequestedById === meeting.employeeId ? meeting.employee : meeting.reporter
   const tz = user.timeZone ?? DEFAULT_TIMEZONE
   const meetingDateLabel = `${formatMeetingLong(meetingDate, tz)} ${timeZoneAbbrev(meetingDate, tz)}`
 
@@ -161,6 +171,9 @@ export default async function MeetingDetailPage({
               requireFormBeforeComplete={settings?.requireFormBeforeComplete ?? true}
             />
           )}
+          {canRequestReschedule && (
+            <RescheduleButton meetingId={meeting.id} durationMinutes={meeting.durationMinutes} workingDays={workingDays} otherPartyName={otherPartyName || 'the other participant'} />
+          )}
           {isCancellable && (
             <CancelMeetingButton meetingId={meeting.id} otherPartyName={otherPartyName || 'the other participant'} />
           )}
@@ -169,8 +182,26 @@ export default async function MeetingDetailPage({
           ) : (
             <MeetingStatusPill status={meeting.status} isPast={isPast} className="sm:text-sm sm:px-4 sm:py-2" />
           )}
+          {reschedulePending && <Pill tone="amber" dot className="sm:text-sm sm:px-4 sm:py-2">Reschedule pending</Pill>}
         </div>
+        {isReporter && meeting.status === 'SCHEDULED' && !formSubmitted && (settings?.requireFormBeforeComplete ?? true) && (
+          <p className="text-sm text-amber-600 dark:text-amber-400">{FORM_REQUIRED_MESSAGE}</p>
+        )}
       </div>
+
+      {reschedulePending && (
+        <RescheduleBanner
+          meetingId={meeting.id}
+          durationMinutes={meeting.durationMinutes}
+          workingDays={workingDays}
+          otherPartyName={(user.id === meeting.employeeId ? meeting.reporter.name : meeting.employee.name) || 'the other participant'}
+          newDate={meeting.rescheduleDate!.toISOString()}
+          newDurationMinutes={meeting.rescheduleDuration ?? meeting.durationMinutes}
+          requestedByName={rescheduleRequester.name || 'Someone'}
+          reason={meeting.rescheduleReason}
+          role={rescheduleRole(user.id, meeting) ?? 'viewer'}
+        />
+      )}
 
       {/* Proposal Actions – accept or suggest new time */}
       {isProposed && (
@@ -182,7 +213,7 @@ export default async function MeetingDetailPage({
           isReceiver={!!isProposalReceiver}
           isProposer={!!isProposalProposer}
           otherPartyName={otherPartyName || 'the other party'}
-          workingDays={(await getPolicies()).workingDays}
+          workingDays={workingDays}
         />
       )}
 

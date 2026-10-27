@@ -21,6 +21,7 @@ import { UserRole, RecurringFrequency, MeetingStatus } from '@prisma/client'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
 import { MeetingStatusPill, Pill } from '@/components/ui/pill'
+import { formatDuration } from '@/lib/meeting-duration'
 import { DAY_NAMES } from '@/lib/ui'
 import { Pagination } from '@/components/ui/pagination'
 
@@ -31,6 +32,8 @@ interface Meeting {
   formSubmittedAt: Date | string | null
   employeeId: string
   recurringScheduleId?: string | null
+  durationMinutes?: number
+  rescheduleDate?: Date | string | null
   reporter?: { name: string | null; email: string | null } | null
   employee?: { name: string | null; email: string | null } | null
 }
@@ -475,9 +478,13 @@ export function MeetingsClient({
                       {needsForm && isEmployee && (
                         <Pill tone="amber" className="flex-shrink-0">Form needed</Pill>
                       )}
+                      {meeting.status === 'SCHEDULED' && meeting.rescheduleDate && (
+                        <Pill tone="amber" dot className="flex-shrink-0">Reschedule pending</Pill>
+                      )}
                     </div>
                     <p className="text-xs sm:text-sm text-medium-gray">
                       {f.meetingShort(meetingDate)}
+                      {meeting.durationMinutes ? ` · ${formatDuration(meeting.durationMinutes)}` : ''}
                     </p>
                   </div>
                   <MeetingStatusPill status={meeting.status} isPast={isPast} className="flex-shrink-0" />
