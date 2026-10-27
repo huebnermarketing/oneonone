@@ -50,7 +50,7 @@ export const GET = withApiAuth(async (req: NextRequest, { user, params }) => {
   const profiles = await loadPairProfiles(meeting.reporterId, meeting.employeeId)
   let slots
   try {
-    slots = await freeSlotsForDay(meeting.reporterId, meeting.employeeId, parsedDate, profiles, duration ?? meeting.durationMinutes)
+    slots = await freeSlotsForDay(meeting.reporterId, meeting.employeeId, parsedDate, profiles, duration ?? meeting.durationMinutes, meeting.id)
   } catch (err) {
     if (!(err instanceof CalendarUnavailableError)) throw err
     return unavailable("Can't see the other person's calendar. They need to sign in to One-on-One once with Google.")

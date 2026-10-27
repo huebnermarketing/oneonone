@@ -168,6 +168,23 @@ check "45-min length rejected" 400 $(mk 07:00 ',"durationMinutes":45')
 check "availability duration=45 rejected" 400 $(code -b "$REP" "$B/api/meetings/availability?employeeId=$ALEX_ID&date=$MON&duration=45")
 $PSQL -c "delete from \"Notification\" where link in ('/meetings/$D1','/meetings/$D2'); delete from \"AuditLog\" where \"entityId\" in ('$D1','$D2'); delete from \"Meeting\" where id in ('$D1','$D2');" >/dev/null
 
+echo "## reschedule"
+check "meeting to reschedule created" 201 $(mk 08:00 ',"durationMinutes":15')
+D3=$(python3 -c "import json;print(json.load(open('/tmp/body'))['id'])")
+check "employee accepts it" 200 $(code -b "$ALEX" -X POST $B/api/meetings/$D3/accept)
+rs() { code -b "$1" -X POST $B/api/meetings/$D3/reschedule -H 'content-type: application/json' -d "{\"meetingDate\":\"${MON}T$2:00.000Z\"$3}"; }
+check "employee asks to move it" 200 $(rs "$ALEX" 09:00 ',"reason":"smoke"')
+check "old time kept while pending" "${MON} 08:00 $ALEX_ID" "$($PSQL -c "select to_char(\"meetingDate\" at time zone 'UTC','YYYY-MM-DD HH24:MI')||' '||\"rescheduleRequestedById\" from \"Meeting\" where id='$D3'")"
+check "requester cannot accept own request" 403 $(code -b "$ALEX" -X POST $B/api/meetings/$D3/reschedule/accept)
+check "admin (not a participant) cannot request" 403 $(rs "$ADMIN" 11:00 '')
+check "reporter declines" 200 $(code -b "$REP" -X DELETE $B/api/meetings/$D3/reschedule)
+check "request cleared" "" "$($PSQL -c "select coalesce(\"rescheduleRequestedById\",'') from \"Meeting\" where id='$D3'")"
+check "reporter asks for 30 min later" 200 $(rs "$REP" 10:00 ',"durationMinutes":30')
+check "employee accepts new time" 200 $(code -b "$ALEX" -X POST $B/api/meetings/$D3/reschedule/accept)
+check "meeting moved + length changed" "${MON} 10:00 30" "$($PSQL -c "select to_char(\"meetingDate\" at time zone 'UTC','YYYY-MM-DD HH24:MI')||' '||\"durationMinutes\" from \"Meeting\" where id='$D3'")"
+check "nothing to accept now" 400 $(code -b "$ALEX" -X POST $B/api/meetings/$D3/reschedule/accept)
+$PSQL -c "delete from \"Notification\" where link like '/meetings/$D3%'; delete from \"AuditLog\" where \"entityId\"='$D3'; delete from \"CalendarEvent\" where \"meetingId\"='$D3'; delete from \"Meeting\" where id='$D3';" >/dev/null
+
 echo "## user import"
 check "employee cannot download template" 403 $(code -b "$ALEX" "$B/api/admin/import-users?format=template")
 check "admin template 200" 200 $(code -b "$ADMIN" "$B/api/admin/import-users?format=template")

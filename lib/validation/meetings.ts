@@ -37,6 +37,13 @@ export const suggestMeetingSchema = z.object({
   durationMinutes: meetingDuration.optional(),
 })
 
+export const rescheduleMeetingSchema = z.object({
+  meetingDate: isoDate,
+  /** Omit to keep the meeting's current length */
+  durationMinutes: meetingDuration.optional(),
+  reason: z.string().trim().max(500).optional(),
+})
+
 export const cancelMeetingSchema = z.object({
   reason: z.string().trim().max(500).optional(),
 })

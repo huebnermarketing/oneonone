@@ -14,7 +14,7 @@ import { assertTransition, completeMeeting, cancelMeeting } from '@/lib/meeting-
 import { getPolicies } from '@/lib/settings'
 import { notifyMeetingCancelled, notifyMeetingCompleted } from '@/lib/notifications'
 import { sendMeetingCancelledEmail } from '@/lib/email'
-import { deleteCalendarEvent } from '@/lib/google-calendar'
+import { cancelCalendarOccurrence, deleteCalendarEvent } from '@/lib/google-calendar'
 import { ApiError } from '@/lib/api'
 
 describe('assertTransition', () => {
@@ -56,7 +56,7 @@ describe('completeMeeting', () => {
     prismaMock.meeting.update.mockResolvedValue({ ...m, status: 'COMPLETED' })
     const result = await completeMeeting(m as never, reporter.id)
     expect(result.status).toBe('COMPLETED')
-    expect(prismaMock.meeting.update).toHaveBeenCalledWith(expect.objectContaining({ data: { status: 'COMPLETED' } }))
+    expect(prismaMock.meeting.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: 'COMPLETED', rescheduleDate: null }) }))
     expect(notifyMeetingCompleted).toHaveBeenCalledWith(ids.employee, 'Reporter', ids.meeting)
     expect(prismaMock.auditLog.create).toHaveBeenCalled()
   })
@@ -119,5 +119,13 @@ describe('cancelMeeting', () => {
     const quiet = vi.spyOn(console, 'error').mockImplementation(() => {})
     await expect(cancelMeeting(m as never, reporter)).resolves.toMatchObject({ status: 'CANCELLED' })
     expect(quiet).toHaveBeenCalledWith('[meeting-state] deleteCalendarEvent failed', expect.any(Error))
+  })
+
+  it('cancelling a recurring occurrence removes just that day from the series', async () => {
+    const m = { ...meeting({ status: 'SCHEDULED' }), recurringSchedule: { googleRecurringEventId: 'series-1' } }
+    prismaMock.meeting.update.mockResolvedValue({ ...m, status: 'CANCELLED' })
+    await cancelMeeting(m as never, reporter)
+    expect(cancelCalendarOccurrence).toHaveBeenCalledWith('series-1', ids.reporter, m.meetingDate)
+    expect(prismaMock.meeting.update.mock.calls[0][0].data).toMatchObject({ status: 'CANCELLED', rescheduleDate: null })
   })
 })

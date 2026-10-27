@@ -88,12 +88,13 @@ export function workingHoursLabel({ reporter, employee }: PairProfiles, viewerIs
 }
 
 /** App meetings (PROPOSED/SCHEDULED) involving either person, as busy intervals, for the reporter's calendar day. */
-export async function appMeetingsBusy(reporterId: string, employeeId: string, date: Date, reporterTimeZone: string): Promise<Interval[]> {
+export async function appMeetingsBusy(reporterId: string, employeeId: string, date: Date, reporterTimeZone: string, excludeMeetingId?: string): Promise<Interval[]> {
   const dayKey = toDateKey(date, reporterTimeZone)
   const dayStart = startOfDayInTz(dayKey, reporterTimeZone)
   const dayEnd = startOfDayInTz(addDaysToKey(dayKey, 1), reporterTimeZone) // exact local day, DST-safe
   const meetings = await prisma.meeting.findMany({
     where: {
+      ...(excludeMeetingId ? { id: { not: excludeMeetingId } } : {}),
       status: { in: [MeetingStatus.PROPOSED, MeetingStatus.SCHEDULED] },
       // a meeting that starts just before midnight still blocks the start of the day
       meetingDate: { gte: new Date(dayStart.getTime() - MAX_MEETING_DURATION * 60_000), lt: dayEnd },
@@ -108,10 +109,11 @@ export async function appMeetingsBusy(reporterId: string, employeeId: string, da
  * Mutual free slots of `durationMinutes` on a date: free on both Google Calendars, inside both
  * people's working hours, and not overlapping an existing PROPOSED/SCHEDULED meeting of either person.
  */
-export async function freeSlotsForDay(reporterId: string, employeeId: string, date: Date, profiles: PairProfiles, durationMinutes: number) {
+/** `excludeMeetingId`: the meeting being moved doesn't block its own new time. */
+export async function freeSlotsForDay(reporterId: string, employeeId: string, date: Date, profiles: PairProfiles, durationMinutes: number, excludeMeetingId?: string) {
   const [calendarSlots, busy] = await Promise.all([
     getMutualFreeSlots(reporterId, employeeId, date, durationMinutes, profiles.options),
-    appMeetingsBusy(reporterId, employeeId, date, profiles.reporter.timeZone),
+    appMeetingsBusy(reporterId, employeeId, date, profiles.reporter.timeZone, excludeMeetingId),
   ])
   return calendarSlots.filter((s) => isIntervalFree(new Date(s.start).getTime(), new Date(s.end).getTime(), busy))
 }

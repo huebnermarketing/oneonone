@@ -17,6 +17,9 @@ import {
   sendMeetingSuggestionEmail,
   sendProposalConfirmationEmail,
   sendRecurringScheduleUpdatedEmail,
+  sendRescheduleAcceptedEmail,
+  sendRescheduleDeclinedEmail,
+  sendRescheduleRequestEmail,
   sendTodoAssignedEmail,
 } from './email'
 import {
@@ -30,6 +33,9 @@ import {
   notifyMeetingReminder,
   notifyMeetingSuggested,
   notifyRecordingReady,
+  notifyRescheduleAccepted,
+  notifyRescheduleDeclined,
+  notifyRescheduleRequested,
   notifyTodoAssigned,
 } from './notifications'
 import { DAY_NAMES } from './ui'
@@ -108,6 +114,45 @@ export function meetingAccepted(args: { meetingId: string; date: Date; to: Party
     ['email', () => sendMeetingAcceptedEmail(to.email, to.name, acceptorName, date, meetingId, durationMinutes)],
     ['in-app', () => notifyMeetingAccepted(to.id, displayName(acceptorName, args.acceptorFallback ?? 'Your colleague'), date, meetingId)],
   ])
+}
+
+/** A participant asked to move a SCHEDULED meeting; tell the other one. */
+export function rescheduleRequested(args: {
+  meetingId: string
+  currentDate: Date
+  newDate: Date
+  durationMinutes: number
+  to: Party
+  from: Pick<Party, 'name'>
+  reason?: string | null
+}): Promise<NotifyResult> {
+  const { meetingId, to, from } = args
+  return fanOut('rescheduleRequested', meetingId, [
+    ['email', () => sendRescheduleRequestEmail(to.email, to.name, from.name, args.currentDate, args.newDate, args.durationMinutes, meetingId, args.reason)],
+    ['in-app', () => notifyRescheduleRequested(to.id, displayName(from.name, 'Your colleague'), args.newDate, meetingId)],
+  ])
+}
+
+/** The other participant accepted the new time; tell the requester. */
+export function rescheduleAccepted(args: { meetingId: string; newDate: Date; durationMinutes: number; to: Party; acceptorName: string | null }): Promise<NotifyResult> {
+  const { meetingId, to } = args
+  return fanOut('rescheduleAccepted', meetingId, [
+    ['email', () => sendRescheduleAcceptedEmail(to.email, to.name, args.acceptorName, args.newDate, args.durationMinutes, meetingId)],
+    ['in-app', () => notifyRescheduleAccepted(to.id, displayName(args.acceptorName, 'Your colleague'), args.newDate, meetingId)],
+  ])
+}
+
+/**
+ * Request dropped. Declined → the requester gets email + in-app. Withdrawn by the requester → the
+ * other side gets an in-app note only (nothing changed for them).
+ */
+export function rescheduleDeclined(args: { meetingId: string; keptDate: Date; to: Party; actorName: string | null; withdrawn: boolean }): Promise<NotifyResult> {
+  const { meetingId, to } = args
+  const deliveries: Delivery[] = [
+    ['in-app', () => notifyRescheduleDeclined(to.id, displayName(args.actorName, 'Your colleague'), args.keptDate, meetingId, args.withdrawn)],
+  ]
+  if (!args.withdrawn) deliveries.push(['email', () => sendRescheduleDeclinedEmail(to.email, to.name, args.actorName, args.keptDate, meetingId)])
+  return fanOut('rescheduleDeclined', meetingId, deliveries)
 }
 
 /** Meeting cancelled — every recipient gets an in-app notification, and an email unless `email: false`. */

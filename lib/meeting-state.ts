@@ -13,7 +13,7 @@ import { badRequest } from './api-errors'
 import { getPolicies } from './settings'
 import { logMeetingUpdated } from './audit'
 import * as notify from './notify'
-import { deleteCalendarEvent } from './google-calendar'
+import { cancelCalendarOccurrence, deleteCalendarEvent } from './google-calendar'
 
 const TRANSITIONS: Record<MeetingStatus, MeetingStatus[]> = {
   PROPOSED: ['SCHEDULED', 'CANCELLED'],
@@ -33,6 +33,7 @@ export const meetingWithParties = Prisma.validator<Prisma.MeetingDefaultArgs>()(
     employee: { select: { id: true, name: true, email: true } },
     reporter: { select: { id: true, name: true, email: true } },
     calendarEvent: true,
+    recurringSchedule: { select: { googleRecurringEventId: true } },
   },
 })
 export type MeetingWithParties = Prisma.MeetingGetPayload<typeof meetingWithParties>
@@ -40,6 +41,15 @@ export type MeetingWithParties = Prisma.MeetingGetPayload<typeof meetingWithPart
 export async function loadMeeting(id: string): Promise<MeetingWithParties | null> {
   return prisma.meeting.findUnique({ where: { id }, ...meetingWithParties })
 }
+
+/** Fields that drop a pending reschedule request */
+export const CLEAR_RESCHEDULE = {
+  rescheduleDate: null,
+  rescheduleDuration: null,
+  rescheduleRequestedById: null,
+  rescheduleRequestedAt: null,
+  rescheduleReason: null,
+} as const satisfies Prisma.MeetingUpdateInput
 
 /**
  * Complete a meeting. Enforces SCHEDULED → COMPLETED and the requireFormBeforeComplete policy.
@@ -53,7 +63,7 @@ export async function completeMeeting(meeting: MeetingWithParties, actorId: stri
 
   const updated = await prisma.meeting.update({
     where: { id: meeting.id },
-    data: { status: 'COMPLETED' },
+    data: { status: 'COMPLETED', ...CLEAR_RESCHEDULE },
     ...meetingWithParties,
   })
 
@@ -77,7 +87,7 @@ export async function cancelMeeting(
 
   const updated = await prisma.meeting.update({
     where: { id: meeting.id },
-    data: { status: 'CANCELLED' },
+    data: { status: 'CANCELLED', ...CLEAR_RESCHEDULE },
     ...meetingWithParties,
   })
 
@@ -90,6 +100,11 @@ export async function cancelMeeting(
   if (meeting.calendarEvent) {
     await deleteCalendarEvent(meeting.calendarEvent.googleEventId, meeting.reporterId).catch((e) =>
       console.error('[meeting-state] deleteCalendarEvent failed', e)
+    )
+  } else if (meeting.status === 'SCHEDULED' && meeting.recurringSchedule?.googleRecurringEventId) {
+    // An occurrence of a recurring series: remove just that day from both calendars
+    await cancelCalendarOccurrence(meeting.recurringSchedule.googleRecurringEventId, meeting.reporterId, meeting.meetingDate).catch((e) =>
+      console.error('[meeting-state] cancelCalendarOccurrence failed', e)
     )
   }
 

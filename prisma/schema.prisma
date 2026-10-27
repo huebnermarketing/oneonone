@@ -106,6 +106,12 @@ model Meeting {
   meetingDate              DateTime
   /// Meeting length in minutes (15 or 30). Rows created before this column existed are 30.
   durationMinutes          Int                @default(15)
+  /// Pending reschedule of a SCHEDULED meeting: the old time stays until the other participant accepts
+  rescheduleDate           DateTime?
+  rescheduleDuration       Int?
+  rescheduleRequestedById  String?
+  rescheduleRequestedAt    DateTime?
+  rescheduleReason         String?
   checkInPersonal          String?
   checkInProfessional      String?
   priorityGoalProfessional String?
@@ -458,6 +464,9 @@ enum NotificationType {
   MEETING_COMPLETED
   MEETING_CANCELLED
   SCHEDULE_UPDATED
+  RESCHEDULE_REQUESTED
+  RESCHEDULE_ACCEPTED
+  RESCHEDULE_DECLINED
   TODO_ASSIGNED
   TODO_DUE_SOON
   TODO_OVERDUE
