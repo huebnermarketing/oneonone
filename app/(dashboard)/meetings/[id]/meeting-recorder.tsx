@@ -18,6 +18,7 @@ import {
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
 import { MicTroubleshooting } from './mic-troubleshooting'
+import { MicPicker } from './mic-picker'
 import { Select } from '@/components/ui/select'
 import { plural } from '@/lib/ui'
 
@@ -98,6 +99,8 @@ export function MeetingRecorder({
   /** Object URL for the preview player — created per blob and revoked on change/unmount */
   const [audioUrl, setAudioUrl] = useState<string | null>(null)
   const [selectedLanguage, setSelectedLanguage] = useState('auto')
+  // '' = system default microphone (never remembered between visits)
+  const [selectedMic, setSelectedMic] = useState('')
   const [micBlocked, setMicBlocked] = useState(false)
   const [micPermGranted, setMicPermGranted] = useState(false)
   const [micRetryCount, setMicRetryCount] = useState(0)
@@ -315,7 +318,12 @@ export function MeetingRecorder({
       let stream: MediaStream
       try {
         stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, sampleRate: 44100 },
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            sampleRate: 44100,
+            ...(selectedMic ? { deviceId: { exact: selectedMic } } : {}),
+          },
         })
       } catch (micErr: any) {
         console.error('[Recording] Microphone error:', micErr.name, micErr.message)
@@ -323,6 +331,10 @@ export function MeetingRecorder({
           setMicRetryCount((n) => n + 1)
           setMicBlocked(true)
           return
+        }
+        if (micErr.name === 'OverconstrainedError' && selectedMic) {
+          setSelectedMic('')
+          throw new Error('The selected microphone is no longer available. Switched to the system default — press Start Recording again.')
         }
         if (micErr.name === 'NotFoundError' || micErr.name === 'DevicesNotFoundError') {
           throw new Error(
@@ -912,6 +924,7 @@ export function MeetingRecorder({
               ))}
             </Select>
           </div>
+          <MicPicker value={selectedMic} onChange={setSelectedMic} />
           <button
             onClick={startRecording}
             aria-label="Start recording"

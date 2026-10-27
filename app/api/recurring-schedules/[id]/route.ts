@@ -6,6 +6,8 @@ import { createAuditLog } from '@/lib/audit'
 import { calculateFirstOccurrence } from '@/lib/recurring-dates'
 import { deleteCalendarEvent } from '@/lib/google-calendar'
 import * as notify from '@/lib/notify'
+import { getPolicies } from '@/lib/settings'
+import { assertWorkingWeekday } from '@/lib/working-days'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import { deleteRecurringQuery, updateRecurringScheduleSchema } from '@/lib/validation/recurring'
 
@@ -89,6 +91,8 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
   const { frequency, dayOfWeek, timeOfDay, isActive, cancelFutureMeetings, meetingType, meetingLink } = body
 
   const existing = await loadSchedule(params.id, user)
+  // Moving to another day must land on a working day (an existing schedule on its old day stays editable)
+  if (dayOfWeek !== undefined && dayOfWeek !== existing.dayOfWeek) assertWorkingWeekday(dayOfWeek, (await getPolicies()).workingDays)
   const actorName = user.name || 'Your manager'
 
   const cancelling = isActive === false && cancelFutureMeetings === true

@@ -35,6 +35,7 @@ function maskedView(s: SystemSettings) {
     enableEmailReminders: s.enableEmailReminders,
     reminderHoursBefore: s.reminderHoursBefore,
     shortReminderHoursBefore: s.shortReminderHoursBefore,
+    workingDays: s.workingDays,
   }
 }
 

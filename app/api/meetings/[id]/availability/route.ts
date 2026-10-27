@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getPolicies } from '@/lib/settings'
+import { resolveTimeZone } from '@/lib/dates'
+import { WEEKDAY_SHORT, describeWorkingDays, isWorkingWeekday, weekdayIn, weekdayOfKey } from '@/lib/working-days'
 import { notFound, parseQuery, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { assertAccess, canViewMeeting } from '@/lib/meeting-access'
@@ -22,6 +25,20 @@ export const GET = withApiAuth(async (req: NextRequest, { user, params }) => {
   })
   if (!meeting) throw notFound('Meeting')
   assertAccess(canViewMeeting(user, meeting))
+
+  // Non-working day (Admin → Settings → Policies): no slots, same shape as a holiday
+  {
+    const { workingDays } = await getPolicies()
+    const wd = /^\d{4}-\d{2}-\d{2}$/.test(date) ? weekdayOfKey(date) : weekdayIn(new Date(date), resolveTimeZone(user.timeZone))
+    if (!isWorkingWeekday(wd, workingDays)) {
+      return NextResponse.json({
+        slots: [],
+        dateUnavailable: true,
+        workingHoursLabel: null,
+        message: `${WEEKDAY_SHORT[wd]} is not a working day (${describeWorkingDays(workingDays)}). Pick another day.`,
+      })
+    }
+  }
 
   const parsedDate = new Date(date)
 

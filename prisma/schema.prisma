@@ -271,6 +271,8 @@ model SystemSettings {
   employeeCanViewNotes      Boolean      @default(true)
   // Hours before a meeting for the second (short-notice) reminder; the first is reminderHoursBefore
   shortReminderHoursBefore  Int          @default(1)
+  // Days 1:1s can be scheduled on (0 = Sunday … 6 = Saturday), in the scheduler's timezone
+  workingDays               Int[]        @default([1, 2, 3, 4, 5])
   // Last successful Keka employee sync. Null = never run; the daily auto-sync only starts after an admin's first confirmed sync.
   kekaLastSyncAt            DateTime?
 }

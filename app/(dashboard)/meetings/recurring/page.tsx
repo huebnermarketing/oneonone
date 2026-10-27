@@ -1,6 +1,7 @@
 import { getCurrentUser } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { RecurringSchedulesClient } from './recurring-client'
+import { getPolicies } from '@/lib/settings'
 import { redirect } from 'next/navigation'
 import { UserRole } from '@prisma/client'
 import { MeetingStatus } from '@prisma/client'
@@ -61,6 +62,7 @@ export default async function RecurringSchedulesPage() {
     <RecurringSchedulesClient
       employees={employees}
       initialSchedules={schedulesWithEmployees}
+      workingDays={(await getPolicies()).workingDays}
     />
   )
 }

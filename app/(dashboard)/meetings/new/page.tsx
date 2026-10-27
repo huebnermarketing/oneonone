@@ -1,6 +1,7 @@
 import { requirePageRole } from '@/lib/auth-helpers'
 import { UserRole } from '@prisma/client'
 import { ScheduleMeetingClient } from './schedule-meeting-client'
+import { getPolicies } from '@/lib/settings'
 import { prisma } from '@/lib/prisma'
 
 export default async function NewMeetingPage() {
@@ -32,7 +33,7 @@ export default async function NewMeetingPage() {
         <p className="text-medium-gray">One-time or recurring one-on-one with your team</p>
       </div>
 
-      <ScheduleMeetingClient employees={employees} currentUserId={user.id} workDayStart={workHours?.workDayStart} workDayEnd={workHours?.workDayEnd} />
+      <ScheduleMeetingClient employees={employees} currentUserId={user.id} workDayStart={workHours?.workDayStart} workDayEnd={workHours?.workDayEnd} workingDays={(await getPolicies()).workingDays} />
     </div>
   )
 }

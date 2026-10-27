@@ -7,6 +7,9 @@ import { parseZoomMeetingId } from '@/lib/zoom'
 import { assertNoConflict } from '@/lib/meeting-conflicts'
 import * as notify from '@/lib/notify'
 import { createMeetingSchema, listMeetingsQuery } from '@/lib/validation/meetings'
+import { getPolicies } from '@/lib/settings'
+import { resolveTimeZone } from '@/lib/dates'
+import { assertWorkingDay } from '@/lib/working-days'
 
 export const dynamic = 'force-dynamic'
 
@@ -55,6 +58,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
   if (employeeId === user.id) throw badRequest("You can't schedule a 1:1 with yourself")
 
   const reporterId = user.id
+  assertWorkingDay(meetingDate, resolveTimeZone(user.timeZone), (await getPolicies()).workingDays)
 
   await assertNoConflict(employeeId, reporterId, meetingDate)
 

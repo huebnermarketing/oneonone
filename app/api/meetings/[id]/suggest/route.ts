@@ -7,6 +7,9 @@ import { loadMeeting } from '@/lib/meeting-state'
 import { assertNoConflict } from '@/lib/meeting-conflicts'
 import * as notify from '@/lib/notify'
 import { suggestMeetingSchema } from '@/lib/validation/meetings'
+import { getPolicies } from '@/lib/settings'
+import { resolveTimeZone } from '@/lib/dates'
+import { assertWorkingDay } from '@/lib/working-days'
 
 export const dynamic = 'force-dynamic'
 
@@ -22,6 +25,7 @@ export const POST = withApiAuth(async (req: NextRequest, { user, params }) => {
   if (!meeting) throw notFound('Meeting')
   if (meeting.status !== 'PROPOSED') throw badRequest('This meeting is not in a proposed state')
   assertAccess(canSuggest(user, meeting), 'Only meeting participants can change the time')
+  assertWorkingDay(meetingDate, resolveTimeZone(user.timeZone), (await getPolicies()).workingDays)
 
   await assertNoConflict(meeting.employeeId, meeting.reporterId, meetingDate, meeting.id)
 
