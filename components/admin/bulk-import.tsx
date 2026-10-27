@@ -1,46 +1,20 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, CheckCircle, Download, FileSpreadsheet, Loader2, Upload, XCircle } from 'lucide-react'
+import { CheckCircle, Download, FileSpreadsheet, Loader2, Upload, XCircle } from 'lucide-react'
 import { useToast } from '@/components/ui/toast'
 import { Modal } from '@/components/ui/modal'
-import { Pill, type PillTone } from '@/components/ui/pill'
+import { ImportPreview, initialFilter, type PreviewData, type PreviewFilter } from '@/components/admin/import-preview'
 import { COLUMN_HELP, IMPORT_COLUMNS } from '@/lib/user-import-columns'
 import { plural } from '@/lib/ui'
 import { cn } from '@/lib/utils'
 
-type RowAction = 'create' | 'update' | 'unchanged' | 'error'
-
-interface PreviewRow {
-  line: number
-  email: string
-  name: string
-  action: RowAction
-  changes: string[]
-  errors: string[]
-  warnings: string[]
-}
-
-interface ImportResponse {
-  summary: Record<RowAction, number>
-  newDepartments: string[]
-  promotions: { email: string; name: string }[]
-  ignoredColumns: string[]
-  rows: PreviewRow[]
+interface ImportResponse extends PreviewData {
   committed: boolean
-  result?: { created: number; updated: number; promoted: number; departmentsCreated: number; failed: number }
+  result?: { created: number; updated: number; promoted: number; departmentsCreated: number; deactivated?: number; failed: number }
   errorCsv?: string | null
 }
-
-const ACTION_META: Record<RowAction, { label: string; tone: PillTone }> = {
-  create: { label: 'New', tone: 'green' },
-  update: { label: 'Update', tone: 'blue' },
-  unchanged: { label: 'No change', tone: 'neutral' },
-  error: { label: 'Error', tone: 'red' },
-}
-
-type Filter = 'all' | RowAction
 
 const btnPrimary =
   'flex items-center gap-2 px-4 py-2 bg-dark-gray dark:bg-white text-white dark:text-dark-gray rounded-xl font-medium hover:bg-charcoal dark:hover:bg-off-white disabled:opacity-50 transition-colors'
@@ -70,7 +44,7 @@ export function BulkImport() {
   const [fileName, setFileName] = useState('')
   const [csv, setCsv] = useState('')
   const [preview, setPreview] = useState<ImportResponse | null>(null)
-  const [filter, setFilter] = useState<Filter>('all')
+  const [filter, setFilter] = useState<PreviewFilter>('all')
   const [dragging, setDragging] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -104,7 +78,7 @@ export function BulkImport() {
         setCsv(text)
         setFileName(file.name)
         setPreview(data)
-        setFilter(data.summary.error > 0 ? 'error' : 'all')
+        setFilter(initialFilter(data))
       }
     } catch {
       toastError('Could not read the file')
@@ -120,7 +94,7 @@ export function BulkImport() {
       const data = await send(csv, true)
       if (data) {
         setPreview(data)
-        setFilter(data.summary.error > 0 ? 'error' : 'all')
+        setFilter(initialFilter(data))
         router.refresh()
       }
     } catch {
@@ -141,7 +115,6 @@ export function BulkImport() {
     reset()
   }
 
-  const rows = useMemo(() => (preview ? preview.rows.filter((r) => filter === 'all' || r.action === filter) : []), [preview, filter])
   const toWrite = preview ? preview.summary.create + preview.summary.update : 0
   const canImport = !!preview && !done && (toWrite > 0 || preview.promotions.length > 0)
 
@@ -297,92 +270,7 @@ export function BulkImport() {
               </p>
             )}
 
-            {(preview.newDepartments.length > 0 || preview.promotions.length > 0 || preview.ignoredColumns.length > 0) && (
-              <ul className="text-sm space-y-1 rounded-xl bg-off-white/60 dark:bg-charcoal p-3">
-                {preview.newDepartments.length > 0 && (
-                  <li className="text-dark-gray dark:text-white">
-                    <span className="text-medium-gray">{done ? 'Departments created:' : 'New departments:'}</span> {preview.newDepartments.join(', ')}
-                  </li>
-                )}
-                {preview.promotions.length > 0 && (
-                  <li className="text-dark-gray dark:text-white">
-                    <span className="text-medium-gray">{done ? 'Promoted to Manager:' : 'Will become Manager (now has direct reports):'}</span>{' '}
-                    {preview.promotions.map((p) => p.name || p.email).join(', ')}
-                  </li>
-                )}
-                {preview.ignoredColumns.length > 0 && (
-                  <li className="text-amber-600 dark:text-amber-400">Ignored columns: {preview.ignoredColumns.join(', ')}</li>
-                )}
-              </ul>
-            )}
-
-            <div className="flex flex-wrap gap-2" role="tablist" aria-label="Filter rows">
-              {(['all', 'create', 'update', 'unchanged', 'error'] as Filter[]).map((f) => {
-                const count = f === 'all' ? preview.rows.length : preview.summary[f]
-                if (f !== 'all' && count === 0) return null
-                return (
-                  <button
-                    key={f}
-                    type="button"
-                    role="tab"
-                    aria-selected={filter === f}
-                    onClick={() => setFilter(f)}
-                    className={cn(
-                      'px-3 py-1.5 rounded-lg text-sm font-medium transition-colors',
-                      filter === f ? 'bg-dark-gray text-white dark:bg-white dark:text-dark-gray' : 'text-medium-gray hover:bg-off-white dark:hover:bg-charcoal'
-                    )}
-                  >
-                    {f === 'all' ? 'All' : ACTION_META[f].label} <span className="opacity-70">{count}</span>
-                  </button>
-                )
-              })}
-            </div>
-
-            <div className="max-h-[45vh] overflow-y-auto border border-off-white dark:border-medium-gray/20 rounded-xl">
-              <table className="w-full text-sm">
-                <thead className="bg-off-white dark:bg-charcoal sticky top-0">
-                  <tr>
-                    <th scope="col" className="px-3 py-2 text-left text-medium-gray w-14">Line</th>
-                    <th scope="col" className="px-3 py-2 text-left text-medium-gray">User</th>
-                    <th scope="col" className="px-3 py-2 text-left text-medium-gray w-28">Result</th>
-                    <th scope="col" className="px-3 py-2 text-left text-medium-gray">Details</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-off-white dark:divide-medium-gray/20">
-                  {rows.map((r) => (
-                    <tr key={r.line} className="align-top">
-                      <td className="px-3 py-2 text-medium-gray tabular-nums">{r.line}</td>
-                      <td className="px-3 py-2">
-                        <div className="text-dark-gray dark:text-white">{r.name}</div>
-                        {r.name !== r.email && <div className="text-xs text-medium-gray">{r.email}</div>}
-                      </td>
-                      <td className="px-3 py-2">
-                        <Pill tone={ACTION_META[r.action].tone}>{ACTION_META[r.action].label}</Pill>
-                      </td>
-                      <td className="px-3 py-2 space-y-1">
-                        {r.errors.map((e, i) => (
-                          <p key={`e${i}`} className="text-red-600 dark:text-red-400">{e}</p>
-                        ))}
-                        {r.action !== 'error' && r.changes.length > 0 && (
-                          <p className="text-medium-gray">{r.action === 'create' ? 'Sets' : 'Changes'}: {r.changes.join(', ')}</p>
-                        )}
-                        {r.warnings.map((w, i) => (
-                          <p key={`w${i}`} className="flex items-start gap-1 text-amber-600 dark:text-amber-400">
-                            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" aria-hidden="true" />
-                            {w}
-                          </p>
-                        ))}
-                      </td>
-                    </tr>
-                  ))}
-                  {rows.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="px-3 py-6 text-center text-medium-gray">No rows</td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
+            <ImportPreview data={preview} done={!!done} filter={filter} onFilter={setFilter} />
           </div>
         )}
       </Modal>

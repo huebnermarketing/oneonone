@@ -7,6 +7,7 @@ import { getPolicies } from '@/lib/settings'
 import { checkRateLimit } from '@/lib/rate-limit'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import { recoverStaleJobs } from '@/lib/recording-pipeline'
+import { kekaSyncDue, runKekaSync } from '@/lib/keka-sync'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,6 +37,7 @@ export async function POST(request: NextRequest) {
       formRemindersSent: 0,
       recordingJobsResumed: 0,
       recordingJobsFailed: 0,
+      kekaSync: null as null | { created: number; updated: number; deactivated: number; failed: number },
       errors: [] as string[],
     }
 
@@ -55,6 +57,16 @@ export async function POST(request: NextRequest) {
       results.recordingJobsFailed = failed.length
     } catch (err) {
       results.errors.push(`recording job recovery: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    // 5. Daily Keka employee sync (only after an admin has run and confirmed the first one)
+    try {
+      if (await kekaSyncDue()) {
+        const { result } = await runKekaSync({ commit: true, actorEmail: '' })
+        if (result) results.kekaSync = { created: result.created, updated: result.updated, deactivated: result.deactivated, failed: result.failed }
+      }
+    } catch (err) {
+      results.errors.push(`keka sync: ${err instanceof Error ? err.message : String(err)}`)
     }
 
     return NextResponse.json({

@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { notFound, parseBody, withApiAuth } from '@/lib/api'
+import { badRequest, notFound, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { createAuditLog } from '@/lib/audit'
 import { updateProfileSchema } from '@/lib/validation/users'
+import { lockedFieldChanges, lockedMessage } from '@/lib/keka-sync'
 
 export const dynamic = 'force-dynamic'
 
@@ -39,6 +40,12 @@ export const GET = withApiAuth(async (_req: NextRequest, { user }) => {
  */
 export const PATCH = withApiAuth(async (req: NextRequest, { user }) => {
   const body = await parseBody(req, updateProfileSchema)
+
+  const current = await prisma.user.findUnique({ where: { id: user.id }, select: { name: true, title: true, phone: true, country: true, kekaSyncedAt: true } })
+  if (current) {
+    const locked = lockedFieldChanges(current, body)
+    if (locked.length > 0) throw badRequest(lockedMessage(locked))
+  }
 
   const data: Record<string, string | null> = {}
   if (body.name !== undefined) data.name = body.name

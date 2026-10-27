@@ -6,6 +6,8 @@ import {
   mapHeaders,
   parseCsv,
   parseCountry,
+  parseDateOnly,
+  planRecords,
   parseRole,
   parseStatus,
   parseTime,
@@ -19,7 +21,7 @@ import {
 
 const base: Omit<ExistingUser, 'id' | 'email' | 'name'> = {
   role: 'EMPLOYEE', isActive: true, departmentId: null, reportsToId: null, title: null, phone: null,
-  country: null, timeZone: null, workDayStart: null, workDayEnd: null, kekaEmployeeId: null,
+  country: null, timeZone: null, workDayStart: null, workDayEnd: null, kekaEmployeeId: null, employeeNumber: null, joiningDate: null,
 }
 const u = (id: string, email: string, name: string, extra: Partial<ExistingUser> = {}): ExistingUser => ({ ...base, id, email, name, ...extra })
 
@@ -50,6 +52,14 @@ describe('headers and values', () => {
     const { columns, ignored } = mapHeaders(['E-mail', 'First Name', 'Reports To', 'Dept', 'Designation', 'Favourite colour'])
     expect(columns).toEqual(['email', 'first_name', 'manager_email', 'department', 'job_title', null])
     expect(ignored).toEqual(['Favourite colour'])
+  })
+  it('parses joining dates without guessing day/month order', () => {
+    expect(parseDateOnly('2024-12-01')).toBe('2024-12-01')
+    expect(parseDateOnly('2024-12-01T00:00:00Z')).toBe('2024-12-01')
+    expect(parseDateOnly('1 Dec 2024')).toBe('2024-12-01')
+    expect(parseDateOnly('Dec 1, 2024')).toBe('2024-12-01')
+    expect(parseDateOnly('01/12/2024')).toBeNull()
+    expect(parseDateOnly('2024-02-30')).toBeNull()
   })
   it('parses roles, countries, zones, times and status', () => {
     expect(parseRole('Team Lead')).toBe('REPORTER')
@@ -135,6 +145,22 @@ describe('planImport', () => {
     expect(row(plan, 'a@example.com').errors[0]).toBe('Reporting loop: a@example.com → b@example.com → a@example.com')
   })
 
+  it('in warn mode (Keka) a missing manager is dropped with a warning instead of failing the row', () => {
+    const plan = planRecords([{ line: 1, values: { email: 'x@example.com', first_name: 'X', manager_email: 'ghost@example.com' } }], ctx(), { missingManager: 'warn' })
+    const r = row(plan, 'x@example.com')
+    expect(r.action).toBe('create')
+    expect(r.data.managerEmail).toBeUndefined()
+    expect(r.warnings[0]).toMatch(/isn't in the app yet/)
+  })
+
+  it('round-trips employee number and joining date', () => {
+    const existing = [u('e1', 'emp@example.com', 'Emp', { employeeNumber: 'RIQ1', joiningDate: new Date('2024-12-01T00:00:00Z') })]
+    const plan = planImport('email,employee_number,joining_date\nemp@example.com,RIQ1,2024-12-01\n', ctx(existing))
+    expect(row(plan, 'emp@example.com').action).toBe('unchanged')
+    const changed = planImport('email,joining_date\nemp@example.com,2 Dec 2024\n', ctx(existing))
+    expect(row(changed, 'emp@example.com').changes).toEqual(['joining date'])
+  })
+
   it('promotes an existing Employee outside the file who gets a report', () => {
     const plan = planImport('email,first_name,manager_email\nnew@example.com,New,lead@example.com\n', ctx([u('l', 'lead@example.com', 'Lead')]))
     expect(plan.promotions).toEqual([{ email: 'lead@example.com', name: 'Lead' }])
@@ -183,7 +209,7 @@ describe('applyImport', () => {
     const c = ctx([u('l', 'lead@example.com', 'Lead')])
     const plan = planImport('email,first_name,department,manager_email\nnew@example.com,New,QA,lead@example.com\n', c)
     const res = await applyImport(plan, c)
-    expect(res).toEqual({ created: 1, updated: 0, promoted: 1, departmentsCreated: 1, failed: 0 })
+    expect(res).toEqual({ created: 1, updated: 0, promoted: 1, departmentsCreated: 1, deactivated: 0, failed: 0 })
     expect(prismaMock.user.create).toHaveBeenCalledWith({ data: expect.objectContaining({ email: 'new@example.com', name: 'New', departmentId: 'dept-QA' }) })
     expect(prismaMock.user.update).toHaveBeenCalledWith({ where: { id: 'id-new@example.com' }, data: { reportsToId: 'l' } })
     expect(prismaMock.user.update).toHaveBeenCalledWith({ where: { id: 'l' }, data: { role: 'REPORTER' } })

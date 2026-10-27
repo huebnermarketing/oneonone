@@ -14,6 +14,8 @@ export const IMPORT_COLUMNS = [
   'work_start',
   'work_end',
   'keka_employee_id',
+  'employee_number',
+  'joining_date',
   'status',
 ] as const
 export type ImportColumn = (typeof IMPORT_COLUMNS)[number]
@@ -33,6 +35,8 @@ export const COLUMN_HELP: Record<ImportColumn, { required?: string; accepts: str
   work_start: { accepts: '11:00 or 11:00 AM. Blank → from country.' },
   work_end: { accepts: '21:00 or 9:00 PM. Blank → from country.' },
   keka_employee_id: { accepts: 'Keka employee ID (for leave and holidays)' },
+  employee_number: { accepts: 'HR employee number (e.g. RIQ168)' },
+  joining_date: { accepts: 'Date of joining as YYYY-MM-DD (or 1 Dec 2024)' },
   status: { accepts: 'Active or Inactive. Inactive users cannot sign in.' },
 }
 

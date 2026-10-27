@@ -148,6 +148,16 @@ check "export re-import is all unchanged" "0 0 0" "$(python3 -c "import json;s=j
 check "import without email column 400" 400 $(code -b "$ADMIN" -X POST $B/api/admin/import-users -H 'content-type: application/json' -d '{"csv":"first_name\nA"}')
 check "preview writes nothing" 0 "$(code -b "$ADMIN" -X POST $B/api/admin/import-users -H 'content-type: application/json' -d '{"csv":"email,first_name\nsmoke.import@whitelabeliq.com,Smoke"}' >/dev/null; $PSQL -c "select count(*) from \"User\" where email='smoke.import@whitelabeliq.com'")"
 
+echo "## keka sync (server without KEKA_* env)"
+check "employee cannot see keka sync" 403 $(code -b "$ALEX" $B/api/admin/keka-sync)
+check "admin keka status 200" 200 $(code -b "$ADMIN" $B/api/admin/keka-sync)
+check "keka status has configured flag" yes "$(python3 -c "import json;print('yes' if 'configured' in json.load(open('/tmp/body')) else 'no')")"
+if python3 -c "import json,sys;sys.exit(0 if json.load(open('/tmp/body'))['configured'] else 1)"; then
+  echo "  skip keka POST checks (Keka configured on this server)"
+else
+  check "keka sync without config 400" 400 $(code -b "$ADMIN" -X POST $B/api/admin/keka-sync -H 'content-type: application/json' -d '{}')
+fi
+
 # cleanup: restore cancelled fixtures, remove temp rows, reset policies
 $PSQL -c "update \"Meeting\" set status='SCHEDULED' where id in ('$MID','$MID2'); delete from \"Notification\" where link in ('/meetings/$MID','/meetings/$MID2') and type='MEETING_CANCELLED'; update \"User\" set title=null where id='$ALEX_ID'; delete from \"Todo\" where id='$TODO_ID'; delete from \"AuditLog\" where \"entityId\" in ('$MID','$MID2') and action='UPDATE' and details->>'status'='CANCELLED'; delete from \"Session\" where expires < now()+interval '2 days';" >/dev/null
 curl -s -o /dev/null -b "$ADMIN" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"cancelPolicy":"REPORTER_AND_ADMIN","employeeCanViewRecording":false}'

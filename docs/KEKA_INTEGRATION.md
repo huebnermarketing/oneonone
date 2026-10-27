@@ -2,6 +2,31 @@
 
 The app can use **Keka** to respect employee leave and office public holidays (US and India) when finding the next available meeting slot. If Keka is configured, the system will skip days when either the reporter or the employee is on leave or when the date is a public holiday for their office.
 
+## Employee sync (who can use the app)
+
+Keka is the source of truth for employees. Code: `lib/keka-employees.ts` (API client; strips every personal field on arrival), `lib/keka-sync.ts` (mapping + rules, runs through the CSV import planner in `lib/user-import.ts`), `lib/sign-in-gate.ts` (sign-in decisions).
+
+| Trigger | What happens |
+|---|---|
+| Admin → **Sync from Keka** | Preview (new / update / no change / error, departments to create, promotions, skipped) → Apply. The first applied sync switches on the daily sync. |
+| Daily (hourly cron, runs once ~23 h after the last sync) | Same sync, applied automatically. Never runs until an admin has applied the first one. |
+| Sign-in, email not in the app | Looked up in Keka by work email. Active → account created and signed in. Not in Keka / left → refused (`NotInKeka`). Keka down → refused (`KekaUnavailable`). Keka not configured → refused (`NotRegistered`). `INITIAL_ADMIN_EMAILS` always get in. |
+| Sign-in, email in the app | Inactive → refused. Active → signed in; Keka data older than 24 h is refreshed in the background. |
+
+**Field ownership**
+
+| Keka owns (sync overwrites; read-only in the app for synced users) | App owns (sync never touches) |
+|---|---|
+| Name, email, job title, department (`groups` type 2), manager (`reportsTo.email`), phone (work, else mobile), country, Keka ID, employee number, joining date, left the company | Role (auto-promoted to Manager when someone reports to them, never auto-demoted), time zone, working hours, avatar, manual deactivation |
+
+- Leavers (`employmentStatus` ≠ 0 or exit date passed) are deactivated and their sessions revoked. Users linked to Keka but missing from the directory listing are looked up one by one.
+- Users not in Keka (added manually or by CSV) are never deactivated for being absent.
+- A manager who isn't in the app yet is left blank with a warning and linked on a later sync.
+- Non-company emails in Keka are skipped; leavers who were never in the app are ignored.
+- Never pulled: date of birth, gender, marital status, blood group, addresses, personal email, family, salary.
+
+Local testing without real Keka: set `KEKA_API_BASE_URL` / `KEKA_TOKEN_URL` to a mock server (plus dummy `KEKA_COMPANY`, `KEKA_CLIENT_ID`, `KEKA_CLIENT_SECRET`, `KEKA_API_KEY`).
+
 ## What is used from Keka
 
 - **Leave requests** – Approved leave for an employee (by Keka employee ID).
@@ -63,11 +88,6 @@ If **Keka Employee ID** is blank, only public holidays (for their country) are c
 
 Rate limit: 50 requests per minute.
 
-## Adding Keka Employee ID to user edit (admin)
+## Keka Employee ID
 
-To let Super Admins set **Keka Employee ID** when editing a user:
-
-1. Add an optional “Keka Employee ID” field in the User Management edit form.
-2. Save it to `User.kekaEmployeeId` in the PATCH API.
-
-Once set, leave for that user will be considered when checking availability.
+Set automatically by the employee sync. It can still be entered by hand (Admin → edit user) for users who are not synced.
