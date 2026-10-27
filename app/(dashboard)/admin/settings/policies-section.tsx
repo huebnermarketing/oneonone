@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from 'react'
 import { ShieldCheck, Save, Loader2, CheckCircle2, AlertCircle } from 'lucide-react'
+import { cn } from '@/lib/utils'
+import { WEEK_ORDER, WEEKDAY_SHORT } from '@/lib/working-days'
 
 export type CancelPolicy = 'ADMIN_ONLY' | 'REPORTER_AND_ADMIN' | 'ANY_PARTICIPANT'
 
@@ -13,6 +15,7 @@ export interface Policies {
   enableEmailReminders: boolean
   reminderHoursBefore: number
   shortReminderHoursBefore: number
+  workingDays: number[]
 }
 
 const CANCEL_OPTIONS: { value: CancelPolicy; label: string; desc: string }[] = [
@@ -107,6 +110,36 @@ export function PoliciesSection({ initial }: { initial: Policies | null }) {
         {/* Meetings */}
         <div className="space-y-3">
           <h4 className="text-xs font-semibold uppercase tracking-wide text-medium-gray">Meetings</h4>
+          <div className="p-4 rounded-xl border border-off-white dark:border-medium-gray/20 space-y-3">
+            <div>
+              <p className="font-medium text-dark-gray dark:text-white">Working days</p>
+              <p className="text-sm text-medium-gray">1:1s can only be scheduled or moved to these days (in the scheduler&apos;s timezone). Other days are greyed out.</p>
+            </div>
+            <div className="flex flex-wrap gap-2" role="group" aria-label="Working days">
+              {WEEK_ORDER.map((d) => {
+                const on = form.workingDays.includes(d)
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() =>
+                      set('workingDays', on ? form.workingDays.filter((x) => x !== d) : [...form.workingDays, d].sort((a, b) => a - b))
+                    }
+                    className={cn(
+                      'w-14 h-10 rounded-xl text-sm font-medium border transition-colors',
+                      on
+                        ? 'bg-dark-gray text-white border-dark-gray dark:bg-white dark:text-dark-gray dark:border-white'
+                        : 'border-off-white dark:border-medium-gray/20 text-medium-gray hover:text-dark-gray dark:hover:text-white'
+                    )}
+                  >
+                    {WEEKDAY_SHORT[d]}
+                  </button>
+                )
+              })}
+            </div>
+            {form.workingDays.length === 0 && <p className="text-sm text-red-500">Pick at least one day.</p>}
+          </div>
           <Toggle
             checked={form.requireFormBeforeComplete}
             onChange={(v) => set('requireFormBeforeComplete', v)}

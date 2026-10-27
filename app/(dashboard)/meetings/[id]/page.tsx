@@ -14,6 +14,7 @@ import { TranscriptViewer } from './transcript-viewer'
 import { MeetingNotes } from './meeting-notes'
 import { FileAttachments } from './file-attachments'
 import { ProposalActions } from './proposal-actions'
+import { getPolicies } from '@/lib/settings'
 import { CancelMeetingButton } from './cancel-meeting-button'
 import { canCancel, canManageMeeting, canViewMeeting, canViewNotes, canViewRecording } from '@/lib/meeting-access'
 import { MeetingStatusPill, Pill, TodoPriorityPill, TodoStatusPill } from '@/components/ui/pill'
@@ -177,6 +178,7 @@ export default async function MeetingDetailPage({
           isReceiver={!!isProposalReceiver}
           isProposer={!!isProposalProposer}
           otherPartyName={otherPartyName || 'the other party'}
+          workingDays={(await getPolicies()).workingDays}
         />
       )}
 

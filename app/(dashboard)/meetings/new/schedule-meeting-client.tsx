@@ -11,6 +11,7 @@ import { EmployeePicker } from '@/components/forms/employee-picker'
 import { SlotGrid } from '@/components/forms/slot-grid'
 import { useFormat } from '@/components/providers/timezone-provider'
 import { DAY_NAMES } from '@/lib/ui'
+import { DEFAULT_WORKING_DAYS, WEEK_ORDER } from '@/lib/working-days'
 import { DEFAULT_TIMEZONE } from '@/lib/dates'
 import { getNextOccurrenceDate, slotToTimeInTz, type FreeSlot } from '@/lib/slots'
 
@@ -21,6 +22,8 @@ const frequencyOptions: { value: RecurringFrequency; label: string }[] = [
 ]
 
 interface ScheduleMeetingClientProps {
+  /** Admin → Settings → Policies → Working days */
+  workingDays?: number[]
   employees: Array<{ id: string; name: string; email: string }>
   currentUserId: string
   /** Viewer's work hours ("HH:mm") — passed through to the one-time form's fallback grid. */
@@ -30,7 +33,7 @@ interface ScheduleMeetingClientProps {
 
 type ScheduleType = 'one-time' | 'recurring'
 
-export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, workDayEnd }: ScheduleMeetingClientProps) {
+export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, workDayEnd, workingDays = DEFAULT_WORKING_DAYS }: ScheduleMeetingClientProps) {
   const router = useRouter()
   const { toastError } = useToast()
   const f = useFormat()
@@ -43,7 +46,7 @@ export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, 
   const [recurringForm, setRecurringForm] = useState({
     employeeId: '',
     frequency: 'BIWEEKLY' as RecurringFrequency,
-    dayOfWeek: 1,
+    dayOfWeek: workingDays.includes(1) ? 1 : workingDays[0] ?? 1,
     timeOfDay: '',
     meetingType: 'IN_PERSON' as 'IN_PERSON' | 'ZOOM',
     meetingLink: '',
@@ -227,6 +230,7 @@ export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, 
         currentUserId={currentUserId}
         workDayStart={workDayStart}
         workDayEnd={workDayEnd}
+        workingDays={workingDays}
         onBack={() => setScheduleType(null)}
       />
     )
@@ -293,9 +297,9 @@ export function ScheduleMeetingClient({ employees, currentUserId, workDayStart, 
                 onChange={(e) => setRecurringForm({ ...recurringForm, dayOfWeek: parseInt(e.target.value, 10) })}
                 className="py-3 text-base"
               >
-                {DAY_NAMES.map((day, i) => (
-                  <option key={day} value={i}>
-                    {day}
+                {WEEK_ORDER.filter((d) => workingDays.includes(d)).map((d) => (
+                  <option key={d} value={d}>
+                    {DAY_NAMES[d]}
                   </option>
                 ))}
               </Select>

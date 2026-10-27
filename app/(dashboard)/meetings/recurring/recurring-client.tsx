@@ -27,6 +27,7 @@ import { EmployeePicker } from '@/components/forms/employee-picker'
 import { SlotGrid } from '@/components/forms/slot-grid'
 import { useFormat } from '@/components/providers/timezone-provider'
 import { DAY_NAMES } from '@/lib/ui'
+import { DEFAULT_WORKING_DAYS, WEEK_ORDER } from '@/lib/working-days'
 import { DEFAULT_TIMEZONE } from '@/lib/dates'
 import { formatTimeOfDay, getNextOccurrenceDate, slotToTimeInTz, type FreeSlot } from '@/lib/slots'
 
@@ -52,6 +53,8 @@ interface Schedule {
 interface Props {
   employees: Employee[]
   initialSchedules: Schedule[]
+  /** Admin → Settings → Policies → Working days */
+  workingDays?: number[]
 }
 
 const frequencyLabels: Record<RecurringFrequency, string> = {
@@ -64,7 +67,7 @@ const frequencyOptions = (Object.keys(frequencyLabels) as RecurringFrequency[]).
 
 const selectClass = 'bg-off-white dark:bg-dark-gray py-3 focus:ring-orange/50'
 
-export function RecurringSchedulesClient({ employees, initialSchedules }: Props) {
+export function RecurringSchedulesClient({ employees, initialSchedules, workingDays = DEFAULT_WORKING_DAYS }: Props) {
   const router = useRouter()
   const { toastSuccess, toastError } = useToast()
   const confirm = useConfirm()
@@ -87,7 +90,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
   const [formData, setFormData] = useState({
     employeeId: '',
     frequency: 'BIWEEKLY' as RecurringFrequency,
-    dayOfWeek: 1,
+    dayOfWeek: workingDays.includes(1) ? 1 : workingDays[0] ?? 1,
     timeOfDay: '',
   })
   const [recurringAvailabilityLoading, setRecurringAvailabilityLoading] = useState(false)
@@ -249,7 +252,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
         setFormData({
           employeeId: '',
           frequency: 'BIWEEKLY',
-          dayOfWeek: 1,
+          dayOfWeek: workingDays.includes(1) ? 1 : workingDays[0] ?? 1,
           timeOfDay: '',
         })
         toastSuccess('Schedule created')
@@ -497,8 +500,8 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
                 onChange={(e) => setFormData({ ...formData, dayOfWeek: parseInt(e.target.value, 10) })}
                 className={selectClass}
               >
-                {DAY_NAMES.map((day, index) => (
-                  <option key={day} value={index}>{day}</option>
+                {WEEK_ORDER.filter((d) => workingDays.includes(d)).map((d) => (
+                  <option key={d} value={d}>{DAY_NAMES[d]}</option>
                 ))}
               </Select>
             </div>
@@ -717,8 +720,8 @@ export function RecurringSchedulesClient({ employees, initialSchedules }: Props)
                             onChange={(e) => setEditData({ ...editData!, dayOfWeek: parseInt(e.target.value, 10) })}
                             className={selectClass}
                           >
-                            {DAY_NAMES.map((day, index) => (
-                              <option key={day} value={index}>{day}</option>
+                            {WEEK_ORDER.filter((d) => workingDays.includes(d) || d === editData?.dayOfWeek).map((d) => (
+                              <option key={d} value={d}>{DAY_NAMES[d]}</option>
                             ))}
                           </Select>
                         </div>

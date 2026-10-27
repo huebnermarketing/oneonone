@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect, useId } from 'react'
+import { DEFAULT_WORKING_DAYS } from '@/lib/working-days'
 import { useRouter } from 'next/navigation'
 import { Check, Clock, Calendar, Loader2, AlertCircle } from 'lucide-react'
 import { DatePicker } from '@/components/ui/date-picker'
@@ -16,6 +17,8 @@ interface ProposalActionsProps {
   isReceiver: boolean
   isProposer: boolean
   otherPartyName: string
+  /** Admin → Settings → Policies → Working days */
+  workingDays?: number[]
 }
 
 export function ProposalActions({
@@ -25,6 +28,7 @@ export function ProposalActions({
   isReceiver,
   isProposer,
   otherPartyName,
+  workingDays = DEFAULT_WORKING_DAYS,
 }: ProposalActionsProps) {
   const router = useRouter()
   const { toastSuccess, toastError } = useToast()
@@ -139,6 +143,7 @@ export function ProposalActions({
         onChange={setSuggestDate}
         min={minDate}
         placeholder="Pick a date"
+        disabledWeekdays={[0, 1, 2, 3, 4, 5, 6].filter((d) => !workingDays.includes(d))}
       />
 
       {suggestDate && (

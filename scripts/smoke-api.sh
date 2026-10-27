@@ -145,6 +145,15 @@ check "admin is the meeting owner (not $ALEX_MGR)" "nishant@test.com" "$($PSQL -
 check "manager got no notification" 0 "$($PSQL -c "select count(*) from \"Notification\" n join \"User\" u on u.id=n.\"userId\" where u.email='$ALEX_MGR' and n.link='/meetings/$ADM_MID'")"
 $PSQL -c "delete from \"Notification\" where link='/meetings/$ADM_MID'; delete from \"AuditLog\" where \"entityId\"='$ADM_MID'; delete from \"Meeting\" where id='$ADM_MID'" >/dev/null
 
+echo "## working days"
+check "settings has workingDays Mon-Fri" "[1, 2, 3, 4, 5]" "$(code -b "$ADMIN" $B/api/settings >/dev/null; python3 -c "import json;print(json.load(open('/tmp/body'))['workingDays'])")"
+SAT=$(python3 -c "import datetime as d;t=d.datetime.now(d.UTC)+d.timedelta(days=7);t+=d.timedelta(days=(5-t.weekday())%7);print(t.strftime('%Y-%m-%dT06:00:00.000Z'))")
+check "meeting on a Saturday rejected" 400 $(code -b "$ADMIN" -X POST $B/api/meetings -H 'content-type: application/json' -d "{\"employeeId\":\"$ALEX_ID\",\"meetingDate\":\"$SAT\",\"meetingType\":\"IN_PERSON\"}")
+grep -q "Working days are Mon" /tmp/body && echo "  ok   saturday message" || { echo "  FAIL saturday message"; fail=$((fail+1)); }
+check "recurring on Sunday rejected" 400 $(code -b "$REP" -X POST $B/api/recurring-schedules -H 'content-type: application/json' -d "{\"employeeId\":\"$ALEX_ID\",\"frequency\":\"WEEKLY\",\"dayOfWeek\":0,\"timeOfDay\":\"11:00\",\"meetingType\":\"IN_PERSON\"}")
+check "availability on a Saturday explains why" yes "$(code -b "$REP" "$B/api/meetings/availability?employeeId=$ALEX_ID&date=${SAT:0:10}" >/dev/null; grep -q 'not a working day' /tmp/body && echo yes || echo no)"
+check "empty working days rejected" 400 $(code -b "$ADMIN" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"workingDays":[]}')
+
 echo "## user import"
 check "employee cannot download template" 403 $(code -b "$ALEX" "$B/api/admin/import-users?format=template")
 check "admin template 200" 200 $(code -b "$ADMIN" "$B/api/admin/import-users?format=template")
