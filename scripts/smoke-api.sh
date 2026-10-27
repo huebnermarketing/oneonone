@@ -136,6 +136,15 @@ check "admin /admin not redirected" no "$(curl -s -b "$ADMIN" "$B/admin" | grep 
 check "access-denied page renders" 200 $(code -b "$ALEX" $B/access-denied)
 grep -q "have access to that page" /tmp/body && echo "  ok   access-denied copy" || { echo "  FAIL access-denied copy"; fail=$((fail+1)); }
 
+echo "## admin scheduling"
+ALEX_MGR=$($PSQL -c "select m.email from \"User\" u join \"User\" m on m.id=u.\"reportsToId\" where u.email='alex@test.com'")
+SCHED_AT=$(python3 -c "import datetime;print((datetime.datetime.now(datetime.UTC).replace(tzinfo=None)+datetime.timedelta(days=9)).replace(hour=6,minute=0,second=0,microsecond=0).isoformat()+'Z')")
+check "admin proposes 1:1 with someone else's report" 201 $(code -b "$ADMIN" -X POST $B/api/meetings -H 'content-type: application/json' -d "{\"employeeId\":\"$ALEX_ID\",\"meetingDate\":\"$SCHED_AT\",\"meetingType\":\"IN_PERSON\"}")
+ADM_MID=$(python3 -c "import json;print(json.load(open('/tmp/body'))['id'])")
+check "admin is the meeting owner (not $ALEX_MGR)" "nishant@test.com" "$($PSQL -c "select r.email from \"Meeting\" m join \"User\" r on r.id=m.\"reporterId\" where m.id='$ADM_MID'")"
+check "manager got no notification" 0 "$($PSQL -c "select count(*) from \"Notification\" n join \"User\" u on u.id=n.\"userId\" where u.email='$ALEX_MGR' and n.link='/meetings/$ADM_MID'")"
+$PSQL -c "delete from \"Notification\" where link='/meetings/$ADM_MID'; delete from \"AuditLog\" where \"entityId\"='$ADM_MID'; delete from \"Meeting\" where id='$ADM_MID'" >/dev/null
+
 echo "## user import"
 check "employee cannot download template" 403 $(code -b "$ALEX" "$B/api/admin/import-users?format=template")
 check "admin template 200" 200 $(code -b "$ADMIN" "$B/api/admin/import-users?format=template")
