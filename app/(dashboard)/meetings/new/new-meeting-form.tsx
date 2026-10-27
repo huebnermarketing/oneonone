@@ -52,6 +52,8 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, onBack }: 
   const [calendarStatus, setCalendarStatus] = useState<{
     yourCalendarConnected: boolean
     employeeCalendarConnected: boolean
+    /** At least one calendar connected — enough to check both people's free/busy */
+    availabilityReady: boolean
     employeeName: string | null
     message: string
   } | null>(null)
@@ -94,6 +96,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, onBack }: 
         setCalendarStatus({
           yourCalendarConnected: data.yourCalendarConnected ?? false,
           employeeCalendarConnected: data.employeeCalendarConnected ?? false,
+          availabilityReady: data.availabilityReady ?? false,
           employeeName: data.employeeName ?? null,
           message: data.message ?? '',
         })
@@ -252,7 +255,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, onBack }: 
                     </div>
                   ) : calendarStatus ? (
                     <div className="flex items-start gap-3">
-                      {calendarStatus.yourCalendarConnected && calendarStatus.employeeCalendarConnected ? (
+                      {calendarStatus.availabilityReady ? (
                         <Check className="w-5 h-5 text-green-500 shrink-0 mt-0.5" aria-hidden="true" />
                       ) : (
                         <AlertCircle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" aria-hidden="true" />

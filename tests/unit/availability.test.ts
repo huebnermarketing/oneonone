@@ -78,6 +78,6 @@ describe('firstFreeOccurrence', () => {
 describe('calendarsConnected', () => {
   it('reports each side and both', async () => {
     vi.mocked(gcal.isCalendarEnabled).mockImplementation(async (id) => id === 'r')
-    expect(await calendarsConnected('r', 'e')).toEqual({ reporter: true, employee: false, both: false })
+    expect(await calendarsConnected('r', 'e')).toEqual({ reporter: true, employee: false, both: false, either: true })
   })
 })

@@ -4,7 +4,7 @@ import { RecurringFrequency } from '@prisma/client'
 import { prisma } from './prisma'
 import { DEFAULT_WORK_END, DEFAULT_WORK_START } from './timezones'
 import { MEETING_DURATION_MINUTES } from './constants'
-import { computeFreeSlots, isMeetingTimeFree, type Interval } from './free-slots'
+import { busyFromFreeBusy, computeFreeSlots, isMeetingTimeFree, type FreeBusyCalendar, type Interval } from './free-slots'
 import { buildRecurrenceRule } from './recurring-dates'
 import { getGoogleTokens, saveGoogleTokens } from './oauth-tokens'
 
@@ -313,6 +313,59 @@ export async function getFreeBusy(
     .map((b) => ({ start: b.start!, end: b.end! }))
 }
 
+/** Neither person's calendar can be read (nobody connected, or free/busy not visible). */
+export class CalendarUnavailableError extends Error {
+  constructor(
+    public reason: 'none_connected' | 'not_visible',
+    message: string
+  ) {
+    super(message)
+    this.name = 'CalendarUnavailableError'
+  }
+}
+
+/**
+ * Busy times of BOTH people, read through ONE connected calendar: the reporter's if connected, else
+ * the employee's. The other person's free/busy is queried by email — inside one Google Workspace,
+ * colleagues' free/busy is visible by default — so only one of the two has to have signed in.
+ * If Google can't show the other calendar (sharing turned off), falls back to that person's own
+ * connection when they have one; otherwise throws CalendarUnavailableError('not_visible').
+ */
+export async function getPairBusy(reporterId: string, employeeId: string, timeMin: Date, timeMax: Date): Promise<Interval[]> {
+  const [people, reporterConnected, employeeConnected] = await Promise.all([
+    prisma.user.findMany({ where: { id: { in: [reporterId, employeeId] } }, select: { id: true, email: true } }),
+    isCalendarEnabled(reporterId),
+    isCalendarEnabled(employeeId),
+  ])
+  if (!reporterConnected && !employeeConnected) {
+    throw new CalendarUnavailableError('none_connected', 'Neither Google Calendar is connected')
+  }
+  const viewerId = reporterConnected ? reporterId : employeeId
+  const otherId = viewerId === reporterId ? employeeId : reporterId
+  const otherConnected = viewerId === reporterId ? employeeConnected : reporterConnected
+  const otherEmail = people.find((p) => p.id === otherId)?.email
+
+  const calendar = google.calendar({ version: 'v3', auth: await getAuthenticatedClient(viewerId) })
+  const response = await calendar.freebusy.query({
+    requestBody: {
+      timeMin: timeMin.toISOString(),
+      timeMax: timeMax.toISOString(),
+      timeZone: 'UTC',
+      items: [{ id: 'primary' }, ...(otherEmail ? [{ id: otherEmail }] : [])],
+    },
+  })
+  const calendars = response.data.calendars as Record<string, FreeBusyCalendar> | undefined
+  const viewerBusy = busyFromFreeBusy(calendars, 'primary') ?? []
+  let otherBusy = otherEmail ? busyFromFreeBusy(calendars, otherEmail) : null
+  if (otherBusy === null && otherConnected) {
+    otherBusy = (await getFreeBusy(otherId, timeMin, timeMax)).map((b) => ({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() }))
+  }
+  if (otherBusy === null) {
+    throw new CalendarUnavailableError('not_visible', "The other person's free/busy isn't visible and they haven't connected their calendar")
+  }
+  return [...viewerBusy, ...otherBusy]
+}
+
 interface FreeSlot {
   start: string
   end: string
@@ -415,12 +468,7 @@ export async function getMutualFreeSlots(
     return []
   }
 
-  const [reporterBusy, employeeBusy] = await Promise.all([
-    getFreeBusy(reporterId, queryStart, queryEnd),
-    getFreeBusy(employeeId, queryStart, queryEnd),
-  ])
-
-  const busy: Interval[] = [...reporterBusy, ...employeeBusy].map((b) => ({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() }))
+  const busy = await getPairBusy(reporterId, employeeId, queryStart, queryEnd)
 
   return computeFreeSlots({
     window: { start: windowStart.getTime(), end: windowEnd.getTime() },
@@ -469,10 +517,6 @@ export async function isDateTimeFreeForBoth(
 ): Promise<boolean> {
   const start = dateTime.getTime()
   const end = start + durationMinutes * 60_000
-  const [reporterBusy, employeeBusy] = await Promise.all([
-    getFreeBusy(reporterId, new Date(start), new Date(end)),
-    getFreeBusy(employeeId, new Date(start), new Date(end)),
-  ])
-  const busy: Interval[] = [...reporterBusy, ...employeeBusy].map((b) => ({ start: new Date(b.start).getTime(), end: new Date(b.end).getTime() }))
+  const busy = await getPairBusy(reporterId, employeeId, new Date(start), new Date(end))
   return isMeetingTimeFree(start, end - start, { start, end }, busy, bothInWorkHours(options))
 }
