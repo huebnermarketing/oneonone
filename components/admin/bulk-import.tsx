@@ -36,7 +36,7 @@ function downloadText(text: string, filename: string) {
  * Admin → Bulk Import. Upload → server preview (per-row New / Update / No change / Error) → confirm.
  * The server re-plans on confirm, imports valid rows and returns an error report for the rest.
  */
-export function BulkImport() {
+export function BulkImport({ trigger }: { /** Custom opener (e.g. a menu item); defaults to the "Bulk Import" button */ trigger?: (open: () => void) => React.ReactNode } = {}) {
   const router = useRouter()
   const { toastError } = useToast()
   const [isOpen, setIsOpen] = useState(false)
@@ -134,14 +134,18 @@ export function BulkImport() {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={() => setIsOpen(true)}
-        className="flex items-center gap-2 px-4 py-2 bg-off-white dark:bg-charcoal text-dark-gray dark:text-white rounded-xl font-medium hover:bg-light-gray/20 dark:hover:bg-dark-gray transition-colors"
-      >
-        <Upload className="w-4 h-4" aria-hidden="true" />
-        Bulk Import
-      </button>
+      {trigger ? (
+        trigger(() => setIsOpen(true))
+      ) : (
+        <button
+          type="button"
+          onClick={() => setIsOpen(true)}
+          className="flex items-center gap-2 px-4 py-2 bg-off-white dark:bg-charcoal text-dark-gray dark:text-white rounded-xl font-medium hover:bg-light-gray/20 dark:hover:bg-dark-gray transition-colors"
+        >
+          <Upload className="w-4 h-4" aria-hidden="true" />
+          Bulk Import
+        </button>
+      )}
 
       <Modal
         open={isOpen}

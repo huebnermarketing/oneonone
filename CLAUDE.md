@@ -45,7 +45,7 @@ Local login without Google: `POST /api/auth/test-login {"role":"SUPER_ADMIN"|"RE
 - **Keka employee sync / sign-in**: `lib/keka-sync.ts` (+ `lib/keka-employees.ts` client, `lib/sign-in-gate.ts`). Keka-owned fields (`KEKA_OWNED_FIELDS`) are read-only for synced users — routes that edit users call `lockedFieldChanges()`. Sign-in: in the app → allowed (inactive blocked); not in the app → created from Keka if active, else refused; `INITIAL_ADMIN_EMAILS` always allowed. Never store personal Keka fields; extend `pickEmployee` only with work fields.
 - **Availability**: `lib/availability.ts` (`loadPairProfiles`, `freeSlotsForDay`, `firstFreeOccurrence`, `calendarsConnected`, `workingHoursLabel`) — don't recompute free slots in a route.
 - Prefer static imports of `@/lib/google-calendar`; the `await import()` pattern in routes is legacy.
-- Constants: `lib/constants.ts` (`DEFAULT_TIMEZONE`, `MEETING_DURATION_MINUTES`, `ALLOWED_EMAIL_DOMAIN`, `APP_NAME`). `user-management.tsx` still carries the email-domain literal — next cleanup target.
+- Constants: `lib/constants.ts` (`DEFAULT_TIMEZONE`, `MEETING_DURATION_MINUTES`, `ALLOWED_EMAIL_DOMAIN`, `APP_NAME`). The admin user form gets the domain from the server (`emailDomain` prop).
 
 ## Env (local minimum)
 
