@@ -46,6 +46,13 @@ export const canManageMeeting = (actor: ActorRef, m: MeetingRef) => isAdmin(acto
 /** Fill in the employee check-in form. Admin is deliberately excluded: the form is the employee's voice. */
 export const canFillForm = (actor: ActorRef, m: MeetingRef) => isEmployeeOf(actor, m)
 
+/**
+ * Correct the employee's submitted check-in answers (history is kept). Meeting owner (who scheduled
+ * it) or admin; only once submitted, and not on a cancelled meeting.
+ */
+export const canEditFormAnswers = (actor: ActorRef, m: MeetingRef & { formSubmittedAt: Date | null; status: string }) =>
+  (isAdmin(actor) || isOwner(actor, m)) && !!m.formSubmittedAt && m.status !== 'CANCELLED'
+
 export const canAccept = (actor: ActorRef, m: MeetingRef) => isAdmin(actor) || isReceiver(actor, m)
 export const canSuggest = (actor: ActorRef, m: MeetingRef) => isAdmin(actor) || isParticipant(actor, m)
 

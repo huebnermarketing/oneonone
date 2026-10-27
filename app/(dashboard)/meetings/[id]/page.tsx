@@ -20,7 +20,9 @@ import { getPolicies } from '@/lib/settings'
 import { CancelMeetingButton } from './cancel-meeting-button'
 import { RescheduleBanner, RescheduleButton } from './reschedule'
 import { rescheduleRole } from '@/lib/reschedule'
-import { canCancel, canManageMeeting, canViewMeeting, canViewNotes, canViewRecording } from '@/lib/meeting-access'
+import { canCancel, canEditFormAnswers, canManageMeeting, canViewMeeting, canViewNotes, canViewRecording } from '@/lib/meeting-access'
+import { FORM_FIELDS } from '@/lib/form-fields'
+import { FormAnswerHistory, type FormRevisionView } from './form-answer-history'
 import { MeetingStatusPill, Pill, TodoPriorityPill, TodoStatusPill } from '@/components/ui/pill'
 
 export default async function MeetingDetailPage({
@@ -105,18 +107,27 @@ export default async function MeetingDetailPage({
   const tz = user.timeZone ?? DEFAULT_TIMEZONE
   const meetingDateLabel = `${formatMeetingLong(meetingDate, tz)} ${timeZoneAbbrev(meetingDate, tz)}`
 
-  const formSections = [
-    { title: 'Check-In: Personal Best', content: meeting.checkInPersonal },
-    { title: 'Check-In: Professional Best', content: meeting.checkInProfessional },
-    { title: 'Priority Goal: Professional Growth', content: meeting.priorityGoalProfessional },
-    { title: 'Priority Goal: Agency Growth', content: meeting.priorityGoalAgency },
-    { title: 'Progress Report', content: meeting.progressReport },
-    { title: 'Good News', content: meeting.goodNews },
-    { title: 'Support Needed', content: meeting.supportNeeded },
-    { title: 'Priority Discussions', content: meeting.priorityDiscussions },
-    { title: 'Heads Up', content: meeting.headsUp },
-    { title: 'Anything Else', content: meeting.anythingElse },
-  ].filter(section => section.content)
+  const formSections = FORM_FIELDS.map((f) => ({ title: f.title, content: meeting[f.key] })).filter((section) => section.content)
+
+  // Answer history (employee submits + owner/admin edits) once the answers are visible to this viewer
+  const showFormResponses = !!hasFormData && (isEmployee || formSubmitted)
+  const mayEditAnswers = canEditFormAnswers(user, meeting)
+  const formRevisions: FormRevisionView[] = showFormResponses
+    ? (
+        await prisma.meetingFormRevision.findMany({
+          where: { meetingId: meeting.id },
+          orderBy: { createdAt: 'desc' },
+          include: { editedBy: { select: { name: true } } },
+        })
+      ).map((rev) => ({
+        id: rev.id,
+        kind: rev.kind,
+        at: rev.createdAt.toISOString(),
+        by: rev.editedBy?.name ?? 'Former user',
+        changes: rev.changes as unknown as FormRevisionView['changes'],
+      }))
+    : []
+  const lastEdit = formRevisions.find((rev) => rev.kind === 'EDITED')
 
   return (
     <div className="w-full max-w-4xl mx-auto min-w-0 space-y-8">
@@ -372,15 +383,26 @@ export default async function MeetingDetailPage({
 
       {/* Form Responses – visible to the employee always (including drafts),
            but only shown to reporters / super admins after official submission. */}
-      {hasFormData && (isEmployee || formSubmitted) && (
+      {showFormResponses && (
         <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-dark-gray dark:text-white flex items-center gap-2">
-            <FileText className="w-5 h-5" />
-            Form Responses
-            {isEmployee && !formSubmitted && (
-              <Pill tone="amber" className="ml-2">Draft</Pill>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-xl font-semibold text-dark-gray dark:text-white flex items-center gap-2">
+              <FileText className="w-5 h-5" />
+              Form Responses
+              {isEmployee && !formSubmitted && (
+                <Pill tone="amber" className="ml-2">Draft</Pill>
+              )}
+              {lastEdit && <Pill tone="purple" className="ml-1">Edited by {lastEdit.by}</Pill>}
+            </h2>
+            {mayEditAnswers && (
+              <Link
+                href={`/meetings/${meeting.id}/form`}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-light-gray/60 dark:border-medium-gray/40 bg-white dark:bg-charcoal text-sm font-medium text-dark-gray dark:text-white hover:bg-off-white dark:hover:bg-dark-gray transition-colors"
+              >
+                Edit answers
+              </Link>
             )}
-          </h2>
+          </div>
           <div className="space-y-4">
             {formSections.map((section, index) => (
               <div
@@ -392,6 +414,7 @@ export default async function MeetingDetailPage({
               </div>
             ))}
           </div>
+          {formRevisions.length > 0 && <FormAnswerHistory revisions={formRevisions} />}
         </div>
       )}
 

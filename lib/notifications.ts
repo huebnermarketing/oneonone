@@ -365,3 +365,14 @@ export async function notifyRescheduleDeclined(recipientId: string, actorName: s
     link: `/meetings/${meetingId}`,
   })
 }
+
+/** The meeting owner or an admin changed the employee's submitted answers. */
+export async function notifyFormEdited(employeeId: string, editorName: string, fieldCount: number, meetingId: string) {
+  return createNotification({
+    userId: employeeId,
+    type: 'FORM_EDITED',
+    title: 'Form Answers Updated',
+    message: `${editorName} updated ${fieldCount === 1 ? 'one of your answers' : `${fieldCount} of your answers`} in the one-on-one form. See the answer history on the meeting.`,
+    link: `/meetings/${meetingId}`,
+  })
+}
