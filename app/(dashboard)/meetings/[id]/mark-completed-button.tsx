@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import { CheckCircle } from 'lucide-react'
 import { useToast } from '@/components/ui/toast'
 
-const FORM_REQUIRED_MESSAGE = 'Please submit the required meeting form before marking this meeting as completed.'
+import { FORM_REQUIRED_MESSAGE } from './messages'
 
 export function MarkCompletedButton({
   meetingId,
@@ -46,23 +46,17 @@ export function MarkCompletedButton({
     }
   }
 
+  // The "form required" hint is shown by the page under the whole action row (FORM_REQUIRED_MESSAGE)
   return (
-    <div className="space-y-2">
       <button
         type="button"
         onClick={handleMarkCompleted}
         disabled={loading || blockedByForm}
         title={blockedByForm ? FORM_REQUIRED_MESSAGE : undefined}
-        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-green-500 text-white font-medium hover:bg-green-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+        className="inline-flex items-center gap-2 px-4 py-2 min-h-[40px] rounded-xl bg-green-500 text-white font-medium hover:bg-green-600 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
       >
         <CheckCircle className="w-5 h-5" />
         {loading ? 'Updating...' : 'Mark meeting as completed'}
       </button>
-      {blockedByForm && (
-        <p className="text-sm text-amber-600 dark:text-amber-400">
-          {FORM_REQUIRED_MESSAGE}
-        </p>
-      )}
-    </div>
   )
 }

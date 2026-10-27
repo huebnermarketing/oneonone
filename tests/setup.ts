@@ -18,6 +18,7 @@ vi.mock('@/lib/email', () => {
     'sendMeetingScheduledEmail', 'sendTodoAssignedEmail', 'sendTodoDueReminderEmail', 'sendFormSubmittedEmail',
     'sendMeetingProposalEmail', 'sendMeetingAcceptedEmail', 'sendProposalConfirmationEmail', 'sendMeetingReminderEmail',
     'sendFormReminderEmail', 'sendMeetingSuggestionEmail', 'sendRecurringScheduleUpdatedEmail', 'sendMeetingCancelledEmail',
+    'sendRescheduleRequestEmail', 'sendRescheduleAcceptedEmail', 'sendRescheduleDeclinedEmail',
   ]
   return Object.fromEntries(senders.map((name) => [name, vi.fn(async () => undefined)]))
 })
@@ -26,6 +27,9 @@ vi.mock('@/lib/google-calendar', () => ({
   createCalendarEvent: vi.fn(async () => undefined),
   createRecurringCalendarEvent: vi.fn(async () => undefined),
   updateCalendarEvent: vi.fn(async () => undefined),
+  moveCalendarOccurrence: vi.fn(async () => true),
+  cancelCalendarOccurrence: vi.fn(async () => true),
+  setCalendarEventDuration: vi.fn(async () => undefined),
   isCalendarEnabled: vi.fn(async () => false),
 }))
 

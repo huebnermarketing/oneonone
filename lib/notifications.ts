@@ -329,3 +329,39 @@ export async function notifyMeetingSuggested(
     link: `/meetings/${meetingId}`,
   })
 }
+
+// ── Reschedule of a scheduled meeting ───────────────────────────────
+
+export async function notifyRescheduleRequested(recipientId: string, requesterName: string, newDate: Date, meetingId: string) {
+  return createNotification({
+    userId: recipientId,
+    type: 'RESCHEDULE_REQUESTED',
+    title: 'Reschedule Request',
+    message: `${requesterName} asked to move your one-on-one to ${await whenFor(recipientId, newDate)}. Accept or decline.`,
+    link: `/meetings/${meetingId}`,
+  })
+}
+
+export async function notifyRescheduleAccepted(recipientId: string, acceptorName: string, newDate: Date, meetingId: string) {
+  return createNotification({
+    userId: recipientId,
+    type: 'RESCHEDULE_ACCEPTED',
+    title: 'Meeting Rescheduled',
+    message: `${acceptorName} accepted. Your one-on-one is now ${await whenFor(recipientId, newDate)}.`,
+    link: `/meetings/${meetingId}`,
+  })
+}
+
+/** `withdrawn`: the requester took the request back (tell the other side); otherwise it was declined (tell the requester). */
+export async function notifyRescheduleDeclined(recipientId: string, actorName: string, keptDate: Date, meetingId: string, withdrawn: boolean) {
+  const when = await whenFor(recipientId, keptDate)
+  return createNotification({
+    userId: recipientId,
+    type: 'RESCHEDULE_DECLINED',
+    title: withdrawn ? 'Reschedule Withdrawn' : 'Reschedule Declined',
+    message: withdrawn
+      ? `${actorName} withdrew the reschedule request. The meeting stays at ${when}.`
+      : `${actorName} declined the new time. The meeting stays at ${when}.`,
+    link: `/meetings/${meetingId}`,
+  })
+}
