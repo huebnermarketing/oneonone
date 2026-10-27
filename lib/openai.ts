@@ -103,7 +103,7 @@ async function resolveFfmpegPath(): Promise<string | null> {
   return null
 }
 
-async function runFfmpeg(args: string[], timeoutMs = 180_000): Promise<void> {
+export async function runFfmpeg(args: string[], timeoutMs = 180_000): Promise<void> {
   const ffmpegPath = await resolveFfmpegPath()
   if (!ffmpegPath) {
     throw new Error('ffmpeg not available')

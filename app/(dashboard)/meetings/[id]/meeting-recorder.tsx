@@ -14,6 +14,8 @@ import {
   Globe,
   CloudUpload,
   Sparkles,
+  Plus,
+  Trash2,
 } from 'lucide-react'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
@@ -72,6 +74,19 @@ const LANGUAGE_OPTIONS = [
 ]
 
 const DEFAULT_MAX_MINS = 25
+/** "Add another part" needs at least this much of the limit left */
+const MIN_PART_SECONDS = 5
+
+/** One finished part (Stop → part saved). Chunk range [start, end) of the shared upload session. */
+interface RecordedPart {
+  id: number
+  start: number
+  end: number
+  seconds: number
+  size: number
+  /** Object URL for the preview player (revoked on delete / discard / unmount) */
+  url: string
+}
 const CHUNK_UPLOAD_INTERVAL = 30_000 // Upload chunks every 30 seconds
 
 // ---------------------------------------------------------------------------
@@ -95,9 +110,10 @@ export function MeetingRecorder({
   const [isRecording, setIsRecording] = useState(false)
   const [isPaused, setIsPaused] = useState(false)
   const [recordingTime, setRecordingTime] = useState(0)
-  const [audioBlob, setAudioBlob] = useState<Blob | null>(null)
-  /** Object URL for the preview player — created per blob and revoked on change/unmount */
-  const [audioUrl, setAudioUrl] = useState<string | null>(null)
+  /** Finished parts, in recording order (Record → Stop → Add another part → … → Submit) */
+  const [parts, setParts] = useState<RecordedPart[]>([])
+  /** Last part whose final upload failed — must be retried or dropped before submitting */
+  const [unsavedPart, setUnsavedPart] = useState<{ blob: Blob; seconds: number } | null>(null)
   const [selectedLanguage, setSelectedLanguage] = useState('auto')
   // '' = system default microphone (never remembered between visits)
   const [selectedMic, setSelectedMic] = useState('')
@@ -135,6 +151,10 @@ export function MeetingRecorder({
   const chunkSequenceRef = useRef(0)
   const lastUploadedIndexRef = useRef(0)
   const isUploadingChunkRef = useRef(false)
+  /** First chunk sequence number of the part being recorded */
+  const partStartRef = useRef(0)
+  const partIdRef = useRef(0)
+  const partsRef = useRef<RecordedPart[]>([])
   /** Latest stopRecording — lets the auto-stop effect run without depending on the function identity */
   const stopRecordingRef = useRef<() => void>(() => {})
 
@@ -192,16 +212,15 @@ export function MeetingRecorder({
     }
   }, [currentStatus, pollStatus])
 
-  // Preview URL lifecycle: one object URL per blob, revoked when the blob changes or we unmount
+  // Part preview URLs are revoked on delete/discard; anything left goes on unmount
   useEffect(() => {
-    if (!audioBlob) {
-      setAudioUrl(null)
-      return
-    }
-    const url = URL.createObjectURL(audioBlob)
-    setAudioUrl(url)
-    return () => URL.revokeObjectURL(url)
-  }, [audioBlob])
+    partsRef.current = parts
+  }, [parts])
+  useEffect(() => () => partsRef.current.forEach((p) => URL.revokeObjectURL(p.url)), [])
+
+  // The max length (Admin → Settings) covers all parts together
+  const usedSeconds = parts.reduce((n, p) => n + p.seconds, 0)
+  const remainingSeconds = MAX_DURATION - usedSeconds
 
   // cleanup on unmount
   useEffect(() => {
@@ -242,10 +261,10 @@ export function MeetingRecorder({
     }
   }, [micBlocked])
 
-  // auto-stop at max duration
+  // auto-stop when all parts together reach the max duration
   useEffect(() => {
-    if (recordingTime >= MAX_DURATION && isRecording) stopRecordingRef.current()
-  }, [recordingTime, isRecording, MAX_DURATION])
+    if (usedSeconds + recordingTime >= MAX_DURATION && isRecording) stopRecordingRef.current()
+  }, [recordingTime, usedSeconds, isRecording, MAX_DURATION])
 
   // --- chunk upload logic ---
   const uploadPendingChunks = useCallback(async (): Promise<boolean> => {
@@ -350,31 +369,32 @@ export function MeetingRecorder({
       }
       streamRef.current = stream
 
-      // 2. Start server session (creates DB record, returns S3 prefix)
-      const sessionRes = await fetch(`/api/meetings/${meetingId}/recording/presign`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ contentType: 'audio/webm' }),
-      })
-      if (!sessionRes.ok) {
-        const body = await sessionRes.json().catch(() => ({}))
-        stream.getTracks().forEach((t) => t.stop())
-        throw new Error(body.detail || body.error || 'Failed to start recording session')
+      // 2. Start the server session once (creates DB record, returns S3 prefix); later parts reuse it
+      //    and keep counting chunk sequence numbers, so each part is a range of the same session
+      if (!sessionKeyRef.current) {
+        const sessionRes = await fetch(`/api/meetings/${meetingId}/recording/presign`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ contentType: 'audio/webm' }),
+        })
+        if (!sessionRes.ok) {
+          const body = await sessionRes.json().catch(() => ({}))
+          stream.getTracks().forEach((t) => t.stop())
+          throw new Error(body.detail || body.error || 'Failed to start recording session')
+        }
+        const { sessionKey } = await sessionRes.json()
+        sessionKeyRef.current = sessionKey
+        chunkSequenceRef.current = 0
+        setChunksUploaded(0)
       }
-      const { sessionKey } = await sessionRes.json()
-      sessionKeyRef.current = sessionKey
-      chunkSequenceRef.current = 0
+      partStartRef.current = chunkSequenceRef.current
       lastUploadedIndexRef.current = 0
-      setChunksUploaded(0)
 
-      // 3. Start MediaRecorder
+      // 3. Start MediaRecorder (a new WebM stream per part)
       chunksRef.current = []
       const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' })
       recorder.ondataavailable = (e) => {
         if (e.data.size > 0) chunksRef.current.push(e.data)
-      }
-      recorder.onstop = () => {
-        setAudioBlob(new Blob(chunksRef.current, { type: 'audio/webm' }))
       }
       mediaRecorderRef.current = recorder
       recorder.start(5000) // fire ondataavailable every 5 seconds
@@ -406,28 +426,78 @@ export function MeetingRecorder({
     setIsPaused(!isPaused)
   }
 
-  const stopRecording = async () => {
-    if (!mediaRecorderRef.current || !isRecording) return
+  /** Upload the part's last chunks (with retries) and add it to the list; keeps it as "unsaved" if that fails. */
+  const savePart = async (blob: Blob, seconds: number) => {
+    let ok = false
+    for (let attempt = 0; attempt < 3 && !ok; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 1000 * attempt))
+      ok = await uploadPendingChunks()
+    }
+    if (!ok) {
+      setUnsavedPart({ blob, seconds })
+      return
+    }
+    setUnsavedPart(null)
+    const start = partStartRef.current
+    const end = chunkSequenceRef.current
+    if (end <= start) {
+      toastError('Nothing was recorded in that part.')
+      return
+    }
+    setParts((prev) => [...prev, { id: ++partIdRef.current, start, end, seconds, size: blob.size, url: URL.createObjectURL(blob) }])
+    // the next part starts after this one, even if this part is deleted later
+    partStartRef.current = end
+  }
 
-    // Stop recorder & mic
-    mediaRecorderRef.current.stop()
+  const stopRecording = async () => {
+    const recorder = mediaRecorderRef.current
+    if (!recorder || !isRecording) return
+    const seconds = recordingTime
+
+    // Stop recorder & mic; the final dataavailable fires before onstop
+    const blob = await new Promise<Blob>((resolve) => {
+      recorder.onstop = () => resolve(new Blob(chunksRef.current, { type: 'audio/webm' }))
+      recorder.stop()
+    })
     if (timerRef.current) clearInterval(timerRef.current)
     if (streamRef.current) streamRef.current.getTracks().forEach((t) => t.stop())
     if (chunkUploadIntervalRef.current) clearInterval(chunkUploadIntervalRef.current)
     setIsRecording(false)
     setIsPaused(false)
+    setRecordingTime(0)
 
-    // Upload any remaining chunks
-    // Small delay to let final ondataavailable fire
-    await new Promise((r) => setTimeout(r, 500))
-    await uploadPendingChunks()
+    await savePart(blob, seconds)
+  }
+
+  const deletePart = async (part: RecordedPart, index: number) => {
+    const ok = await confirm(`Delete part ${index + 1} (${fmt(part.seconds)})? It won't be included in the transcript.`, {
+      title: 'Delete this part?',
+      confirmText: 'Delete part',
+      cancelText: 'Keep it',
+      variant: 'danger',
+    })
+    if (!ok) return
+    URL.revokeObjectURL(part.url)
+    setParts((prev) => prev.filter((p) => p.id !== part.id))
   }
   useEffect(() => {
     stopRecordingRef.current = stopRecording
   })
 
   const discardRecording = async () => {
-    setAudioBlob(null)
+    if (parts.length > 1) {
+      const ok = await confirm(`Discard all ${parts.length} parts? This cannot be undone.`, {
+        title: 'Discard recording?',
+        confirmText: 'Discard all',
+        cancelText: 'Keep',
+        variant: 'danger',
+      })
+      if (!ok) return
+    }
+    parts.forEach((p) => URL.revokeObjectURL(p.url))
+    setParts([])
+    setUnsavedPart(null)
+    partStartRef.current = 0
     setRecordingTime(0)
     chunksRef.current = []
     sessionKeyRef.current = null
@@ -446,6 +516,7 @@ export function MeetingRecorder({
 
   // --- finalize: tell server to combine chunks + transcribe ---
   const submitRecording = async () => {
+    if (unsavedPart || parts.length === 0) return
     setIsSubmitting(true)
     setSubmitError(null)
     setCurrentStatus('UPLOADING')
@@ -464,8 +535,9 @@ export function MeetingRecorder({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           totalChunks: chunkSequenceRef.current,
-          duration: recordingTime,
+          duration: usedSeconds,
           language: selectedLanguage !== 'auto' ? selectedLanguage : undefined,
+          parts: parts.map(({ start, end }) => ({ start, end })),
         }),
       })
 
@@ -475,7 +547,8 @@ export function MeetingRecorder({
       }
 
       // Clear client state, start polling
-      setAudioBlob(null)
+      parts.forEach((p) => URL.revokeObjectURL(p.url))
+      setParts([])
       setRecordingTime(0)
       setCurrentStatus('TRANSCRIBING')
     } catch (err) {
@@ -742,12 +815,14 @@ export function MeetingRecorder({
           <Mic className="w-5 h-5" />
           Meeting Recording
         </h3>
-        {!isRecording && !audioBlob && (
-          <span className="text-xs text-medium-gray">Max {maxRecordingMins} minutes</span>
+        {!isRecording && (
+          <span className="text-xs text-medium-gray">
+            {parts.length > 0 ? `${fmt(usedSeconds)} of ${maxRecordingMins} min used` : `Max ${maxRecordingMins} minutes in total`}
+          </span>
         )}
       </div>
 
-      {meetingStatus === 'PROPOSED' && !isRecording && !audioBlob && !hasExistingRecording && (
+      {meetingStatus === 'PROPOSED' && !isRecording && parts.length === 0 && !hasExistingRecording && (
         <div className="mb-4 p-3 rounded-xl bg-blue-500/10 border border-blue-500/20 flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-blue-500 flex-shrink-0" />
           <p className="text-sm text-blue-600 dark:text-blue-400">
@@ -772,11 +847,12 @@ export function MeetingRecorder({
                   isPaused ? 'bg-yellow-500' : 'bg-red-500 animate-pulse'
                 }`}
               />
+              {parts.length > 0 && <p className="text-xs font-medium text-medium-gray mb-1">Part {parts.length + 1}</p>}
               <p className="text-3xl font-mono font-bold text-dark-gray dark:text-white">
                 {fmt(recordingTime)}
               </p>
               <p className="text-xs text-medium-gray mt-1">
-                {fmt(MAX_DURATION - recordingTime)} remaining
+                {fmt(Math.max(0, remainingSeconds - recordingTime))} remaining{parts.length > 0 ? ' in total' : ''}
               </p>
             </div>
           </div>
@@ -785,7 +861,7 @@ export function MeetingRecorder({
           <div className="w-full h-2 bg-off-white dark:bg-charcoal rounded-full overflow-hidden">
             <div
               className="h-full bg-gradient-to-r from-red-500 to-orange transition-all duration-1000"
-              style={{ width: `${(recordingTime / MAX_DURATION) * 100}%` }}
+              style={{ width: `${((usedSeconds + recordingTime) / MAX_DURATION) * 100}%` }}
             />
           </div>
 
@@ -841,42 +917,73 @@ export function MeetingRecorder({
         </div>
       )}
 
-      {/* ---- Preview recorded audio ---- */}
-      {!isRecording && audioBlob && (
+      {/* ---- Parts recorded so far: review, add another part, submit ---- */}
+      {!isRecording && (parts.length > 0 || unsavedPart) && (
         <div className="space-y-4">
-          <div className="flex items-center justify-center">
-            <div className="text-center">
-              <CheckCircle2 className="w-12 h-12 text-green-500 mx-auto mb-2" />
-              <p className="text-lg font-medium text-dark-gray dark:text-white">
-                Recording Complete
-              </p>
-              <p className="text-sm text-medium-gray">
-                Duration: {fmt(recordingTime)} &middot;{' '}
-                {(audioBlob.size / 1024 / 1024).toFixed(1)} MB
-                {chunksUploaded > 0 && (
-                  <span className="text-green-500">
-                    {' '}
-                    &middot; {plural(chunksUploaded, 'chunk')} already on S3
-                  </span>
-                )}
-              </p>
-            </div>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <p className="font-medium text-dark-gray dark:text-white">
+              {plural(parts.length, 'part')} recorded <span className="text-medium-gray font-normal">· {fmt(usedSeconds)} total</span>
+            </p>
+            <p className="text-xs text-medium-gray">{fmt(Math.max(0, remainingSeconds))} left of {maxRecordingMins} min</p>
           </div>
 
-          {audioUrl && <audio controls src={audioUrl} className="w-full" aria-label="Recorded audio preview" />}
+          {parts.length > 0 && (
+            <ol className="space-y-2" aria-label="Recorded parts">
+              {parts.map((p, i) => (
+                <li key={p.id} className="flex items-center gap-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white/40 dark:bg-dark-gray/40 px-3 py-2">
+                  <span className="text-sm font-medium text-dark-gray dark:text-white whitespace-nowrap">Part {i + 1}</span>
+                  <span className="text-sm tabular-nums text-medium-gray">{fmt(p.seconds)}</span>
+                  <audio controls src={p.url} preload="none" className="flex-1 min-w-0 h-9" aria-label={`Part ${i + 1} preview`} />
+                  <button
+                    type="button"
+                    onClick={() => deletePart(p, i)}
+                    disabled={isSubmitting}
+                    aria-label={`Delete part ${i + 1}`}
+                    className="p-2 rounded-lg text-medium-gray hover:text-red-500 hover:bg-red-500/10 transition-colors disabled:opacity-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
 
-          <div className="flex items-center justify-center gap-3">
+          {unsavedPart && (
+            <div className="rounded-xl bg-amber-500/10 border border-amber-500/30 p-3 flex flex-wrap items-center gap-3">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" aria-hidden="true" />
+              <p className="flex-1 min-w-0 text-sm text-dark-gray dark:text-white">
+                The last part ({fmt(unsavedPart.seconds)}) couldn&apos;t be saved to the server{chunkError ? `: ${chunkError}` : ''}.
+              </p>
+              <button type="button" onClick={() => savePart(unsavedPart.blob, unsavedPart.seconds)} disabled={isUploadingChunk} className="text-sm font-medium text-orange hover:underline disabled:opacity-50">
+                {isUploadingChunk ? 'Retrying...' : 'Retry upload'}
+              </button>
+              <button type="button" onClick={() => setUnsavedPart(null)} className="text-sm text-medium-gray hover:text-red-500">
+                Drop it
+              </button>
+            </div>
+          )}
+
+          <div className="flex flex-wrap items-center justify-center gap-3">
             <button
               onClick={discardRecording}
               disabled={isSubmitting}
               aria-label="Discard recording"
               className="px-4 py-2 text-sm font-medium text-medium-gray hover:text-red-500 transition-colors disabled:opacity-50"
             >
-              Discard
+              {parts.length > 1 ? 'Discard all' : 'Discard'}
+            </button>
+            <button
+              type="button"
+              onClick={startRecording}
+              disabled={isSubmitting || !!unsavedPart || remainingSeconds < MIN_PART_SECONDS}
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-xl border border-light-gray/60 dark:border-medium-gray/40 bg-white dark:bg-charcoal text-dark-gray dark:text-white hover:bg-off-white dark:hover:bg-dark-gray disabled:opacity-50 transition-colors"
+            >
+              <Plus className="w-4 h-4" aria-hidden="true" />
+              Add another part
             </button>
             <button
               onClick={submitRecording}
-              disabled={isSubmitting}
+              disabled={isSubmitting || parts.length === 0 || !!unsavedPart}
               aria-label="Save and transcribe recording"
               className="flex items-center gap-2 px-6 py-2 text-sm font-medium bg-orange text-white rounded-xl hover:bg-orange/90 disabled:opacity-50 transition-colors"
             >
@@ -893,11 +1000,16 @@ export function MeetingRecorder({
               )}
             </button>
           </div>
+          <p className="text-xs text-medium-gray text-center">
+            {remainingSeconds < MIN_PART_SECONDS
+              ? `The ${maxRecordingMins}-minute limit is used up. Save to transcribe.`
+              : 'Parts are joined in order and transcribed together. No parts can be added after saving.'}
+          </p>
         </div>
       )}
 
       {/* ---- Microphone blocked ---- */}
-      {!isRecording && !audioBlob && micBlocked && (
+      {!isRecording && micBlocked && (
         <MicTroubleshooting
           micPermGranted={micPermGranted}
           micRetryCount={micRetryCount}
@@ -906,7 +1018,7 @@ export function MeetingRecorder({
       )}
 
       {/* ---- Start recording ---- */}
-      {!isRecording && !audioBlob && !micBlocked && (
+      {!isRecording && parts.length === 0 && !unsavedPart && !micBlocked && (
         <div className="text-center space-y-5">
           {/* Recording setup: language + microphone side by side */}
           <div className="grid gap-4 sm:grid-cols-2 max-w-xl mx-auto text-left">
