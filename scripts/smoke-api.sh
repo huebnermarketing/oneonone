@@ -213,6 +213,20 @@ check "part past uploaded chunks rejected" 400 $(code -b "$REP" -X POST $B/api/m
 check "total over the max length rejected" 400 $(code -b "$REP" -X POST $B/api/meetings/$D5/recording/process -H 'content-type: application/json' -d '{"totalChunks":2,"duration":36000,"parts":[{"start":0,"end":1},{"start":1,"end":2}]}')
 $PSQL -c "delete from \"Notification\" where link like '/meetings/$D5%'; delete from \"AuditLog\" where \"entityId\"='$D5'; delete from \"Meeting\" where id='$D5';" >/dev/null
 
+echo "## recurring schedule edit moves the series"
+check "schedule Mon 10:00 created" 201 $(code -b "$REP" -X POST $B/api/recurring-schedules -H 'content-type: application/json' -d "{\"employeeId\":\"$ALEX_ID\",\"frequency\":\"WEEKLY\",\"dayOfWeek\":1,\"timeOfDay\":\"10:00\",\"durationMinutes\":30,\"meetingType\":\"IN_PERSON\"}")
+RS=$(python3 -c "import json;print(json.load(open('/tmp/body'))['schedule']['id'])")
+RM=$(python3 -c "import json;print(json.load(open('/tmp/body'))['meeting']['id'])")
+check "employee accepts first meeting" 200 $(code -b "$ALEX" -X POST $B/api/meetings/$RM/accept)
+check "accept created the next one with the schedule's length" "2 30" "$($PSQL -c "select count(*)||' '||min(\"durationMinutes\") from \"Meeting\" where \"recurringScheduleId\"='$RS' and status='SCHEDULED'")"
+check "move to Wed 16:30" 200 $(code -b "$REP" -X PATCH $B/api/recurring-schedules/$RS -H 'content-type: application/json' -d '{"dayOfWeek":3,"timeOfDay":"16:30"}')
+check "both upcoming meetings moved" 2 "$(python3 -c "import json;print(json.load(open('/tmp/body'))['movedMeetingCount'])")"
+TZQ="(select replace(coalesce(\"timeZone\",'Asia/Kolkata'),'Asia/Calcutta','Asia/Kolkata') from \"User\" where id='$REP_ID')"
+check "all upcoming on Wed 16:30 (reporter time)" "3 16:30" "$($PSQL -c "select distinct extract(dow from \"meetingDate\" at time zone 'UTC' at time zone $TZQ)||' '||to_char(\"meetingDate\" at time zone 'UTC' at time zone $TZQ,'HH24:MI') from \"Meeting\" where \"recurringScheduleId\"='$RS' and status<>'CANCELLED'")"
+check "one week apart, next generation after the last" "7 7" "$($PSQL -c "with m as (select \"meetingDate\" d from \"Meeting\" where \"recurringScheduleId\"='$RS' order by 1) select extract(day from max(d)-min(d))::int||' '||extract(day from (select \"nextMeetingDate\" from \"RecurringSchedule\" where id='$RS')-max(d))::int from m")"
+check "Sunday still refused on edit" 400 $(code -b "$REP" -X PATCH $B/api/recurring-schedules/$RS -H 'content-type: application/json' -d '{"dayOfWeek":0}')
+$PSQL -c "delete from \"Notification\" where link like '/meetings/%' and \"createdAt\" > now() - interval '5 minutes' and \"userId\" in ('$ALEX_ID','$REP_ID'); delete from \"AuditLog\" where \"entityId\"='$RS' or \"entityId\" in (select id from \"Meeting\" where \"recurringScheduleId\"='$RS'); delete from \"Meeting\" where \"recurringScheduleId\"='$RS'; delete from \"RecurringSchedule\" where id='$RS';" >/dev/null
+
 echo "## user import"
 check "employee cannot download template" 403 $(code -b "$ALEX" "$B/api/admin/import-users?format=template")
 check "admin template 200" 200 $(code -b "$ADMIN" "$B/api/admin/import-users?format=template")

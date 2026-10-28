@@ -28,7 +28,7 @@ import { SlotGrid } from '@/components/forms/slot-grid'
 import { DurationToggle } from '@/components/forms/duration-toggle'
 import { DEFAULT_MEETING_DURATION, formatDuration, toMeetingDuration, type MeetingDuration } from '@/lib/meeting-duration'
 import { useFormat } from '@/components/providers/timezone-provider'
-import { DAY_NAMES } from '@/lib/ui'
+import { DAY_NAMES, plural } from '@/lib/ui'
 import { DEFAULT_WORKING_DAYS, WEEK_ORDER } from '@/lib/working-days'
 import { DEFAULT_TIMEZONE } from '@/lib/dates'
 import { formatTimeOfDay, getNextOccurrenceDate, slotToTimeInTz, type FreeSlot } from '@/lib/slots'
@@ -302,14 +302,16 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
       })
 
       if (response.ok) {
+        const result = await response.json().catch(() => ({}))
         setSchedules(
           schedules.map((s) =>
-            s.id === scheduleId ? { ...s, ...editData } : s
+            s.id === scheduleId ? { ...s, ...editData, nextMeetingDate: result.nextMeetingDate ?? s.nextMeetingDate } : s
           )
         )
         setEditingId(null)
         setEditData(null)
-        toastSuccess('Schedule updated')
+        const moved = Number(result.movedMeetingCount) || 0
+        toastSuccess(moved > 0 ? `Schedule updated. ${plural(moved, 'upcoming meeting')} moved and calendars updated.` : 'Schedule updated')
         router.refresh()
       } else {
         const error = await response.json()

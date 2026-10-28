@@ -647,7 +647,8 @@ export async function sendRecurringScheduleUpdatedEmail(
   dayOfWeek: number,
   timeOfDay: string,
   frequency: string,
-  reporterTimeZone?: string | null
+  reporterTimeZone?: string | null,
+  durationMinutes?: number
 ) {
   const empName = employeeName || 'Team Member'
   const mgrName = managerName || 'Your manager'
@@ -669,6 +670,7 @@ export async function sendRecurringScheduleUpdatedEmail(
       ${detailRow('Frequency', freqLabel)}
       ${detailRow('Day', dayName)}
       ${detailRow('Time', formattedTime)}
+      ${durationMinutes ? detailRow('Length', formatDuration(durationMinutes)) : ''}
     `,
     ctaText: 'View Meetings',
     ctaUrl: `${baseUrl()}/meetings`,

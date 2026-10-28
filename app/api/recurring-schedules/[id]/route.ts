@@ -3,7 +3,7 @@ import { MeetingStatus, Prisma, UserRole } from '@prisma/client'
 import { notFound, parseBody, parseQuery, withApiAuth, SessionUser } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { createAuditLog } from '@/lib/audit'
-import { calculateFirstOccurrence } from '@/lib/recurring-dates'
+import { applySeriesMoveToCalendar, prepareSeriesMove } from '@/lib/recurring-edit'
 import { deleteCalendarEvent, setCalendarEventDuration } from '@/lib/google-calendar'
 import * as notify from '@/lib/notify'
 import { getPolicies } from '@/lib/settings'
@@ -16,7 +16,7 @@ export const dynamic = 'force-dynamic'
 const scheduleWithParties = Prisma.validator<Prisma.RecurringScheduleDefaultArgs>()({
   include: {
     employee: { select: { id: true, name: true, email: true } },
-    reporter: { select: { id: true, name: true, timeZone: true } },
+    reporter: { select: { id: true, name: true, email: true, timeZone: true } },
   },
 })
 type ScheduleWithParties = Prisma.RecurringScheduleGetPayload<typeof scheduleWithParties>
@@ -102,7 +102,8 @@ export const GET = withApiAuth(async (_req: NextRequest, { user, params }) => {
 /**
  * PATCH /api/recurring-schedules/[id] — change timing / type / active flag.
  * `isActive: false` + `cancelFutureMeetings: true` also cancels future SCHEDULED meetings.
- * A timing change recalculates nextMeetingDate and moves future PROPOSED meetings to it.
+ * A day/time/frequency change moves upcoming meetings onto the new pattern, ends the old Google series
+ * and starts a new one (lib/recurring-edit.ts); 409 when the first new occurrence is taken.
  */
 export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
   const body = await parseBody(req, updateRecurringScheduleSchema)
@@ -126,7 +127,11 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
   const newTime = timeOfDay ?? existing.timeOfDay
   const newFreq = frequency ?? existing.frequency
   const reporterTz = existing.reporter.timeZone || DEFAULT_TIMEZONE
-  const newNextDate = scheduleChanged ? calculateFirstOccurrence(newDay, newTime, newFreq, reporterTz) : undefined
+  const newDuration = durationMinutes ?? existing.durationMinutes
+  const newPattern = { dayOfWeek: newDay, timeOfDay: newTime, frequency: newFreq }
+  // Plan + conflict check before anything is written
+  const move = scheduleChanged && !cancelling && existing.isActive ? await prepareSeriesMove(existing, newPattern, newDuration, reporterTz) : null
+  const newNextDate = move?.plan.nextMeetingDate
 
   const updateData: Prisma.RecurringScheduleUpdateInput = {
     ...(frequency !== undefined && { frequency }),
@@ -155,11 +160,14 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
         data: { durationMinutes },
       })
     }
-    if (newNextDate) {
-      await tx.meeting.updateMany({
-        where: { recurringScheduleId: existing.id, status: MeetingStatus.PROPOSED, meetingDate: { gt: new Date() } },
-        data: { meetingDate: newNextDate },
-      })
+    if (move) {
+      // Each upcoming meeting onto its own new date; reminders are due again for the new time
+      for (const mv of move.plan.moves) {
+        await tx.meeting.update({
+          where: { id: mv.id },
+          data: { meetingDate: mv.to, reminder24hSent: false, reminderSent: false, formReminderSent: false },
+        })
+      }
     }
     return tx.recurringSchedule.update({ where: { id: existing.id }, data: updateData })
   })
@@ -169,15 +177,21 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
     action: 'UPDATE',
     entityType: 'RecurringSchedule',
     entityId: existing.id,
-    details: { changes: body, employeeName: existing.employee.name, cancelledMeetingCount: futureMeetings.length },
+    details: {
+      changes: body,
+      employeeName: existing.employee.name,
+      cancelledMeetingCount: futureMeetings.length,
+      ...(move && { movedMeetingCount: move.plan.moves.length, keptRescheduledCount: move.plan.kept.length }),
+    },
   })
 
   // ---- Side effects (best effort) ----
   if (cancelling) await afterFutureMeetingsCancelled(existing, futureMeetings, actorName)
 
-  if (durationChanged) await applyDurationToCalendar(existing, durationMinutes!)
+  if (move) await applySeriesMoveToCalendar(existing, newPattern, newDuration, reporterTz, move.plan, move.upcoming)
+  else if (durationChanged) await applyDurationToCalendar(existing, durationMinutes!)
 
-  if (scheduleChanged) {
+  if ((scheduleChanged || durationChanged) && !cancelling) {
     await notify.recurringScheduleUpdated({
       scheduleId: existing.id,
       employee: existing.employee,
@@ -186,10 +200,11 @@ export const PATCH = withApiAuth(async (req: NextRequest, { user, params }) => {
       timeOfDay: newTime,
       frequency: newFreq,
       reporterTimeZone: reporterTz,
+      durationMinutes: newDuration,
     })
   }
 
-  return NextResponse.json({ ...schedule, cancelledMeetingCount: futureMeetings.length })
+  return NextResponse.json({ ...schedule, cancelledMeetingCount: futureMeetings.length, movedMeetingCount: move?.plan.moves.length ?? 0 })
 })
 
 /**
