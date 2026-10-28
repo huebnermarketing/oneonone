@@ -51,7 +51,7 @@ Local login without Google: `POST /api/auth/test-login {"role":"SUPER_ADMIN"|"RE
 
 ## Env (local minimum)
 
-`DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL=http://localhost:3000`, `NODE_ENV=development`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (placeholders OK — `lib/auth.ts` only checks presence), `GOOGLE_WORKSPACE_DOMAIN`, `INITIAL_ADMIN_EMAILS`, `ENCRYPTION_SECRET`. Optional: `AI_PROVIDER` + `OPENAI_API_KEY`/`OPENROUTER_API_KEY`, `AWS_*` (S3 required for recording), SMTP/SES, `FATHOM_WEBHOOK_SECRET`, `KEKA_*`. `CRON_SECRET` is now required for `/api/cron/meetings` in every environment.
+`DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL=http://localhost:3000`, `NODE_ENV=development`, `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (placeholders OK — `lib/auth.ts` only checks presence), `GOOGLE_WORKSPACE_DOMAIN`, `INITIAL_ADMIN_EMAILS`, `ENCRYPTION_SECRET`. Optional: `AI_PROVIDER` + `OPENAI_API_KEY`/`OPENROUTER_API_KEY`, `AWS_*` (S3 required for recording), SMTP/SES, `FATHOM_WEBHOOK_SECRET`, `KEKA_*`. `CRON_SECRET` is now required for `/api/cron/meetings` in every environment. The hourly cron also runs data retention (`lib/retention.ts`: read notifications 90 d, unread 180 d, audit logs 2 y, finished RecordingJob rows 180 d, expired sessions) — change windows in `RETENTION_DAYS`.
 
 ## Branch flow
 

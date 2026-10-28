@@ -104,6 +104,17 @@ curl -s https://<host>/api/health   # {"status":"healthy"}
 
 Backups: use managed Postgres snapshots (RDS) or `pg_dump` on a schedule. The in-app Admin → Backup export is a partial JSON dump (users, departments, meetings, todos, recording text) and is not a substitute. S3 recordings are not covered by either — enable bucket versioning.
 
+Nightly `pg_dump` on the app server (keeps 14 days in `/var/backups/oneonone`; `pg_dump` must be the same major version as the database). Run the command once by hand first (without the schedule part), then add it with `crontab -e` (in crontab every `%` must be written `\%`):
+
+```bash
+SHELL=/bin/bash
+15 21 * * * cd /var/www/oneonone && set -a && . ./.env && set +a && mkdir -p /var/backups/oneonone && pg_dump "$(echo "$DATABASE_URL" | sed 's/?.*//')" -Fc -f /var/backups/oneonone/db-$(date +\%F).dump && find /var/backups/oneonone -name 'db-*.dump' -mtime +14 -delete
+```
+
+Restore a dump: `pg_restore --clean --if-exists -d "<database url without ?schema=…>" /var/backups/oneonone/db-YYYY-MM-DD.dump`.
+
+Data retention runs in the hourly cron (`lib/retention.ts`): read notifications > 90 days, unread > 180 days, audit logs > 2 years, finished recording-job runs > 180 days, expired sessions. Meetings, recordings, form history and todos are never deleted.
+
 ## Rollback
 
 ```bash

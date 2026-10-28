@@ -126,9 +126,18 @@ $PSQL -c "delete from \"RecordingJob\" where id='$JID'; update \"MeetingRecordin
 echo "## cron"
 check "cron no secret 401" 401 $(code -X POST $B/api/cron/meetings)
 check "cron with secret 200" 200 $(code -X POST $B/api/cron/meetings -H "x-cron-secret: $CRON")
+# retention: old read notification + old audit row go, a fresh read notification stays
+$PSQL -c "insert into \"Notification\"(id,\"userId\",type,title,message,\"isRead\",\"createdAt\") values ('smoke-old-n','$ALEX_ID','SYSTEM','old','old',true,now()-interval '100 days'),('smoke-new-n','$ALEX_ID','SYSTEM','new','new',true,now()-interval '5 days'); insert into \"AuditLog\"(id,\"userId\",action,\"entityType\",\"createdAt\") values ('smoke-old-a','$ALEX_ID','UPDATE','Smoke',now()-interval '800 days');" >/dev/null
+check "cron reports retention" yes "$(code -X POST $B/api/cron/meetings -H "x-cron-secret: $CRON" >/dev/null; python3 -c "import json;r=json.load(open('/tmp/body'))['retention'];print('yes' if r and r['notifications']>=1 and r['auditLogs']>=1 else r)")"
+check "only the old rows were removed" "0 1 0" "$($PSQL -c "select (select count(*) from \"Notification\" where id='smoke-old-n')||' '||(select count(*) from \"Notification\" where id='smoke-new-n')||' '||(select count(*) from \"AuditLog\" where id='smoke-old-a')")"
+$PSQL -c "delete from \"Notification\" where id='smoke-new-n'" >/dev/null
+
+echo "## recordings search (reads transcript heads only)"
+SR=$(code -b "$ADMIN" "$B/api/recordings/search?q=roadmap")
+if [ "$SR" = 200 ] || [ "$SR" = 400 ]; then echo "  ok   search answered -> $SR"; pass=$((pass+1)); else echo "  FAIL search -> $SR $(body | head -c 200)"; fail=$((fail+1)); fi
 
 echo "## pages"
-for p in /dashboard /meetings /todos /employees /admin /admin/settings /insights /profile; do check "admin page $p" 200 $(code -b "$ADMIN" $B$p); done
+for p in /dashboard /meetings /meetings/recurring /todos /employees /admin /admin/settings /insights /profile; do check "admin page $p" 200 $(code -b "$ADMIN" $B$p); done
 # Pages with loading.tsx stream, so redirect() arrives in the body (NEXT_REDIRECT + meta refresh), not as a 307
 denied() { curl -s -b "$ALEX" "$B$1" | grep -q 'NEXT_REDIRECT;replace;/access-denied' && echo yes || echo no; }
 for p in /admin /admin/settings /admin/audit-logs /reports /employees /meetings/new /insights; do check "employee $p -> access-denied" yes "$(denied $p)"; done
