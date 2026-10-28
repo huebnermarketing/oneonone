@@ -266,6 +266,37 @@ export async function setCalendarEventDuration(googleEventId: string, userId: st
   })
 }
 
+/** RRULE UNTIL value (UTC basic format), e.g. 20261028T053000Z */
+const rruleUtc = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '')
+
+/** Pure: the series' recurrence lines with every RRULE ending at `until` (COUNT/UNTIL replaced). */
+export function truncateRecurrence(lines: string[], until: Date): string[] {
+  return lines.map((line) =>
+    line.startsWith('RRULE:') ? `${line.replace(/;(COUNT|UNTIL)=[^;]*/g, '')};UNTIL=${rruleUtc(until)}` : line
+  )
+}
+
+/**
+ * Stop a recurring series at `at`: occurrences before it stay on both calendars, later ones go.
+ * A series that hasn't started yet is deleted outright.
+ */
+export async function endRecurringSeries(seriesEventId: string, userId: string, at: Date): Promise<'ended' | 'deleted'> {
+  const calendar = google.calendar({ version: 'v3', auth: await getAuthenticatedClient(userId) })
+  const { data } = await calendar.events.get({ calendarId: 'primary', eventId: seriesEventId })
+  const start = data.start?.dateTime ? new Date(data.start.dateTime) : null
+  if (!start || start.getTime() >= at.getTime() || !data.recurrence?.length) {
+    await calendar.events.delete({ calendarId: 'primary', eventId: seriesEventId, sendUpdates: 'all' })
+    return 'deleted'
+  }
+  await calendar.events.patch({
+    calendarId: 'primary',
+    eventId: seriesEventId,
+    requestBody: { recurrence: truncateRecurrence(data.recurrence, new Date(at.getTime() - 60_000)) },
+    sendUpdates: 'all',
+  })
+  return 'ended'
+}
+
 /**
  * The single occurrence of a recurring series that currently starts at `start` (Google applies
  * timeMin/timeMax to an occurrence's actual time, so an already-moved occurrence is found at its new time).
