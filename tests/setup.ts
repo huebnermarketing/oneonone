@@ -30,6 +30,9 @@ vi.mock('@/lib/google-calendar', () => ({
   moveCalendarOccurrence: vi.fn(async () => true),
   cancelCalendarOccurrence: vi.fn(async () => true),
   setCalendarEventDuration: vi.fn(async () => undefined),
+  endRecurringSeries: vi.fn(async () => 'ended'),
+  isDateTimeFreeForBoth: vi.fn(async () => true),
+  CalendarUnavailableError: class CalendarUnavailableError extends Error {},
   isCalendarEnabled: vi.fn(async () => false),
 }))
 

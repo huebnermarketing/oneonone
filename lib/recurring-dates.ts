@@ -44,10 +44,10 @@ export function calculateFirstOccurrence(
   dayOfWeek: number,
   timeOfDay: string,
   frequency: RecurringFrequency,
-  timeZone = FALLBACK_TZ
+  timeZone = FALLBACK_TZ,
+  now = new Date()
 ): Date {
   const [hours, minutes] = timeOfDay.split(':').map(Number)
-  const now = new Date()
   const zoned = toZonedTime(now, timeZone)
   const currentDay = zoned.getDay()
   let daysUntil = dayOfWeek - currentDay

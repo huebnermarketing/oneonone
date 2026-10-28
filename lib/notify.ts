@@ -237,12 +237,13 @@ export function recurringScheduleUpdated(args: {
   timeOfDay: string
   frequency: string
   reporterTimeZone: string
+  durationMinutes?: number
 }): Promise<NotifyResult> {
-  const { employee, actorName, dayOfWeek, timeOfDay, frequency, reporterTimeZone } = args
+  const { employee, actorName, dayOfWeek, timeOfDay, frequency, reporterTimeZone, durationMinutes } = args
   const [hh, mm] = timeOfDay.split(':').map(Number)
   const displayTime = `${hh % 12 || 12}:${String(mm).padStart(2, '0')} ${hh >= 12 ? 'PM' : 'AM'}`
   return fanOut('recurringScheduleUpdated', args.scheduleId, [
-    ['email', () => sendRecurringScheduleUpdatedEmail(employee.email, employee.name, actorName, dayOfWeek, timeOfDay, frequency, reporterTimeZone)],
+    ['email', () => sendRecurringScheduleUpdatedEmail(employee.email, employee.name, actorName, dayOfWeek, timeOfDay, frequency, reporterTimeZone, durationMinutes)],
     [
       'in-app',
       () =>

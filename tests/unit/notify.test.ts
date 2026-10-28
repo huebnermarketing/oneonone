@@ -110,7 +110,7 @@ describe('other events', () => {
     await notify.recurringScheduleUpdated({
       scheduleId: 's1', employee, actorName: 'Rep', dayOfWeek: 1, timeOfDay: '14:30', frequency: 'WEEKLY', reporterTimeZone: 'Asia/Kolkata',
     })
-    expect(email.sendRecurringScheduleUpdatedEmail).toHaveBeenCalledWith('emp@example.com', 'Emp', 'Rep', 1, '14:30', 'WEEKLY', 'Asia/Kolkata')
+    expect(email.sendRecurringScheduleUpdatedEmail).toHaveBeenCalledWith('emp@example.com', 'Emp', 'Rep', 1, '14:30', 'WEEKLY', 'Asia/Kolkata', undefined)
     expect(inApp.createNotification).toHaveBeenCalledWith(expect.objectContaining({ userId: 'e1', message: 'Rep updated your recurring meeting to Mondays at 2:30 PM.' }))
   })
 
