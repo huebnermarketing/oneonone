@@ -8,9 +8,19 @@ import { recordingsInsightsQuery } from '@/lib/validation/misc'
 
 export const dynamic = 'force-dynamic'
 
-type MeetingWithRecording = Prisma.MeetingGetPayload<{
-  include: { employee: { include: { department: true } }; recording: true }
-}>
+/** Only the analysis columns (never transcripts or whole user rows) */
+const meetingForInsights = Prisma.validator<Prisma.MeetingDefaultArgs>()({
+  select: {
+    id: true,
+    meetingDate: true,
+    employee: { select: { name: true, department: { select: { name: true } } } },
+    recording: { select: { qualityScore: true, sentiment: true, keyPoints: true, language: true } },
+  },
+})
+type MeetingWithRecording = Prisma.MeetingGetPayload<typeof meetingForInsights>
+
+/** Most recent analysed meetings sent to the AI summary (prompt size guard) */
+const AI_INSIGHTS_MAX_MEETINGS = 100
 
 type DepartmentStat = {
   meetings: number
@@ -104,10 +114,7 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
       ...baseWhere,
       recording: { is: { status: 'COMPLETED', sentiment: { not: Prisma.JsonNull } } },
     },
-    include: {
-      employee: { include: { department: true } },
-      recording: true,
-    },
+    ...meetingForInsights,
     orderBy: { meetingDate: 'desc' },
   })
 
@@ -126,7 +133,7 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
   // AI insights only once there is enough data; best-effort
   let aiInsights = null
   if (recordingsWithAnalysis.length >= 3) {
-    const summariesForAI = recordingsWithAnalysis.map((m) => ({
+    const summariesForAI = recordingsWithAnalysis.slice(0, AI_INSIGHTS_MAX_MEETINGS).map((m) => ({
       department: m.employee.department?.name || 'Unassigned',
       sentiment: (m.recording?.sentiment as { score: number; label: string } | null) ?? null,
       keyPoints: (m.recording?.keyPoints as string[]) || [],

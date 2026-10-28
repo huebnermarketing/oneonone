@@ -25,38 +25,27 @@ export default async function RecurringSchedulesPage() {
         orderBy: { name: 'asc' },
       })
 
-  // Get existing schedules (filter out soft-deleted ones)
+  // Active schedules with their employee, plus upcoming-meeting counts in ONE grouped query (no N+1)
+  const now = new Date()
   const schedules = await prisma.recurringSchedule.findMany({
     where: { reporterId: user.id, isActive: true },
     orderBy: { createdAt: 'desc' },
+    include: { employee: { select: { id: true, name: true, email: true } } },
   })
-
-  const now = new Date()
-  // Add employee info and upcoming meeting count
-  const schedulesWithEmployees = await Promise.all(
-    schedules.map(async (schedule) => {
-      const [employee, upcomingMeetingCount] = await Promise.all([
-        prisma.user.findUnique({
-          where: { id: schedule.employeeId },
-          select: { id: true, name: true, email: true },
-        }),
-        prisma.meeting.count({
-          where: {
-            recurringScheduleId: schedule.id,
-            status: MeetingStatus.SCHEDULED,
-            meetingDate: { gt: now },
-          },
-        }),
-      ])
-      return {
-        ...schedule,
-        employee,
-        upcomingMeetingCount,
-        nextMeetingDate: schedule.nextMeetingDate?.toISOString() || null,
-        createdAt: schedule.createdAt.toISOString(),
-      }
-    })
-  )
+  const counts = schedules.length
+    ? await prisma.meeting.groupBy({
+        by: ['recurringScheduleId'],
+        where: { recurringScheduleId: { in: schedules.map((s) => s.id) }, status: MeetingStatus.SCHEDULED, meetingDate: { gt: now } },
+        _count: { _all: true },
+      })
+    : []
+  const upcomingBySchedule = new Map(counts.map((c) => [c.recurringScheduleId, c._count._all]))
+  const schedulesWithEmployees = schedules.map((schedule) => ({
+    ...schedule,
+    upcomingMeetingCount: upcomingBySchedule.get(schedule.id) ?? 0,
+    nextMeetingDate: schedule.nextMeetingDate?.toISOString() || null,
+    createdAt: schedule.createdAt.toISOString(),
+  }))
 
   return (
     <RecurringSchedulesClient
