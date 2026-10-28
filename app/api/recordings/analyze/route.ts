@@ -8,43 +8,74 @@ import { recordingsAnalyzeSchema } from '@/lib/validation/misc'
 
 export const dynamic = 'force-dynamic'
 
-type MeetingRow = Prisma.MeetingGetPayload<{
-  include: {
-    employee: { include: { department: true } }
-    reporter: true
-    recording: true
-  }
-}>
+/** Only the columns the prompt uses (never full transcripts or whole user rows) */
+const meetingForAnalysis = Prisma.validator<Prisma.MeetingDefaultArgs>()({
+  select: {
+    meetingDate: true,
+    checkInPersonal: true,
+    checkInProfessional: true,
+    priorityGoalProfessional: true,
+    priorityGoalAgency: true,
+    progressReport: true,
+    goodNews: true,
+    supportNeeded: true,
+    priorityDiscussions: true,
+    headsUp: true,
+    anythingElse: true,
+    employee: { select: { name: true, department: { select: { name: true } } } },
+    recording: { select: { status: true, summary: true, keyPoints: true, sentiment: true } },
+  },
+})
+type MeetingRow = Prisma.MeetingGetPayload<typeof meetingForAnalysis>
+
+/** Prompt size guard: each answer/summary is clipped, and meetings stop being added past the budget */
+const FIELD_MAX_CHARS = 800
+const CONTEXT_MAX_CHARS = 120_000
+const clip = (v: string | null | undefined) => (v && v.length > FIELD_MAX_CHARS ? `${v.slice(0, FIELD_MAX_CHARS)}…` : v)
 
 /** Flatten a meeting (form answers + recording analysis) into the shape fed to the model. */
 function toMeetingData(m: MeetingRow) {
+  const rec = m.recording?.status === 'COMPLETED' ? m.recording : null
   return {
     date: m.meetingDate.toISOString().split('T')[0],
     employee: m.employee.name,
     department: m.employee.department?.name || 'Unassigned',
     // Form responses
-    checkInPersonal: m.checkInPersonal,
-    checkInProfessional: m.checkInProfessional,
-    priorityGoalProfessional: m.priorityGoalProfessional,
-    priorityGoalAgency: m.priorityGoalAgency,
-    progressReport: m.progressReport,
-    goodNews: m.goodNews,
-    supportNeeded: m.supportNeeded,
-    priorityDiscussions: m.priorityDiscussions,
-    headsUp: m.headsUp,
-    anythingElse: m.anythingElse,
-    // Recording analysis
-    transcript: m.recording?.transcript,
-    summary: m.recording?.summary,
-    keyPoints: m.recording?.keyPoints,
-    sentiment: m.recording?.sentiment,
+    checkInPersonal: clip(m.checkInPersonal),
+    checkInProfessional: clip(m.checkInProfessional),
+    priorityGoalProfessional: clip(m.priorityGoalProfessional),
+    priorityGoalAgency: clip(m.priorityGoalAgency),
+    progressReport: clip(m.progressReport),
+    goodNews: clip(m.goodNews),
+    supportNeeded: clip(m.supportNeeded),
+    priorityDiscussions: clip(m.priorityDiscussions),
+    headsUp: clip(m.headsUp),
+    anythingElse: clip(m.anythingElse),
+    // Recording analysis (the AI summary stands in for the transcript)
+    summary: clip(rec?.summary),
+    keyPoints: rec?.keyPoints,
+    sentiment: rec?.sentiment,
   }
 }
 
 type MeetingData = ReturnType<typeof toMeetingData>
 
-function buildPrompts(meetingData: MeetingData[], question: string, departmentId: string | null | undefined) {
-  const context = meetingData.map((m, i) => `
+function buildPrompts(allMeetingData: MeetingData[], question: string, departmentId: string | null | undefined) {
+  const blocks: string[] = []
+  let size = 0
+  for (const [i, m] of allMeetingData.entries()) {
+    const block = meetingBlock(m, i)
+    if (size + block.length > CONTEXT_MAX_CHARS && blocks.length > 0) break
+    blocks.push(block)
+    size += block.length
+  }
+  const meetingData = allMeetingData.slice(0, blocks.length)
+  const context = blocks.join('\n\n---\n\n')
+  return { ...prompts(meetingData, context, question, departmentId), used: meetingData.length }
+}
+
+function meetingBlock(m: MeetingData, i: number): string {
+  return `
 Meeting ${i + 1} (${m.date}) - ${m.employee} (${m.department}):
 ${m.checkInProfessional ? `Professional Check-in: ${m.checkInProfessional}` : ''}
 ${m.supportNeeded ? `Support Needed: ${m.supportNeeded}` : ''}
@@ -54,8 +85,10 @@ ${m.anythingElse ? `Other Notes: ${m.anythingElse}` : ''}
 ${m.summary ? `Meeting Summary: ${m.summary}` : ''}
 ${m.keyPoints ? `Key Points: ${JSON.stringify(m.keyPoints)}` : ''}
 ${m.sentiment ? `Sentiment: ${JSON.stringify(m.sentiment)}` : ''}
-`.trim()).join('\n\n---\n\n')
+`.trim()
+}
 
+function prompts(meetingData: MeetingData[], context: string, question: string, departmentId: string | null | undefined) {
   const systemPrompt = `You are an HR analytics expert analyzing one-on-one meeting data from an organization.
 Your job is to answer questions about patterns, trends, and common themes across all meetings.
 
@@ -142,11 +175,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
 
   const meetings = await prisma.meeting.findMany({
     where,
-    include: {
-      employee: { include: { department: true } },
-      reporter: true,
-      recording: { where: { status: 'COMPLETED' } },
-    },
+    ...meetingForAnalysis,
     orderBy: { meetingDate: 'desc' },
     take: 100, // Limit to recent 100 meetings
   })
@@ -154,7 +183,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
   // Only include meetings with some data
   const meetingData = meetings
     .map(toMeetingData)
-    .filter((m) => m.checkInPersonal || m.checkInProfessional || m.transcript || m.summary)
+    .filter((m) => m.checkInPersonal || m.checkInProfessional || m.summary)
 
   if (meetingData.length === 0) {
     return NextResponse.json({
@@ -164,7 +193,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
     })
   }
 
-  const { systemPrompt, userPrompt } = buildPrompts(meetingData, question, departmentId)
+  const { systemPrompt, userPrompt, used } = buildPrompts(meetingData, question, departmentId)
 
   let analysis: Record<string, unknown>
   try {
@@ -180,7 +209,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
 
   return NextResponse.json({
     question,
-    meetingsAnalyzed: meetingData.length,
+    meetingsAnalyzed: used,
     ...analysis,
   })
 })

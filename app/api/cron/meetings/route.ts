@@ -8,6 +8,7 @@ import { checkRateLimit } from '@/lib/rate-limit'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import { recoverStaleJobs } from '@/lib/recording-pipeline'
 import { kekaSyncDue, runKekaSync } from '@/lib/keka-sync'
+import { runRetention, type RetentionResult } from '@/lib/retention'
 
 export const dynamic = 'force-dynamic'
 
@@ -38,6 +39,7 @@ export async function POST(request: NextRequest) {
       recordingJobsResumed: 0,
       recordingJobsFailed: 0,
       kekaSync: null as null | { created: number; updated: number; deactivated: number; failed: number },
+      retention: null as null | RetentionResult,
       errors: [] as string[],
     }
 
@@ -67,6 +69,13 @@ export async function POST(request: NextRequest) {
       }
     } catch (err) {
       results.errors.push(`keka sync: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    // 6. Retention: old read notifications, audit logs, finished job runs, expired sessions
+    try {
+      results.retention = await runRetention()
+    } catch (err) {
+      results.errors.push(`retention: ${err instanceof Error ? err.message : String(err)}`)
     }
 
     return NextResponse.json({
