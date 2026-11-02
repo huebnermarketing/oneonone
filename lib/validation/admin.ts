@@ -21,6 +21,10 @@ export const restoreSchema = z.object({
       departments: z.array(z.record(z.string(), z.unknown())).optional().default([]),
       users: z.array(z.record(z.string(), z.unknown())).optional().default([]),
       meetings: z.array(z.record(z.string(), z.unknown())).optional().default([]),
+      // v1.1
+      recurringSchedules: z.array(z.record(z.string(), z.unknown())).optional(),
+      todos: z.array(z.record(z.string(), z.unknown())).optional(),
+      formRevisions: z.array(z.record(z.string(), z.unknown())).optional(),
     }),
   }),
   options: z
