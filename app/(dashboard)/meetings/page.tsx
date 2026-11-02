@@ -1,81 +1,50 @@
 import { getCurrentUser } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
-import { UserRole, RecurringFrequency } from '@prisma/client'
+import { Prisma, UserRole } from '@prisma/client'
+import { listMeetingsPage, parsePage, parseTab } from '@/lib/meeting-list'
 import { MeetingsClient } from './meetings-client'
 
-export default async function MeetingsPage() {
+export default async function MeetingsPage(props: {
+  searchParams: Promise<{ tab?: string | string[]; page?: string | string[] }>
+}) {
   const user = await getCurrentUser()
   if (!user) return null
+  const searchParams = await props.searchParams
+  const tab = parseTab(searchParams.tab)
 
-  let meetings
-  let recurringSchedules: Array<{
-    id: string
-    frequency: RecurringFrequency
-    dayOfWeek: number
-    timeOfDay: string
-    isActive: boolean
-    nextMeetingDate: Date | null
-    createdAt: Date
-    employee: { id: string; name: string | null; email?: string | null }
-    reporter?: { name: string | null } | null
-  }> = []
+  const scheduleWhere: Prisma.RecurringScheduleWhereInput =
+    user.role === UserRole.EMPLOYEE
+      ? { employeeId: user.id, isActive: true }
+      : user.role === UserRole.REPORTER
+        ? { reporterId: user.id, isActive: true }
+        : { isActive: true }
 
-  const canManageRecurring = user.role === UserRole.REPORTER || user.role === UserRole.SUPER_ADMIN
-
-  const meetingSelect = {
-    employee: { select: { name: true, email: true } },
-    reporter: { select: { name: true, email: true } },
-  }
-
-  if (user.role === UserRole.EMPLOYEE) {
-    meetings = await prisma.meeting.findMany({
-      where: { employeeId: user.id },
-      include: meetingSelect,
-      orderBy: { meetingDate: 'desc' },
-    })
-
-    recurringSchedules = await prisma.recurringSchedule.findMany({
-      where: { employeeId: user.id, isActive: true },
-      include: {
-        employee: { select: { id: true, name: true, email: true } },
+  const [list, recurringSchedules] = await Promise.all([
+    listMeetingsPage({ user, tab, page: parsePage(searchParams.page) }),
+    prisma.recurringSchedule.findMany({
+      where: scheduleWhere,
+      select: {
+        id: true,
+        frequency: true,
+        dayOfWeek: true,
+        timeOfDay: true,
+        isActive: true,
+        nextMeetingDate: true,
+        employee: { select: { id: true, name: true } },
         reporter: { select: { name: true } },
       },
       orderBy: { createdAt: 'desc' },
-    })
-  } else if (user.role === UserRole.REPORTER) {
-    meetings = await prisma.meeting.findMany({
-      where: { OR: [{ employeeId: user.id }, { reporterId: user.id }] },
-      include: meetingSelect,
-      orderBy: { meetingDate: 'desc' },
-    })
-
-    recurringSchedules = await prisma.recurringSchedule.findMany({
-      where: { reporterId: user.id, isActive: true },
-      include: {
-        employee: { select: { id: true, name: true, email: true } },
-        reporter: { select: { name: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    })
-  } else {
-    meetings = await prisma.meeting.findMany({
-      include: meetingSelect,
-      orderBy: { meetingDate: 'desc' },
-    })
-
-    recurringSchedules = await prisma.recurringSchedule.findMany({
-      where: { isActive: true },
-      include: {
-        employee: { select: { id: true, name: true, email: true } },
-        reporter: { select: { name: true } },
-      },
-      orderBy: { createdAt: 'desc' },
-    })
-  }
+    }),
+  ])
 
   return (
     <MeetingsClient
-      meetings={meetings}
+      meetings={list.meetings}
+      total={list.total}
+      offset={list.offset}
+      pageSize={list.pageSize}
+      stats={list.stats}
+      tab={tab}
       recurringSchedules={recurringSchedules}
       currentUserId={user.id}
       userRole={user.role}

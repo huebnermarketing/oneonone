@@ -18,7 +18,7 @@ interface CalendarMeeting {
 interface WeekCalendarProps {
   initialMeetings: CalendarMeeting[]
   initialWeekStart: string
-  /** End of preloaded range (e.g. 1 year). When navigating within this range, filter from initialMeetings instead of fetching. */
+  /** End of the preloaded range (the dashboard sends 8 weeks). When navigating within this range, filter from initialMeetings instead of fetching. */
   initialRangeEnd?: string
   userRole: string
 }
@@ -475,7 +475,7 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
     return start.getTime() >= new Date(initialWeekStart).getTime() && end.getTime() <= rangeEnd.getTime()
   }, [rangeEnd, initialWeekStart, f.timeZone])
 
-  // Week meetings: use preloaded 1-year data when in range, otherwise fetch
+  // Week meetings: use preloaded data when in range, otherwise fetch
   useEffect(() => {
     const weekEnd = new Date(weekStart)
     weekEnd.setDate(weekEnd.getDate() + 7)
@@ -494,7 +494,7 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
       .finally(() => setWeekLoading(false))
   }, [weekStart, initialMeetings, isPreloaded, fetchRange, f.dateKey])
 
-  // Month meetings: use preloaded 1-year data when in range, otherwise fetch
+  // Month meetings: use preloaded data when in range, otherwise fetch
   useEffect(() => {
     if (view !== 'month') return
     const key = `${monthDate.getFullYear()}-${monthDate.getMonth()}`

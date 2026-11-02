@@ -1,48 +1,54 @@
 'use client'
 
-import { useState } from 'react'
+import { useTransition } from 'react'
 import Link from 'next/link'
+import { usePathname, useRouter } from 'next/navigation'
 import { CheckCircle2, XCircle, Clock, Mic } from 'lucide-react'
 import { useFormat } from '@/components/providers/timezone-provider'
 import { MeetingStatusPill, Pill } from '@/components/ui/pill'
+import { Pagination } from '@/components/ui/pagination'
 
 interface MeetingHistoryItem {
   id: string
   meetingDate: Date
   status: string
   formSubmittedAt: Date | string | null
-  reporter: { name: string }
+  reporter: { name: string | null }
   recording: {
-    id: string
     status: string
     summary: string | null
-    keyPoints: unknown
     sentiment: unknown
     qualityScore: number | null
-    duration: number | null
-    language: string | null
-    processedAt: Date | null
   } | null
 }
 
 interface MeetingHistoryListProps {
+  /** One page, newest first — paged on the server via `?page=`. */
   meetings: MeetingHistoryItem[]
+  total: number
+  offset: number
+  pageSize: number
 }
 
-const INITIAL_DISPLAY = 20
-
-export function MeetingHistoryList({ meetings }: MeetingHistoryListProps) {
+export function MeetingHistoryList({ meetings, total, offset, pageSize }: MeetingHistoryListProps) {
   const f = useFormat()
-  const [showAll, setShowAll] = useState(false)
+  const router = useRouter()
+  const pathname = usePathname()
+  const [isNavigating, startTransition] = useTransition()
   const now = new Date()
 
-  const displayedMeetings = showAll ? meetings : meetings.slice(0, INITIAL_DISPLAY)
-  const hasMore = meetings.length > INITIAL_DISPLAY
+  const goTo = (nextOffset: number) => {
+    const page = Math.floor(nextOffset / pageSize) + 1
+    startTransition(() => router.push(page > 1 ? `${pathname}?page=${page}` : pathname, { scroll: false }))
+  }
 
   return (
     <>
-      <div className="divide-y divide-off-white dark:divide-medium-gray/20">
-        {displayedMeetings.map((meeting) => {
+      <div
+        aria-busy={isNavigating}
+        className={`divide-y divide-off-white dark:divide-medium-gray/20 transition-opacity ${isNavigating ? 'opacity-60' : ''}`}
+      >
+        {meetings.map((meeting) => {
           const date = new Date(meeting.meetingDate)
           const isPast = date < now
           const isMissed =
@@ -124,19 +130,14 @@ export function MeetingHistoryList({ meetings }: MeetingHistoryListProps) {
           )
         })}
       </div>
-      {hasMore && (
-        <div className="px-4 sm:px-6 py-3 border-t border-off-white dark:border-medium-gray/20">
-          <button
-            type="button"
-            onClick={() => setShowAll(!showAll)}
-            className="text-sm font-medium text-medium-gray hover:text-dark-gray dark:hover:text-white transition-colors"
-          >
-            {showAll
-              ? 'Show fewer meetings'
-              : `Show all ${meetings.length} meetings`}
-          </button>
-        </div>
-      )}
+      <Pagination
+        offset={offset}
+        limit={pageSize}
+        total={total}
+        onChange={goTo}
+        noun="meetings"
+        className="px-4 sm:px-6 py-3 border-t border-off-white dark:border-medium-gray/20"
+      />
     </>
   )
 }
