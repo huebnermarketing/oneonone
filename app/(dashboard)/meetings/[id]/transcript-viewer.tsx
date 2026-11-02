@@ -9,8 +9,6 @@ import {
   Star, 
   Globe, 
   Volume2,
-  ChevronDown,
-  ChevronUp,
   Trash2,
   Loader2,
   Plus,
@@ -21,6 +19,8 @@ import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
 import { languageName } from '@/lib/ui'
 import { TodoPriorityPill } from '@/components/ui/pill'
+import { TranscriptPanel } from './transcript-panel'
+import type { SpeakerTurn } from '@/lib/transcript-format'
 
 interface TranscriptViewerProps {
   recording: {
@@ -54,18 +54,21 @@ interface TranscriptViewerProps {
     } | null
     duration: number | null
     audioPlaybackUrl: string | null
+    /** AI speaker labels (lib/transcript-turns.ts); null = plain transcript */
+    speakerTurns?: SpeakerTurn[] | null
   }
+  reporterName?: string
+  employeeName?: string
   employeeId?: string
   reporterId?: string
   /** false = read-only view (employee); hides delete and add-to-todo */
   canManage?: boolean
 }
 
-export function TranscriptViewer({ recording, employeeId, reporterId, canManage = true }: TranscriptViewerProps) {
+export function TranscriptViewer({ recording, employeeId, reporterId, canManage = true, reporterName = 'Manager', employeeName = 'Employee' }: TranscriptViewerProps) {
   const router = useRouter()
   const { toastError } = useToast()
   const confirm = useConfirm()
-  const [showFullTranscript, setShowFullTranscript] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [activeTab, setActiveTab] = useState<'summary' | 'transcript' | 'analysis'>('summary')
   const [audioUrl, setAudioUrl] = useState<string | null>(recording.audioPlaybackUrl)
@@ -394,44 +397,7 @@ export function TranscriptViewer({ recording, employeeId, reporterId, canManage 
 
       {/* Transcript Tab */}
       {activeTab === 'transcript' && (
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 p-6">
-          <h4 className="font-semibold text-dark-gray dark:text-white mb-4 flex items-center gap-2">
-            <FileText className="w-5 h-5 text-orange" />
-            Full Transcript
-          </h4>
-          <div className="relative">
-            <div className={`text-charcoal dark:text-light-gray leading-relaxed whitespace-pre-wrap ${
-              !showFullTranscript && recording.transcript && recording.transcript.length > 1000 
-                ? 'max-h-[300px] overflow-hidden' 
-                : ''
-            }`}>
-              {recording.transcript || 'No transcript available'}
-            </div>
-            
-            {recording.transcript && recording.transcript.length > 1000 && !showFullTranscript && (
-              <div className="absolute bottom-0 left-0 right-0 h-20 bg-gradient-to-t from-white dark:from-dark-gray to-transparent" />
-            )}
-          </div>
-          
-          {recording.transcript && recording.transcript.length > 1000 && (
-            <button
-              onClick={() => setShowFullTranscript(!showFullTranscript)}
-              className="mt-4 flex items-center gap-2 text-sm font-medium text-orange hover:text-orange/80 transition-colors"
-            >
-              {showFullTranscript ? (
-                <>
-                  <ChevronUp className="w-4 h-4" />
-                  Show Less
-                </>
-              ) : (
-                <>
-                  <ChevronDown className="w-4 h-4" />
-                  Show Full Transcript
-                </>
-              )}
-            </button>
-          )}
-        </div>
+        <TranscriptPanel transcript={recording.transcript} turns={recording.speakerTurns ?? null} reporterName={reporterName} employeeName={employeeName} />
       )}
 
       {/* Analysis Tab */}

@@ -199,6 +199,8 @@ model MeetingRecording {
   duration       Int?
   fileSize       Int?
   transcript     String?
+  /// AI speaker labels: [{ speaker: 'REPORTER'|'EMPLOYEE', text }] (lib/transcript-turns.ts); null = plain transcript
+  speakerTurns   Json?
   language       String?
   summary        String?
   keyPoints      Json?

@@ -22,6 +22,7 @@ import { RescheduleBanner, RescheduleButton } from './reschedule'
 import { rescheduleRole } from '@/lib/reschedule'
 import { canCancel, canEditFormAnswers, canManageMeeting, canViewMeeting, canViewNotes, canViewRecording } from '@/lib/meeting-access'
 import { FORM_FIELDS } from '@/lib/form-fields'
+import type { SpeakerTurn } from '@/lib/transcript-format'
 import { FormAnswerHistory, type FormRevisionView } from './form-answer-history'
 import { MeetingStatusPill, Pill, TodoPriorityPill, TodoStatusPill } from '@/components/ui/pill'
 
@@ -350,7 +351,10 @@ export default async function MeetingDetailPage({
                 qualityDetails: meeting.recording.qualityDetails as { clarity: number; actionability: number; engagement: number; goalAlignment: number; followUp: number; overallFeedback: string } | null,
                 duration: meeting.recording.duration,
                 audioPlaybackUrl: null, // Will be fetched client-side with signed URL
+                speakerTurns: (meeting.recording.speakerTurns as SpeakerTurn[] | null) ?? null,
               }}
+              reporterName={meeting.reporter.name || 'Manager'}
+              employeeName={meeting.employee.name || 'Employee'}
               employeeId={meeting.employeeId}
               reporterId={meeting.reporterId}
               canManage={isReporter}
