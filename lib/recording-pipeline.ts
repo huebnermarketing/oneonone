@@ -20,6 +20,7 @@ import { prisma } from './prisma'
 import { chunkKey, finalRecordingKey, downloadFromS3, uploadToS3, deleteFromS3 } from './s3'
 import { joinAudioParts, partChunkIndexes, type ChunkRange } from './recording-parts'
 import { transcribeAudio, analyzeTranscript } from './openai'
+import { labelSpeakers } from './transcript-turns'
 import * as notify from './notify'
 
 export const MAX_ATTEMPTS = 3
@@ -240,6 +241,7 @@ export async function runJob(jobId: string): Promise<void> {
           where: { meetingId },
           data: {
             transcript: t.text.trim() || '(No speech detected)',
+            speakerTurns: Prisma.DbNull,
             language: t.language,
             duration: durationSeconds,
             ...SILENT_ANALYSIS,
@@ -254,7 +256,8 @@ export async function runJob(jobId: string): Promise<void> {
 
       await prisma.meetingRecording.update({
         where: { meetingId },
-        data: { transcript: t.text, language: t.language, duration: durationSeconds },
+        // a new transcript invalidates old speaker labels (ANALYZE labels it again)
+        data: { transcript: t.text, language: t.language, duration: durationSeconds, speakerTurns: Prisma.DbNull },
       })
       stage = 'ANALYZE'
     }
@@ -265,6 +268,11 @@ export async function runJob(jobId: string): Promise<void> {
       if (!transcript || !transcript.trim()) throw new Error('ANALYZE stage needs a transcript')
       log('analyzing transcript')
       const a = await analyzeTranscript(transcript, rec.meeting.employee.name, rec.meeting.reporter.name)
+      // Who said what — best effort: a failure keeps the plain transcript and never fails the job
+      const turns = await labelSpeakers(transcript, rec.meeting.reporter.name ?? '', rec.meeting.employee.name ?? '').catch((err) => {
+        log(`speaker labelling failed: ${err instanceof Error ? err.message : err}`)
+        return null
+      })
       await prisma.meetingRecording.update({
         where: { meetingId },
         data: {
@@ -274,6 +282,7 @@ export async function runJob(jobId: string): Promise<void> {
           sentiment: a.sentiment,
           qualityScore: a.qualityScore,
           qualityDetails: a.qualityDetails,
+          speakerTurns: turns ? (turns as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
           status: 'COMPLETED',
           errorMessage: null,
           processedAt: new Date(),
