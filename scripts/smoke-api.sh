@@ -258,6 +258,21 @@ else
   check "keka sync without config 400" 400 $(code -b "$ADMIN" -X POST $B/api/admin/keka-sync -H 'content-type: application/json' -d '{}')
 fi
 
+echo "## backup & restore"
+check "backup 200" 200 $(code -b "$ADMIN" -X POST $B/api/admin/backup -H 'content-type: application/json' -d '{}')
+python3 -c "import json;open('/tmp/smoke-backup.json','w').write(json.dumps({'data':json.loads(json.load(open('/tmp/body'))['data']),'options':{'clearExisting':False}}))"
+check "backup is v1.1 with todos + schedules" "1.1 yes" "$(python3 -c "import json;d=json.load(open('/tmp/smoke-backup.json'))['data'];print(d['version'],'yes' if 'todos' in d['data'] and 'recurringSchedules' in d['data'] else 'no')")"
+UC=$($PSQL -c 'select count(*) from "User"'); MC=$($PSQL -c 'select count(*) from "Meeting"')
+check "restore own backup (merge) 200" 200 $(code -b "$ADMIN" -X POST $B/api/admin/restore -H 'content-type: application/json' --data @/tmp/smoke-backup.json)
+check "merge creates no duplicates" "$UC $MC" "$($PSQL -c 'select (select count(*) from "User")||'"' '"'||(select count(*) from "Meeting")')"
+DEPT=$($PSQL -c 'select name from "Department" limit 1')
+cat > /tmp/smoke-restore2.json <<JSON
+{"data":{"version":"1.0","data":{"departments":[{"id":"00000000-0000-4000-8000-0000000000d1","name":"$DEPT"}],"users":[{"id":"00000000-0000-4000-8000-0000000000a1","email":"restore.smoke@test.com","name":"Restore Smoke","role":"EMPLOYEE","departmentId":"00000000-0000-4000-8000-0000000000d1","reportsToId":"00000000-0000-4000-8000-0000000000ff"}],"meetings":[{"id":"00000000-0000-4000-8000-0000000000m1","employeeId":"00000000-0000-4000-8000-0000000000ee","reporterId":"00000000-0000-4000-8000-0000000000a1","meetingDate":"2026-12-01T05:00:00.000Z"}]}}}
+JSON
+check "same-name department + missing people don't abort the restore" 200 $(code -b "$ADMIN" -X POST $B/api/admin/restore -H 'content-type: application/json' --data @/tmp/smoke-restore2.json)
+check "user created into the existing department, 2 rows skipped" "1 2" "$($PSQL -c "select count(*) from \"User\" u join \"Department\" d on d.id=u.\"departmentId\" where u.email='restore.smoke@test.com' and d.name='$DEPT'")$(python3 -c "import json;print(' '+str(len(json.load(open('/tmp/body'))['warnings'])))")"
+$PSQL -c "delete from \"User\" where email='restore.smoke@test.com'; delete from \"AuditLog\" where \"entityType\" in ('Restore','Backup') and \"createdAt\" > now() - interval '10 minutes'; delete from \"BackupHistory\" where \"startedAt\" > now() - interval '10 minutes';" >/dev/null
+
 # cleanup: restore cancelled fixtures, remove temp rows, reset policies
 $PSQL -c "update \"Meeting\" set status='SCHEDULED' where id in ('$MID','$MID2'); delete from \"Notification\" where link in ('/meetings/$MID','/meetings/$MID2') and type='MEETING_CANCELLED'; update \"User\" set title=null where id='$ALEX_ID'; delete from \"Todo\" where id='$TODO_ID'; delete from \"AuditLog\" where \"entityId\" in ('$MID','$MID2') and action='UPDATE' and details->>'status'='CANCELLED'; delete from \"Session\" where expires < now()+interval '2 days';" >/dev/null
 curl -s -o /dev/null -b "$ADMIN" -X PUT $B/api/settings -H 'content-type: application/json' -d '{"cancelPolicy":"REPORTER_AND_ADMIN","employeeCanViewRecording":false}'
