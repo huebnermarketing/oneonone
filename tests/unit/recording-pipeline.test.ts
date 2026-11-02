@@ -20,6 +20,9 @@ vi.mock('@/lib/openai', () => ({
   })),
 }))
 vi.mock('@/lib/notifications', () => ({ notifyRecordingReady: vi.fn(async () => undefined) }))
+vi.mock('@/lib/transcript-turns', () => ({
+  labelSpeakers: vi.fn(async () => [{ speaker: 'REPORTER', text: 'Hi.' }, { speaker: 'EMPLOYEE', text: 'Hello.' }]),
+}))
 vi.mock('@/lib/recording-parts', async (orig) => ({
   ...(await orig<typeof import('@/lib/recording-parts')>()),
   joinAudioParts: vi.fn(async (parts: Buffer[]) => Buffer.concat(parts)),
@@ -180,6 +183,7 @@ describe('runJob', () => {
     expect(recUpdates.some((d) => d.audioKey === FINAL)).toBe(true)
     expect(recUpdates.some((d) => d.transcript && d.language === 'en' && d.duration === 600)).toBe(true)
     expect(recUpdates.at(-1)).toMatchObject({ status: 'COMPLETED', summary: 'Roadmap discussion', qualityScore: 80 })
+    expect(recUpdates.at(-1)!.speakerTurns).toHaveLength(2)
 
     const jobUpdates = prismaMock.recordingJob.update.mock.calls.map((c) => c[0].data)
     expect(jobUpdates.map((d) => d.stage).filter(Boolean)).toEqual(['COMBINE', 'TRANSCRIBE', 'ANALYZE', 'DONE'])
