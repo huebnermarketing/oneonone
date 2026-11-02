@@ -4,10 +4,11 @@ import { ADMIN, parseBody, withApiAuth } from '@/lib/api'
 import { prisma } from '@/lib/prisma'
 import { createAuditLog } from '@/lib/audit'
 import { createBackupSchema } from '@/lib/validation/admin'
+import { exportBackup } from '@/lib/backup'
 
 export const dynamic = 'force-dynamic'
 
-const BACKUP_TABLES = ['users', 'departments', 'meetings', 'todos', 'recordings']
+const BACKUP_TABLES = ['departments', 'users', 'recurringSchedules', 'meetings', 'recordings', 'todos', 'formRevisions']
 
 // GET /api/admin/backup - backup history (admin only)
 export const GET = withApiAuth(ADMIN, async () => {
@@ -31,48 +32,6 @@ async function getRecordCounts() {
   return { users, departments, meetings, todos, recordings, notifications, auditLogs }
 }
 
-async function exportData() {
-  const [users, departments, meetings] = await Promise.all([
-    prisma.user.findMany({
-      select: {
-        id: true,
-        email: true,
-        name: true,
-        role: true,
-        departmentId: true,
-        reportsToId: true,
-        phone: true,
-        title: true,
-        bio: true,
-        isActive: true,
-        createdAt: true,
-      },
-    }),
-    prisma.department.findMany(),
-    prisma.meeting.findMany({
-      include: {
-        todos: true,
-        recording: {
-          select: {
-            id: true,
-            transcript: true,
-            summary: true,
-            keyPoints: true,
-            sentiment: true,
-            qualityScore: true,
-            status: true,
-          },
-        },
-      },
-    }),
-  ])
-  return {
-    exportedAt: new Date().toISOString(),
-    version: '1.0',
-    data: { users, departments, meetings },
-  }
-}
-
 /**
  * POST /api/admin/backup { type } (admin only)
  * Builds a JSON export inline and returns it in the response body (the client downloads it).
@@ -89,7 +48,7 @@ export const POST = withApiAuth(ADMIN, async (req: NextRequest, { user }) => {
 
   try {
     const recordCount = await getRecordCounts()
-    const jsonData = JSON.stringify(await exportData(), null, 2)
+    const jsonData = JSON.stringify(await exportBackup(), null, 2)
     const fileSize = Buffer.from(jsonData).length
     const fileName = `ami-backup-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
 

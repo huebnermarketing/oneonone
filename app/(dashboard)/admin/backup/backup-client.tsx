@@ -15,7 +15,8 @@ import {
 import { BackupHistory, BackupStatus } from '@prisma/client'
 import { useFormat } from '@/components/providers/timezone-provider'
 import { Pill, type PillTone } from '@/components/ui/pill'
-import { formatFileSize } from '@/lib/ui'
+import { formatFileSize, plural } from '@/lib/ui'
+import { useConfirm } from '@/components/ui/confirm-modal'
 
 const STATUS_META: Record<BackupStatus, { icon: typeof Clock; tone: PillTone; label: string; spin?: boolean }> = {
   PENDING: { icon: Clock, tone: 'amber', label: 'Pending' },
@@ -33,7 +34,9 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
   const [backups, setBackups] = useState<BackupHistory[]>(initialBackups)
   const [creating, setCreating] = useState(false)
   const [restoring, setRestoring] = useState(false)
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string; details?: string[] } | null>(null)
+  const [replaceExisting, setReplaceExisting] = useState(false)
+  const confirm = useConfirm()
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const createBackup = async () => {
@@ -82,24 +85,42 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
     setMessage(null)
 
     try {
+      if (replaceExisting) {
+        const ok = await confirm(
+          'All meetings, to-dos, recordings, recurring schedules and notifications in THIS app are deleted and replaced with the ones in the file. Users and departments are merged, not deleted.',
+          { title: 'Replace existing data?', confirmText: 'Replace and restore', cancelText: 'Cancel', variant: 'danger' }
+        )
+        if (!ok) return
+      }
       const text = await file.text()
       const data = JSON.parse(text)
 
       const response = await fetch('/api/admin/restore', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           data,
-          options: { clearExisting: false, restoreUsers: true, restoreMeetings: true }
+          options: { clearExisting: replaceExisting, restoreUsers: true, restoreMeetings: true },
         }),
       })
 
       const result = await response.json()
 
       if (response.ok) {
-        setMessage({ 
-          type: 'success', 
-          text: `Restored: ${result.departments} departments, ${result.users} users, ${result.meetings} meetings, ${result.todos} todos` 
+        const users = result.users.created + result.users.updated
+        const parts = [
+          plural(users, 'user') + ` (${result.users.created} new)`,
+          plural(result.departments.created + result.departments.updated, 'department'),
+          plural(result.recurringSchedules, 'recurring schedule'),
+          plural(result.meetings, 'meeting'),
+          plural(result.recordings, 'recording'),
+          plural(result.todos, 'to-do'),
+          ...(result.formRevisions ? [plural(result.formRevisions, 'form history entry', 'form history entries')] : []),
+        ]
+        setMessage({
+          type: 'success',
+          text: `Restored ${parts.join(', ')}.${result.warnings.length ? ` ${plural(result.warnings.length, 'row')} skipped:` : ''}`,
+          details: result.warnings,
         })
       } else {
         setMessage({ type: 'error', text: result.error || 'Failed to restore backup' })
@@ -130,6 +151,13 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
             : 'bg-red-500/10 border border-red-500/20 text-red-600 dark:text-red-400'
         }`}>
           {message.text}
+          {message.details && message.details.length > 0 && (
+            <ul className="mt-2 list-disc pl-5 text-sm space-y-0.5 text-dark-gray dark:text-light-gray">
+              {message.details.map((d, i) => (
+                <li key={i}>{d}</li>
+              ))}
+            </ul>
+          )}
         </div>
       )}
 
@@ -147,7 +175,7 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
             </div>
           </div>
           <p className="text-sm text-medium-gray mb-4">
-            Creates a complete backup of users, departments, meetings, todos, and recordings metadata.
+            Users, departments, recurring schedules, meetings, form answers and their history, to-dos, and recording transcripts and analysis. Not included: audio files, logins, notifications, audit logs.
           </p>
           <button
             type="button"
@@ -180,12 +208,27 @@ export function BackupClient({ initialBackups }: BackupClientProps) {
               <p className="text-sm text-medium-gray">Import from backup file</p>
             </div>
           </div>
-          <div className="flex items-start gap-2 mb-4 p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
-            <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-amber-600 dark:text-amber-400">
-              Restoring will merge data with existing records. Duplicate entries will be updated.
-            </p>
-          </div>
+          <fieldset className="mb-4 space-y-2">
+            <legend className="sr-only">How to restore</legend>
+            {[
+              { value: false, title: 'Merge into existing data', desc: 'Users matched by email, departments by name; meetings and to-dos in the file are added or updated.' },
+              { value: true, title: 'Replace meetings and to-dos', desc: 'Deletes this app\'s meetings, to-dos, recordings and schedules first, then restores the file. Use to mirror another environment.' },
+            ].map((o) => (
+              <label key={String(o.value)} className={`flex items-start gap-3 p-3 rounded-xl border cursor-pointer transition-colors ${replaceExisting === o.value ? 'border-dark-gray dark:border-white bg-off-white/60 dark:bg-dark-gray' : 'border-off-white dark:border-medium-gray/20'}`}>
+                <input type="radio" name="restore-mode" checked={replaceExisting === o.value} onChange={() => setReplaceExisting(o.value)} className="mt-1" />
+                <span>
+                  <span className="block text-sm font-medium text-dark-gray dark:text-white">{o.title}</span>
+                  <span className="block text-xs text-medium-gray">{o.desc}</span>
+                </span>
+              </label>
+            ))}
+          </fieldset>
+          {replaceExisting && (
+            <div className="flex items-start gap-2 mb-4 p-3 rounded-lg bg-amber-500/5 border border-amber-500/20">
+              <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-600 dark:text-amber-400">Existing meetings, to-dos and recordings in this app will be deleted. Audio files are not part of a backup.</p>
+            </div>
+          )}
           <input
             ref={fileInputRef}
             type="file"
