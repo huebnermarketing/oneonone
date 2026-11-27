@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { Calendar, Clock, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react'
 import { useFormat } from '@/components/providers/timezone-provider'
+import { plural } from '@/lib/ui'
 import { startOfDayInTz, endOfDayInTz } from '@/lib/dates'
 import { MeetingStatusPill, Pill } from '@/components/ui/pill'
 import { AbsenceChips } from '@/components/ui/absence-chip'
@@ -134,6 +135,54 @@ const statusDot: Record<string, string> = {
 
 // ── Week View ────────────────────────────────────────────────────────────────
 
+/** Meetings shown per day before "+N more" (desktop week view). */
+const DAY_VISIBLE = 6
+
+const statusBar: Record<string, string> = {
+  PROPOSED: 'border-amber-500',
+  SCHEDULED: 'border-blue-500',
+  COMPLETED: 'border-green-500',
+  CANCELLED: 'border-red-400',
+}
+
+const STATUS_LABEL: Record<string, string> = { PROPOSED: 'Proposed', SCHEDULED: 'Scheduled', COMPLETED: 'Completed', CANCELLED: 'Cancelled' }
+
+/** One meeting in a week column: status as a coloured left edge, time + name on one line, leave chips below. */
+function WeekEntry({ m, name, viewerId, nowMs }: { m: CalendarMeeting; name: string | null | undefined; viewerId: string; nowMs: number }) {
+  const f = useFormat()
+  // The viewer's own leave is shown once in the day header, not on every meeting
+  const chips = chipsOf(m, viewerId).filter((c) => !c.label.startsWith('You: '))
+  const past = new Date(m.meetingDate).getTime() < nowMs && m.status !== 'COMPLETED'
+  return (
+    <Link
+      href={`/meetings/${m.id}`}
+      title={`${f.time(m.meetingDate)} · ${name || 'Meeting'} · ${STATUS_LABEL[m.status] ?? m.status}`}
+      className={`block border-l-2 ${statusBar[m.status] ?? statusBar.SCHEDULED} rounded-r-md pl-2 pr-1.5 py-1 hover:bg-off-white dark:hover:bg-dark-gray/60 transition-colors group focus-visible:ring-2 focus-visible:ring-orange/50 focus-visible:outline-none ${past ? 'opacity-60' : ''}`}
+    >
+      <span className={`block text-xs font-medium truncate group-hover:underline ${m.status === 'CANCELLED' ? 'line-through text-medium-gray' : 'text-dark-gray dark:text-white'}`}>
+        {name || 'Meeting'}
+      </span>
+      <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+        <span className="text-[11px] tabular-nums text-medium-gray">{f.time(m.meetingDate)}</span>
+        <AbsenceChips chips={chips} className="px-1.5 py-0 text-[10px]" />
+      </span>
+    </Link>
+  )
+}
+
+function StatusLegend() {
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-x-4 gap-y-1 px-4 py-2 border-t border-off-white dark:border-medium-gray/20 text-[11px] text-medium-gray" aria-hidden="true">
+      {(['SCHEDULED', 'PROPOSED', 'COMPLETED'] as const).map((s) => (
+        <span key={s} className="flex items-center gap-1.5">
+          <span className={`w-2.5 h-2.5 rounded-sm ${statusDot[s]}`} />
+          {STATUS_LABEL[s]}
+        </span>
+      ))}
+    </div>
+  )
+}
+
 function WeekView({ meetings, days, todayKey, userRole, viewerId }: {
   viewerId: string
   meetings: CalendarMeeting[]
@@ -143,9 +192,18 @@ function WeekView({ meetings, days, todayKey, userRole, viewerId }: {
   userRole: string
 }) {
   const f = useFormat()
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const [nowMs] = useState(() => Date.now())
+  const toggleDay = (key: string) =>
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
   return (
     <>
-      {/* Desktop: 7-column grid */}
+      {/* Desktop: 7 equal columns; each day is a compact time-ordered list, long days collapse to "+N more" */}
       <div className="hidden sm:block overflow-x-auto">
         <div className="grid grid-cols-7 min-w-[56rem] w-full divide-x divide-off-white dark:divide-medium-gray/20 min-h-[140px]">
           {days.map((day, idx) => {
@@ -154,41 +212,50 @@ function WeekView({ meetings, days, todayKey, userRole, viewerId }: {
             const dayMeetings = meetings
               .filter((m) => f.dateKey(m.meetingDate) === dayKey)
               .sort((a, b) => new Date(a.meetingDate).getTime() - new Date(b.meetingDate).getTime())
+            const isOpen = expanded.has(dayKey)
+            const visible = isOpen ? dayMeetings : dayMeetings.slice(0, DAY_VISIBLE)
+            const hidden = dayMeetings.length - visible.length
+            const ownAbsence = dayMeetings.flatMap((m) => chipsOf(m, viewerId)).find((c) => c.label.startsWith('You: '))
 
             return (
-              <div key={idx} role="group" aria-label={`${f.dateOnly(dayKey, 'weekday')}${isToday ? ' (today)' : ''}`} className={`flex flex-col ${isToday ? 'bg-blue-500/5 dark:bg-blue-500/10' : ''}`}>
-                <div className={`px-2 py-2 text-center border-b border-off-white dark:border-medium-gray/20 ${isToday ? 'bg-blue-500/10' : ''}`}>
-                  <p className="text-xs font-medium text-medium-gray">{dayLabels[idx]}</p>
-                  <p className={`text-sm font-bold ${isToday ? 'text-blue-600 dark:text-blue-400' : 'text-dark-gray dark:text-white'}`}>
-                    {day.getDate()}
-                  </p>
-                </div>
-                <div className="flex-1 p-1.5 space-y-1">
-                  {dayMeetings.length === 0 && (
-                    <p className="text-[10px] text-light-gray text-center pt-2">—</p>
+              <div key={idx} role="group" aria-label={`${f.dateOnly(dayKey, 'weekday')}${isToday ? ' (today)' : ''}, ${plural(dayMeetings.length, 'meeting')}`} className={`flex flex-col min-w-0 ${isToday ? 'bg-blue-500/[0.03] dark:bg-blue-500/10' : ''}`}>
+                <div className={`px-3 py-2 border-b border-off-white dark:border-medium-gray/20 flex items-center justify-between gap-2 ${isToday ? 'bg-blue-500/10' : ''}`}>
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-xs font-medium text-medium-gray">{dayLabels[idx]}</span>
+                    <span className={`text-sm font-bold ${isToday ? 'text-blue-600 dark:text-blue-400' : 'text-dark-gray dark:text-white'}`}>{day.getDate()}</span>
+                  </div>
+                  {dayMeetings.length > 0 && (
+                    <span className="text-[11px] tabular-nums text-medium-gray" aria-hidden="true">{dayMeetings.length}</span>
                   )}
-                  {dayMeetings.map((m) => {
-                    const time = f.time(m.meetingDate)
-                    const name = userRole === 'EMPLOYEE' ? m.reporter?.name : m.employee?.name
-
-                    return (
-                      <Link key={m.id} href={`/meetings/${m.id}`} className="block px-1.5 py-1.5 rounded-lg hover:bg-off-white/70 dark:hover:bg-dark-gray/50 transition-colors group">
-                        <p className="text-[11px] font-medium text-dark-gray dark:text-white truncate group-hover:underline">
-                          {name || 'Meeting'}
-                        </p>
-                        <p className="text-[10px] text-medium-gray">{time}</p>
-                        <MeetingStatusPill status={m.status} className="mt-0.5 px-1.5 py-0.5 text-[9px]" />
-                        <span className="mt-0.5 flex flex-wrap gap-0.5">
-                          <AbsenceChips chips={chipsOf(m, viewerId)} className="px-1.5 py-0.5 text-[9px]" />
-                        </span>
-                      </Link>
-                    )
-                  })}
+                </div>
+                <div className="flex-1 p-1.5 space-y-0.5">
+                  {ownAbsence && (
+                    <div className="px-1 pb-1 flex">
+                      <AbsenceChips chips={[ownAbsence]} className="px-1.5 py-0 text-[10px] max-w-full truncate" />
+                    </div>
+                  )}
+                  {dayMeetings.length === 0 && (
+                    <p className="text-[11px] text-light-gray text-center pt-3">No meetings</p>
+                  )}
+                  {visible.map((m) => (
+                    <WeekEntry key={m.id} m={m} name={userRole === 'EMPLOYEE' ? m.reporter?.name : m.employee?.name} viewerId={viewerId} nowMs={nowMs} />
+                  ))}
+                  {(hidden > 0 || isOpen) && dayMeetings.length > DAY_VISIBLE && (
+                    <button
+                      type="button"
+                      onClick={() => toggleDay(dayKey)}
+                      aria-expanded={isOpen}
+                      className="w-full mt-1 px-2 py-1 rounded-md text-[11px] font-medium text-blue-600 dark:text-blue-400 hover:bg-blue-500/10 text-left transition-colors focus-visible:ring-2 focus-visible:ring-orange/50 focus-visible:outline-none"
+                    >
+                      {isOpen ? 'Show less' : `+${hidden} more`}
+                    </button>
+                  )}
                 </div>
               </div>
             )
           })}
         </div>
+        <StatusLegend />
       </div>
 
       {/* Mobile: stacked list */}
