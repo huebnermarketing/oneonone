@@ -164,7 +164,7 @@ export function OneOnOneForm({
             <textarea
               {...register('priorityGoalAgency')}
               rows={4}
-              className={inputClass}
+              className={`${inputClass} ${errors.priorityGoalAgency ? '!border-red-500 focus:!ring-red-500/20' : ''}`}
               placeholder="What are your goals to help the agency grow?"
               disabled={isReadOnly}
             />
@@ -203,7 +203,7 @@ export function OneOnOneForm({
             <textarea
               {...register('goodNews')}
               rows={4}
-              className={inputClass}
+              className={`${inputClass} ${errors.goodNews ? '!border-red-500 focus:!ring-red-500/20' : ''}`}
               placeholder="Share any good news or wins..."
               disabled={isReadOnly}
             />
@@ -227,7 +227,7 @@ export function OneOnOneForm({
             <textarea
               {...register('supportNeeded')}
               rows={4}
-              className={inputClass}
+              className={`${inputClass} ${errors.supportNeeded ? '!border-red-500 focus:!ring-red-500/20' : ''}`}
               placeholder="What support or resources do you need?"
               disabled={isReadOnly}
             />
@@ -243,7 +243,7 @@ export function OneOnOneForm({
             <textarea
               {...register('priorityDiscussions')}
               rows={4}
-              className={inputClass}
+              className={`${inputClass} ${errors.priorityDiscussions ? '!border-red-500 focus:!ring-red-500/20' : ''}`}
               placeholder="What topics would you like to discuss?"
               disabled={isReadOnly}
             />
@@ -266,7 +266,7 @@ export function OneOnOneForm({
             <textarea
               {...register('headsUp')}
               rows={4}
-              className={inputClass}
+              className={`${inputClass} ${errors.headsUp ? '!border-red-500 focus:!ring-red-500/20' : ''}`}
               placeholder="Any issues or concerns to flag?"
               disabled={isReadOnly}
             />
@@ -289,7 +289,7 @@ export function OneOnOneForm({
             <textarea
               {...register('anythingElse')}
               rows={4}
-              className={inputClass}
+              className={`${inputClass} ${errors.anythingElse ? '!border-red-500 focus:!ring-red-500/20' : ''}`}
               placeholder="Any other thoughts or comments?"
               disabled={isReadOnly}
             />
