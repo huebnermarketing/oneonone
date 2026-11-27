@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { joinArgs, joinAudioParts, normalizeParts, partChunkIndexes } from '@/lib/recording-parts'
+import { hasSeekIndex, joinArgs, joinAudioParts, makeSeekable, normalizeParts, partChunkIndexes, remuxArgs } from '@/lib/recording-parts'
 import { runFfmpeg } from '@/lib/openai'
 
 describe('normalizeParts', () => {
@@ -56,8 +56,27 @@ describe('joinAudioParts (real ffmpeg)', () => {
     await fs.promises.rm(dir, { recursive: true, force: true })
   }, 30_000)
 
-  it('a single part is returned untouched', async () => {
-    const buf = Buffer.from('x')
-    expect(await joinAudioParts([buf])).toBe(buf)
+  it('a single browser-style part (no seek index) is rewrapped so players can skip and scrub', async () => {
+    const fs = await import('fs')
+    const os = await import('os')
+    const path = await import('path')
+    const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'remux-test-'))
+    const live = path.join(dir, 'live.webm')
+    // -live 1 writes WebM like MediaRecorder: no duration, no Cues
+    await runFfmpeg(['-y', '-f', 'lavfi', '-i', 'sine=f=300:d=40', '-c:a', 'libopus', '-f', 'webm', '-live', '1', live])
+    const input = await fs.promises.readFile(live)
+    expect(hasSeekIndex(input)).toBe(false)
+    const out = await joinAudioParts([input])
+    expect(hasSeekIndex(out)).toBe(true)
+    expect(Math.abs(out.length - input.length)).toBeLessThan(input.length * 0.05) // copied, not re-encoded
+    await fs.promises.rm(dir, { recursive: true, force: true })
+  }, 30_000)
+
+  it('keeps a part as is when it already has a seek index or ffmpeg fails', async () => {
+    const garbage = Buffer.from('x')
+    expect(await makeSeekable(garbage)).toBe(garbage)
+    const indexed = Buffer.concat([Buffer.alloc(10), Buffer.from([0x1c, 0x53, 0xbb, 0x6b])])
+    expect(await makeSeekable(indexed)).toBe(indexed)
+    expect(remuxArgs('a.webm', 'b.webm')).toEqual(['-y', '-i', 'a.webm', '-c', 'copy', '-f', 'webm', 'b.webm'])
   })
 })

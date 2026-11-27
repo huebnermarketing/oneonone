@@ -24,6 +24,7 @@ import { MicPicker } from './mic-picker'
 import { Select } from '@/components/ui/select'
 import { plural } from '@/lib/ui'
 import { useRecordingHost } from '@/components/recording/recording-context'
+import { AudioPlayer } from '@/components/ui/audio-player'
 
 // ---------------------------------------------------------------------------
 // Types & Constants
@@ -970,8 +971,7 @@ export function MeetingRecorder({
               {parts.map((p, i) => (
                 <li key={p.id} className="flex items-center gap-3 rounded-xl border border-off-white dark:border-medium-gray/20 bg-off-white/40 dark:bg-dark-gray/40 px-3 py-2">
                   <span className="text-sm font-medium text-dark-gray dark:text-white whitespace-nowrap">Part {i + 1}</span>
-                  <span className="text-sm tabular-nums text-medium-gray">{fmt(p.seconds)}</span>
-                  <audio controls src={p.url} preload="none" className="flex-1 min-w-0 h-9" aria-label={`Part ${i + 1} preview`} />
+                  <AudioPlayer src={p.url} knownDuration={p.seconds} compact label={`Part ${i + 1}`} className="flex-1" />
                   <button
                     type="button"
                     onClick={() => deletePart(p, i)}

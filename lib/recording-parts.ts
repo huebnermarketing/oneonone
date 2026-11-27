@@ -54,9 +54,46 @@ export function joinArgs(inputs: string[], output: string): string[] {
   ]
 }
 
-/** Join several WebM parts into one WebM (single part is returned as is). */
+/** EBML id of the WebM Cues element (the seek index). */
+const CUES_ID = Buffer.from([0x1c, 0x53, 0xbb, 0x6b])
+
+/** True when a WebM has a seek index (Cues) — browser MediaRecorder output doesn't. */
+export const hasSeekIndex = (webm: Buffer) => webm.includes(CUES_ID)
+
+/** ffmpeg arguments that rewrap a WebM without re-encoding, writing the duration and seek index. */
+export function remuxArgs(input: string, output: string): string[] {
+  return ['-y', '-i', input, '-c', 'copy', '-f', 'webm', output]
+}
+
+/**
+ * Browser recordings (MediaRecorder WebM) have no duration or seek index, so players can't skip or scrub
+ * (Chrome shows no total time; Safari's ±15 s buttons do nothing). Rewrap losslessly with ffmpeg; on any
+ * failure the original is returned unchanged.
+ */
+export async function makeSeekable(webm: Buffer): Promise<Buffer> {
+  if (hasSeekIndex(webm)) return webm
+  const fs = await import('fs')
+  const os = await import('os')
+  const path = await import('path')
+  const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'remux-'))
+  try {
+    const input = path.join(dir, 'in.webm')
+    const output = path.join(dir, 'out.webm')
+    await fs.promises.writeFile(input, webm)
+    await runFfmpeg(remuxArgs(input, output), 120_000)
+    const out = await fs.promises.readFile(output)
+    return out.length > 1000 ? out : webm
+  } catch (err) {
+    console.warn('[recording] remux for seeking failed, keeping the original:', err instanceof Error ? err.message : err)
+    return webm
+  } finally {
+    await fs.promises.rm(dir, { recursive: true, force: true }).catch(() => {})
+  }
+}
+
+/** Join several WebM parts into one seekable WebM (a single part is rewrapped so it can be scrubbed). */
 export async function joinAudioParts(parts: Buffer[]): Promise<Buffer> {
-  if (parts.length === 1) return parts[0]!
+  if (parts.length === 1) return makeSeekable(parts[0]!)
   const fs = await import('fs')
   const os = await import('os')
   const path = await import('path')
