@@ -11,6 +11,9 @@ import {
   detectLanguageByScript,
   isGpt4oTranscribe,
   modelSegmentCap,
+  evenSegmentSeconds,
+  isUnreadableAudioError,
+  MIN_SEGMENT_SECONDS,
   preferredResponseFormat,
 } from './transcription-quality'
 
@@ -198,6 +201,40 @@ async function splitAudioForWhisper(inputPath: string, segmentSeconds = DEFAULT_
   return segments
 }
 
+/** Re-encode to 16 kHz mono PCM WAV — the most widely accepted input — for a retry after an "unreadable audio" 400. */
+async function reencodeToWav(inputPath: string): Promise<string> {
+  const outputPath = inputPath.replace(/\.\w+$/, '') + '_retry.wav'
+  await runFfmpeg(['-i', inputPath, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le', '-y', outputPath])
+  return outputPath
+}
+
+/**
+ * transcribeWhisperFile, and when the provider says the file is unreadable ("corrupted or unsupported"),
+ * one retry with the same audio re-encoded as WAV (if that still fits the upload limit).
+ */
+async function transcribeWithRetry(
+  openai: OpenAI,
+  whisperModel: string,
+  filePath: string,
+  uploadFilename: string,
+  tempFiles: string[],
+  language?: string,
+  prompt?: string
+): Promise<TranscriptionResult & { detected: boolean }> {
+  try {
+    return await transcribeWhisperFile(openai, whisperModel, filePath, uploadFilename, language, prompt)
+  } catch (err) {
+    if (!isUnreadableAudioError(err)) throw err
+    const fs = await import('fs')
+    const seconds = await probeDurationSeconds(filePath)
+    console.warn(`[OpenAI] Provider could not read ${uploadFilename} (${seconds.toFixed(1)} s); retrying as WAV`)
+    const wavPath = await reencodeToWav(filePath)
+    tempFiles.push(wavPath)
+    if ((await fs.promises.stat(wavPath)).size > WHISPER_MAX_SIZE) throw err
+    return transcribeWhisperFile(openai, whisperModel, wavPath, uploadFilename.replace(/\.\w+$/, '.wav'), language, prompt)
+  }
+}
+
 async function transcribeWhisperFile(
   openai: OpenAI,
   whisperModel: string,
@@ -369,19 +406,24 @@ export async function transcribeAudio(
     let result: TranscriptionResult
 
     // Per-request cap: the provider's (OpenRouter: 60 s processing timeout) or the model's (gpt-4o-transcribe: ~25 min)
-    const segmentSeconds = Math.min(models.sttSegmentSeconds, modelSegmentCap(models.whisperModel) ?? Infinity)
+    const maxSegmentSeconds = Math.min(models.sttSegmentSeconds, modelSegmentCap(models.whisperModel) ?? Infinity)
+    const totalSeconds = await probeDurationSeconds(whisperPath)
+    console.log(`[OpenAI] Whisper input duration: ${totalSeconds.toFixed(1)} s`)
     const needsSplit =
       whisperStats.size > WHISPER_MAX_SIZE ||
-      (segmentSeconds < DEFAULT_SEGMENT_SECONDS && (await probeDurationSeconds(whisperPath)) > segmentSeconds)
+      (maxSegmentSeconds < DEFAULT_SEGMENT_SECONDS && totalSeconds > maxSegmentSeconds)
+    // Equal pieces, so the last one is never a sub-second sliver the provider rejects
+    const segmentSeconds = evenSegmentSeconds(totalSeconds, Math.min(maxSegmentSeconds, DEFAULT_SEGMENT_SECONDS))
 
     const requested = language && language !== 'auto' ? language : undefined
 
     if (!needsSplit) {
-      const r = await transcribeWhisperFile(
+      const r = await transcribeWithRetry(
         openai,
         models.whisperModel,
         whisperPath,
         path.basename(whisperPath),
+        tempFiles,
         requested,
         buildTranscriptionPrompt(requested, context)
       )
@@ -397,11 +439,20 @@ export async function transcribeAudio(
       let pinned = requested
 
       for (let i = 0; i < segments.length; i++) {
-        const segmentResult = await transcribeWhisperFile(
+        // A near-empty tail carries no speech and is rejected as unreadable — drop it instead of failing
+        if (segments.length > 1) {
+          const seconds = await probeDurationSeconds(segments[i])
+          if (seconds > 0 && seconds < MIN_SEGMENT_SECONDS) {
+            console.warn(`[OpenAI] Skipping segment ${i} (${seconds.toFixed(2)} s, too short to transcribe)`)
+            continue
+          }
+        }
+        const segmentResult = await transcribeWithRetry(
           openai,
           models.whisperModel,
           segments[i],
           `segment_${i}.mp3`,
+          tempFiles,
           pinned,
           buildTranscriptionPrompt(pinned, context)
         )

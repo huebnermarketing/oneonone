@@ -190,7 +190,8 @@ export function MeetingRecorder({
           clearInterval(pollingRef.current)
           pollingRef.current = null
         }
-        if (rec.status === 'COMPLETED') router.refresh()
+        // FAILED too: the page then knows the combined audio exists and offers Re-transcribe
+        router.refresh()
       }
     } catch {
       // ignore
@@ -563,6 +564,14 @@ export function MeetingRecorder({
 
   // --- retry ---
   const handleRetry = async () => {
+    // Deleting is permanent (audio removed from S3) — never on one click
+    const ok = await confirm(
+      hasAudio || hasTranscript
+        ? 'This permanently deletes the recording, including its audio, so you can record again. To retry processing instead, use Re-transcribe.'
+        : 'This permanently deletes this recording attempt and any uploaded audio so you can record again.',
+      { title: 'Delete recording?', confirmText: 'Delete and record again', variant: 'danger' }
+    )
+    if (!ok) return
     try {
       await fetch(`/api/meetings/${meetingId}/recording`, { method: 'DELETE' })
     } catch {
@@ -794,7 +803,7 @@ export function MeetingRecorder({
               className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-medium-gray hover:bg-red-500/10 hover:text-red-500 rounded-xl transition-colors"
             >
               <Mic className="w-4 h-4" />
-              {hasAudio || hasTranscript ? 'Discard & record again' : 'Try Again'}
+              {hasAudio || hasTranscript ? 'Discard & record again' : 'Delete & record again'}
             </button>
           </div>
         </div>

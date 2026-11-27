@@ -38,6 +38,27 @@ export function modelSegmentCap(model: string): number | undefined {
   return isGpt4oTranscribe(model) ? 23 * 60 : undefined
 }
 
+/**
+ * Equal-length split: the fewest pieces of at most `maxSegment` seconds, all the same length, so the last
+ * piece is never a sliver (a 20:00.4 recording cut every 10 min left a 0.4 s file the provider rejects as
+ * "corrupted or unsupported"). Rounded up to whole seconds; ffmpeg cuts on frames, so +1 s of slack.
+ */
+export function evenSegmentSeconds(totalSeconds: number, maxSegment: number): number {
+  if (!(totalSeconds > 0) || totalSeconds <= maxSegment) return maxSegment
+  const pieces = Math.ceil(totalSeconds / maxSegment)
+  return Math.min(maxSegment, Math.ceil(totalSeconds / pieces) + 1)
+}
+
+/** Shortest piece worth sending; shorter tails are dropped (nothing intelligible fits in it). */
+export const MIN_SEGMENT_SECONDS = 1.5
+
+/** The provider's 400 for audio it can't decode ("corrupted or unsupported", "too short", "invalid file format"). */
+export function isUnreadableAudioError(err: unknown): boolean {
+  const e = err as { status?: number; message?: string } | null
+  const msg = e?.message || ''
+  return e?.status === 400 && !/response_format|verbose_json/i.test(msg) && /corrupt|unsupported|too short|invalid (file|audio)|could not (be )?decode|file format/i.test(msg)
+}
+
 /** Response format to ask for first — skips a guaranteed 400 round-trip on models that reject verbose_json. */
 export function preferredResponseFormat(model: string): 'verbose_json' | 'json' {
   return isGpt4oTranscribe(model) ? 'json' : 'verbose_json'
