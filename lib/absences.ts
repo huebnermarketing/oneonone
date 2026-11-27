@@ -345,3 +345,45 @@ export async function pairSlotFilter(reporterId: string, employeeId: string, day
     },
   }
 }
+
+// ── who is out today ────────────────────────────────────────────────
+
+export interface OutTodayPerson {
+  id: string
+  name: string | null
+  image: string | null
+  title: string | null
+  department: string | null
+  absence: DayAbsence
+}
+
+/**
+ * People on approved leave today (full or half day, each person's own calendar day) — the dashboard
+ * "Out today" card. `userIds` null = every active user. Empty when Keka isn't configured. Never throws.
+ */
+export async function whoIsOutToday(userIds: string[] | null, now = new Date()): Promise<OutTodayPerson[]> {
+  if (!isKekaConfigured()) return []
+  try {
+    const people = await prisma.user.findMany({
+      where: { isActive: true, kekaEmployeeId: { not: null }, ...(userIds ? { id: { in: userIds } } : {}) },
+      select: { id: true, name: true, image: true, title: true, department: { select: { name: true } } },
+    })
+    if (people.length === 0) return []
+    const day = now.toISOString().slice(0, 10)
+    const absences = await loadAbsences(people.map((p) => p.id), addDays(day, -1), addDays(day, 1))
+
+    const out: OutTodayPerson[] = []
+    for (const p of people) {
+      const a = absences.get(p.id)
+      if (!a) continue
+      const today = toDateKey(now, a.profile.timeZone)
+      const leave = strongest(a.days.filter((d) => d.date === today && d.kind === 'leave'))
+      if (leave) out.push({ id: p.id, name: p.name, image: p.image, title: p.title, department: p.department?.name ?? null, absence: leave })
+    }
+    // Full day first, then by name
+    return out.sort((x, y) => Number(!!x.absence.half) - Number(!!y.absence.half) || (x.name ?? '').localeCompare(y.name ?? ''))
+  } catch (err) {
+    console.warn('[absences] out-today failed:', err instanceof Error ? err.message : err)
+    return []
+  }
+}
