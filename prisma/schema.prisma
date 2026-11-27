@@ -215,6 +215,8 @@ model MeetingRecording {
   status         RecordingStatus @default(UPLOADING)
   errorMessage   String?
   recordedAt     DateTime?
+  /// Who started the current recording session (another person can't start one while it's active)
+  startedById    String?
   processedAt    DateTime?
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt

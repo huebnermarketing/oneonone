@@ -1,6 +1,7 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { AudioPlayer } from '@/components/ui/audio-player'
+import { useState, useEffect } from 'react'
 import { 
   FileText, 
   Lightbulb, 
@@ -74,14 +75,6 @@ export function TranscriptViewer({ recording, employeeId, reporterId, canManage 
   const [audioUrl, setAudioUrl] = useState<string | null>(recording.audioPlaybackUrl)
   const [addedTodos, setAddedTodos] = useState<Set<number>>(new Set())
   const [addingTodo, setAddingTodo] = useState<number | null>(null)
-  const audioRef = useRef<HTMLAudioElement>(null)
-
-  const handleAudioEnded = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.currentTime = 0
-    }
-  }, [])
-
   // Fetch signed audio URL on mount
   useEffect(() => {
     async function fetchAudioUrl() {
@@ -254,15 +247,7 @@ export function TranscriptViewer({ recording, employeeId, reporterId, canManage 
 
       {/* Audio Player */}
       {audioUrl && (
-        <div className="rounded-xl bg-off-white dark:bg-charcoal p-4">
-          <audio
-            ref={audioRef}
-            controls
-            src={audioUrl}
-            className="w-full"
-            onEnded={handleAudioEnded}
-          />
-        </div>
+        <AudioPlayer src={audioUrl} knownDuration={recording.duration} label="Meeting recording" />
       )}
 
       {/* Summary Tab */}
