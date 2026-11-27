@@ -177,3 +177,35 @@ describe('absenceChips', () => {
     expect(absenceLabel({ kind: 'pending' })).toBe('Leave pending')
   })
 })
+
+describe('whoIsOutToday', () => {
+  it('lists approved full + half day leave today in each person\'s zone, full day first; skips pending', async () => {
+    const { whoIsOutToday } = await import('@/lib/absences')
+    prismaMock.user.findMany.mockImplementation(async (args: { where: { id?: { in: string[] }; isActive?: boolean } }) => {
+      if (args.where.isActive) {
+        return [
+          { id: 'emp', name: 'Zed', image: null, title: 'Dev', department: { name: 'Eng' } },
+          { id: 'rep', name: 'Amy', image: null, title: null, department: null },
+        ]
+      }
+      return users.filter((u) => args.where.id!.in.includes(u.id))
+    })
+    vi.mocked(fetchLeaveRequests).mockImplementation(async () => [
+      { id: 'a', employeeIdentifier: 'k-emp', fromDate: '2026-12-02', toDate: '2026-12-02', status: 1 },
+      { id: 'b', employeeIdentifier: 'k-rep', fromDate: '2026-12-02', toDate: '2026-12-02', status: 1, fromSession: 1, toSession: 1 },
+    ])
+    // 2026-12-02 10:00 UTC: Dec 2 in both IST and Denver
+    const out = await whoIsOutToday(null, at('2026-12-02T10:00:00Z'))
+    expect(out.map((p) => [p.name, p.absence.half ?? 'FULL', p.department])).toEqual([['Zed', 'FULL', 'Eng'], ['Amy', 'SECOND', null]])
+
+    vi.mocked(fetchLeaveRequests).mockImplementation(async () => [{ id: 'c', employeeIdentifier: 'k-emp', fromDate: '2026-12-09', toDate: '2026-12-09', status: 0 }])
+    clearAbsenceCache()
+    expect(await whoIsOutToday(['emp'], at('2026-12-09T10:00:00Z'))).toEqual([])
+  })
+
+  it('nothing without Keka', async () => {
+    const { whoIsOutToday } = await import('@/lib/absences')
+    vi.mocked(isKekaConfigured).mockReturnValue(false)
+    expect(await whoIsOutToday(null)).toEqual([])
+  })
+})

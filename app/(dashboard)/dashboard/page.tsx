@@ -7,11 +7,13 @@ import { absencesForMeetings } from '@/lib/absences'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import { greeting } from '@/lib/ui'
 import Link from 'next/link'
-import { Calendar, CheckSquare, Users, TrendingUp, Clock, ChevronRight } from 'lucide-react'
+import { Calendar, CheckSquare, Users, TrendingUp, Clock } from 'lucide-react'
 import { StatCard } from '@/components/ui/stat-card'
 import { MeetingStatusPill } from '@/components/ui/pill'
 import { WeekCalendar } from './week-calendar'
 import { PendingRequests } from './pending-requests'
+import { OutToday, OutTodaySkeleton } from './out-today'
+import { Suspense } from 'react'
 
 /** Weeks of meetings sent with the page; navigating past them fetches from /api/meetings. */
 const PRELOAD_WEEKS = 8
@@ -171,7 +173,7 @@ export default async function DashboardPage() {
         currentUserId={user.id}
       />
 
-      {/* Recent Meetings & Quick Actions */}
+      {/* Recent Meetings & Out today */}
       <div className="grid gap-6 lg:grid-cols-2">
         {/* Recent Meetings */}
         <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">
@@ -217,62 +219,10 @@ export default async function DashboardPage() {
           )}
         </div>
 
-        {/* Quick Actions */}
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">
-          <div className="px-6 py-4 border-b border-off-white dark:border-medium-gray/20">
-            <h2 className="font-semibold text-dark-gray dark:text-white">Quick Actions</h2>
-          </div>
-          <div className="p-4 space-y-2">
-            {(user.role === UserRole.REPORTER || user.role === UserRole.SUPER_ADMIN) && (
-              <Link 
-                href="/meetings/new" 
-                aria-label="Propose a new meeting"
-                className="flex items-center gap-4 p-4 rounded-xl hover:bg-off-white/50 dark:hover:bg-charcoal/50 transition-colors group active:scale-[0.98]"
-              >
-                <div className="w-10 h-10 rounded-xl bg-blue-500/10 flex items-center justify-center">
-                  <Calendar className="w-5 h-5 text-blue-500" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-medium text-dark-gray dark:text-white">Propose Meeting</p>
-                  <p className="text-sm text-medium-gray">Set up a new one-on-one</p>
-                </div>
-                <ChevronRight className="w-5 h-5 text-light-gray group-hover:text-medium-gray transition-colors" />
-              </Link>
-            )}
-
-            <Link 
-              href="/todos" 
-              aria-label="View your pending to-dos"
-              className="flex items-center gap-4 p-4 rounded-xl hover:bg-off-white/50 dark:hover:bg-charcoal/50 transition-colors group active:scale-[0.98]"
-            >
-              <div className="w-10 h-10 rounded-xl bg-amber-500/10 flex items-center justify-center">
-                <CheckSquare className="w-5 h-5 text-amber-500" />
-              </div>
-              <div className="flex-1">
-                <p className="font-medium text-dark-gray dark:text-white">View Tasks</p>
-                <p className="text-sm text-medium-gray">Check your pending to-dos</p>
-              </div>
-              <ChevronRight className="w-5 h-5 text-light-gray group-hover:text-medium-gray transition-colors" />
-            </Link>
-
-            {(user.role === UserRole.REPORTER || user.role === UserRole.SUPER_ADMIN) && (
-              <Link 
-                href="/reports" 
-                aria-label="View team reports and analytics"
-                className="flex items-center gap-4 p-4 rounded-xl hover:bg-off-white/50 dark:hover:bg-charcoal/50 transition-colors group active:scale-[0.98]"
-              >
-                <div className="w-10 h-10 rounded-xl bg-off-white dark:bg-dark-gray flex items-center justify-center">
-                  <TrendingUp className="w-5 h-5 text-dark-gray dark:text-white" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-medium text-dark-gray dark:text-white">View Reports</p>
-                  <p className="text-sm text-medium-gray">Team insights and analytics</p>
-                </div>
-                <ChevronRight className="w-5 h-5 text-light-gray group-hover:text-medium-gray transition-colors" />
-              </Link>
-            )}
-          </div>
-        </div>
+        {/* Who is on leave today (Keka) — streams in so a slow Keka call doesn't hold the page */}
+        <Suspense fallback={<OutTodaySkeleton />}>
+          <OutToday user={user} />
+        </Suspense>
       </div>
     </div>
   )
