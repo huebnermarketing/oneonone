@@ -115,6 +115,8 @@ model Meeting {
   rescheduleReason         String?
   /// When the hourly job saw the employee decline this meeting in Google Calendar (manager alerted once; cleared if they accept again)
   calendarDeclinedAt       DateTime?
+  /// When the hourly job told the manager a participant is on Keka leave / holiday at this time (cleared if that changes)
+  leaveAlertedAt           DateTime?
   checkInPersonal          String?
   checkInProfessional      String?
   priorityGoalProfessional String?
@@ -492,6 +494,8 @@ enum NotificationType {
   MEETING_ACCEPTED
   MEETING_BOOKED // scheduled straight onto both calendars, no accept step
   CALENDAR_DECLINED // employee declined the meeting in Google Calendar (sent to the manager)
+  LEAVE_CONFLICT // a participant is on approved leave / holiday at a booked meeting's time (to the manager)
+  MEETING_SKIPPED // a recurring occurrence was not booked because of leave / holiday
   MEETING_TIME_SUGGESTED
   MEETING_COMPLETED
   MEETING_CANCELLED

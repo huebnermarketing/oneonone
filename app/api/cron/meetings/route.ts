@@ -9,6 +9,7 @@ import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import { recoverStaleJobs } from '@/lib/recording-pipeline'
 import { kekaSyncDue, runKekaSync } from '@/lib/keka-sync'
 import { runRetention, type RetentionResult } from '@/lib/retention'
+import { recurringOccurrenceSkip, watchLeaveConflicts, type LeaveWatchResult } from '@/lib/leave-watch'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,6 +43,8 @@ export async function POST(request: NextRequest) {
       retention: null as null | RetentionResult,
       proposalsConfirmed: 0,
       calendarRsvp: null as null | RsvpWatchResult,
+      recurringSkippedForLeave: 0,
+      leaveAlerts: null as null | LeaveWatchResult,
       errors: [] as string[],
     }
 
@@ -62,6 +65,13 @@ export async function POST(request: NextRequest) {
       results.calendarRsvp = await watchCalendarRsvps()
     } catch (err) {
       results.errors.push(`calendar rsvp: ${err instanceof Error ? err.message : String(err)}`)
+    }
+
+    // 1c. Keka: booked meetings in the next 2 weeks that now fall on leave / a holiday → tell the manager
+    try {
+      results.leaveAlerts = await watchLeaveConflicts()
+    } catch (err) {
+      results.errors.push(`leave alerts: ${err instanceof Error ? err.message : String(err)}`)
     }
 
     // 2. Send meeting reminders
@@ -106,7 +116,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-async function generateRecurringMeetings(results: { recurringMeetingsCreated: number; reminders24hSent: number; reminders1hSent: number; errors: string[] }) {
+async function generateRecurringMeetings(results: { recurringMeetingsCreated: number; recurringSkippedForLeave: number; errors: string[] }) {
   const now = new Date()
   
   // Find all active recurring schedules that need a new meeting (look ahead 7 days)
@@ -153,6 +163,21 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
           where: { id: schedule.id },
           data: { nextMeetingDate: nextDate, lastGeneratedAt: now },
         })
+        continue
+      }
+
+      // Keka: either person on approved leave / holiday → skip this occurrence (not booked, removed from
+      // the Google series, both told) and move the schedule on
+      const skip = await recurringOccurrenceSkip(schedule, meetingDate)
+      if (skip.skipped) {
+        await prisma.recurringSchedule.update({
+          where: { id: schedule.id },
+          data: {
+            nextMeetingDate: advanceToNextOccurrence(schedule.dayOfWeek, schedule.timeOfDay, schedule.frequency, meetingDate, reporterTz),
+            lastGeneratedAt: now,
+          },
+        })
+        results.recurringSkippedForLeave++
         continue
       }
 

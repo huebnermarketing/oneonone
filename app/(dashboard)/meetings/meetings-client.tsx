@@ -25,6 +25,8 @@ import { formatDuration } from '@/lib/meeting-duration'
 import { DAY_NAMES } from '@/lib/ui'
 import { Pagination } from '@/components/ui/pagination'
 import type { MeetingListStats, MeetingTab } from '@/lib/meeting-list'
+import { absenceChips, type MeetingAbsenceInfo } from '@/lib/absence-format'
+import { AbsenceChips } from '@/components/ui/absence-chip'
 
 interface Meeting {
   id: string
@@ -32,6 +34,7 @@ interface Meeting {
   status: MeetingStatus
   formSubmittedAt: Date | string | null
   employeeId: string
+  reporterId: string
   recurringScheduleId?: string | null
   durationMinutes?: number
   rescheduleDate?: Date | string | null
@@ -59,6 +62,8 @@ interface MeetingsClientProps {
   pageSize: number
   stats: MeetingListStats
   tab: MeetingTab
+  /** Keka leave / holiday per meeting id (upcoming meetings on this page) */
+  absences?: Record<string, MeetingAbsenceInfo>
   recurringSchedules: RecurringSchedule[]
   currentUserId: string
   userRole: UserRole
@@ -71,6 +76,7 @@ export function MeetingsClient({
   pageSize,
   stats,
   tab,
+  absences = {},
   recurringSchedules,
   currentUserId,
   userRole,
@@ -472,6 +478,7 @@ export function MeetingsClient({
                       {meeting.status === 'SCHEDULED' && meeting.rescheduleDate && (
                         <Pill tone="amber" dot className="flex-shrink-0">Reschedule pending</Pill>
                       )}
+                      <AbsenceChips chips={absenceChips(absences[meeting.id], meeting, currentUserId)} />
                     </div>
                     <p className="text-xs sm:text-sm text-medium-gray">
                       {f.meetingShort(meetingDate)}

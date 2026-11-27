@@ -9,6 +9,7 @@ import { useState, useMemo, useEffect, useCallback, useId } from 'react'
 import { useRouter } from 'next/navigation'
 import { Calendar, User, ArrowLeft, Check, Loader2, AlertCircle, Video, MapPin } from 'lucide-react'
 import { DatePicker } from '@/components/ui/date-picker'
+import { useLeaveDays } from '@/components/forms/use-leave-days'
 import { useToast } from '@/components/ui/toast'
 import { useFormat } from '@/components/providers/timezone-provider'
 import { EmployeePicker } from '@/components/forms/employee-picker'
@@ -50,6 +51,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
   const [slotsLoading, setSlotsLoading] = useState(false)
   const [calendarUnavailable, setCalendarUnavailable] = useState(false)
   const [dayMessage, setDayMessage] = useState('')
+  const [leaveNote, setLeaveNote] = useState('')
   const [calendarMessage, setCalendarMessage] = useState('')
   const [workingHoursLabel, setWorkingHoursLabel] = useState<string | null>(null)
   const [slotsFetched, setSlotsFetched] = useState(false)
@@ -79,6 +81,8 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
   })
 
   const watchedEmployee = watch('employeeId')
+  // Keka: grey out days either of you is away, hint half-day / pending leave
+  const leaveDays = useLeaveDays({ employeeId: watchedEmployee })
   const watchedDate = watch('meetingDate')
   const watchedTime = watch('meetingTime')
 
@@ -133,6 +137,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
     setCalendarUnavailable(false)
     setCalendarMessage('')
     setDayMessage('')
+    setLeaveNote('')
     setValue('meetingTime', '')
 
     try {
@@ -148,6 +153,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
         setWorkingHoursLabel(data.workingHoursLabel ?? null)
         // Holiday / leave / non-working day: say why there are no slots
         if (data.dateUnavailable) setDayMessage(data.message || 'No meetings can be booked on this day.')
+        setLeaveNote(data.leaveNote ?? '')
       }
       setSlotsFetched(true)
     } catch {
@@ -303,6 +309,7 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
                   min={minDate}
                   placeholder="Select meeting date"
                   disabledWeekdays={[0, 1, 2, 3, 4, 5, 6].filter((d) => !workingDays.includes(d))}
+                  {...leaveDays}
                 />
                 {errors.meetingDate && (
                   <p className="mt-2 text-sm text-red-500" role="alert">{errors.meetingDate.message}</p>
@@ -311,6 +318,12 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
                 {watchedEmployee && watchedDate && (
                   <div>
                     <h3 id={slotsHeadingId} className="text-sm font-medium text-dark-gray dark:text-white mb-3">Available time slots</h3>
+                  {leaveNote && (
+                    <p className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400 mb-3" role="note">
+                      <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" aria-hidden="true" />
+                      <span>{leaveNote}</span>
+                    </p>
+                  )}
                   {slotsLoading ? (
                     <div className="flex items-center justify-center gap-2 py-8 text-medium-gray" role="status">
                       <Loader2 className="w-5 h-5 animate-spin" aria-hidden="true" />

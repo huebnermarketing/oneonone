@@ -6,7 +6,7 @@ import { REPORTER_OR_ADMIN, forbidden, notFound, parseQuery, withApiAuth } from 
 import { prisma } from '@/lib/prisma'
 import { canActOnUser } from '@/lib/team'
 import { CalendarUnavailableError, isCalendarEnabled } from '@/lib/google-calendar'
-import { isDateUnavailableForEitherUser } from '@/lib/keka'
+import { fullDayMessage, leaveNoteFor, pairAbsenceDays } from '@/lib/absences'
 import { freeSlotsForDay, pairProfiles, workingHoursLabel } from '@/lib/availability'
 import { availabilityQuery } from '@/lib/validation/meetings'
 
@@ -71,14 +71,13 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
   }
 
   const parsedDate = new Date(date)
+  const dayKey = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : parsedDate.toISOString().slice(0, 10)
+  const nameOf = (side: 'reporter' | 'employee') => (side === 'reporter' ? 'You' : who)
 
-  if (await isDateUnavailableForEitherUser(user.id, employeeId, parsedDate)) {
-    return NextResponse.json({
-      slots: [],
-      dateUnavailable: true,
-      workingHoursLabel: null,
-      message: 'This date is a public holiday or one of you is on leave (from Keka). Pick another day.',
-    })
+  // Keka: a whole day away (approved leave / holiday) for either person → no slots
+  const [dayInfo] = await pairAbsenceDays(user.id, employeeId, dayKey, dayKey)
+  if (dayInfo?.fullDay) {
+    return NextResponse.json({ slots: [], dateUnavailable: true, workingHoursLabel: null, message: fullDayMessage(dayInfo.fullDay, nameOf) })
   }
 
   const unavailable = (message: string) => NextResponse.json({ slots: [], calendarUnavailable: true, workingHoursLabel: null, message })
@@ -95,10 +94,14 @@ export const GET = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { use
     return unavailable(`Can't see ${who}'s calendar. Ask them to sign in to One-on-One once with Google, or propose a time below.`)
   }
 
+  // Slots already skip leave (freeSlotsForDay); explain half-day / pending leave
+  const leaveNote = leaveNoteFor(dayInfo, nameOf)
+
   return NextResponse.json({
     slots,
     calendarUnavailable: false,
     workingHoursLabel: workingHoursLabel(profiles),
     reporterTimeZone: profiles.reporter.timeZone,
+    ...(leaveNote && { leaveNote }),
   })
 })

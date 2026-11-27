@@ -116,6 +116,38 @@ export interface KekaLeaveRequest {
   status: number
 }
 
+/** Keka leave request status codes (0 = pending, 1 = approved; 2/3 = rejected/cancelled are ignored). */
+export const KEKA_LEAVE_STATUS = { PENDING: 0, APPROVED: 1 } as const
+
+/** A leave request with its half-day sessions (0 = first half, 1 = second half), when Keka returns them. */
+export interface KekaLeaveWithSessions extends KekaLeaveRequest {
+  fromSession?: number | null
+  toSession?: number | null
+}
+
+/**
+ * Pending + approved leave requests for many employees in one range (Keka allows ≤ 90 days per call),
+ * every page. THROWS on failure so callers can cache the outage briefly instead of "no leave".
+ */
+export async function fetchLeaveRequests(employeeIds: string[], from: Date, to: Date): Promise<KekaLeaveWithSessions[]> {
+  if (employeeIds.length === 0) return []
+  const token = await getKekaAccessToken()
+  const base = getBaseUrl()
+  if (!token || !base) throw new Error('Keka not configured')
+  const pageSize = 200
+  const out: KekaLeaveWithSessions[] = []
+  for (let page = 1; page <= 20; page++) {
+    const url = `${base}/time/leaverequests?employeeIds=${encodeURIComponent(employeeIds.join(','))}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}&pageNumber=${page}&pageSize=${pageSize}`
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    if (!res.ok) throw new Error(`Keka leave requests ${res.status}`)
+    const json = (await res.json()) as { data?: KekaLeaveWithSessions[] }
+    const rows = Array.isArray(json.data) ? json.data : []
+    out.push(...rows.filter((l) => l.status === KEKA_LEAVE_STATUS.PENDING || l.status === KEKA_LEAVE_STATUS.APPROVED))
+    if (rows.length < pageSize) break
+  }
+  return out
+}
+
 /** Fetch leave requests for given employee IDs in date range (max 90 days). */
 export async function getKekaLeaveRequests(
   employeeIds: string[],
@@ -165,6 +197,19 @@ export function clearKekaHolidayCache() {
 const COUNTRY_TZ: Record<string, string> = {
   US: 'America/New_York',
   IN: 'Asia/Kolkata',
+}
+
+/** Holiday dates ("YYYY-MM-DD") of a country's Keka calendar for a year; empty when none is configured. */
+export async function holidayDatesForCountry(country: string | null | undefined, year: number): Promise<Set<string>> {
+  const calendarId =
+    country === 'US' ? KEKA_HOLIDAY_CALENDAR_US : country === 'IN' ? KEKA_HOLIDAY_CALENDAR_IN : null
+  if (!calendarId) return new Set()
+  return getHolidayDates(calendarId, year)
+}
+
+/** Timezone a country's holiday calendar is in. */
+export function countryTimeZone(country: string | null | undefined): string | undefined {
+  return country ? COUNTRY_TZ[country] : undefined
 }
 
 /** Check if a calendar date (in the country's timezone) is a holiday for the given country. */

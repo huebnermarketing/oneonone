@@ -19,7 +19,7 @@ vi.mock('@/lib/email', () => {
     'sendMeetingProposalEmail', 'sendMeetingAcceptedEmail', 'sendProposalConfirmationEmail', 'sendMeetingReminderEmail',
     'sendFormReminderEmail', 'sendMeetingSuggestionEmail', 'sendRecurringScheduleUpdatedEmail', 'sendMeetingCancelledEmail',
     'sendRescheduleRequestEmail', 'sendRescheduleAcceptedEmail', 'sendRescheduleDeclinedEmail',
-    'sendMeetingBookedEmail', 'sendCalendarDeclinedEmail',
+    'sendMeetingBookedEmail', 'sendCalendarDeclinedEmail', 'sendLeaveConflictEmail', 'sendMeetingSkippedEmail',
   ]
   return Object.fromEntries(senders.map((name) => [name, vi.fn(async () => undefined)]))
 })

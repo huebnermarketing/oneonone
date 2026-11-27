@@ -6,6 +6,13 @@ import { Calendar, Clock, ChevronLeft, ChevronRight, Loader2 } from 'lucide-reac
 import { useFormat } from '@/components/providers/timezone-provider'
 import { startOfDayInTz, endOfDayInTz } from '@/lib/dates'
 import { MeetingStatusPill, Pill } from '@/components/ui/pill'
+import { AbsenceChips } from '@/components/ui/absence-chip'
+import { absenceChips, type MeetingAbsenceInfo } from '@/lib/absence-format'
+
+/** Chips for a calendar entry (needs the participant ids, which /api/meetings and the dashboard both send). */
+function chipsOf(m: CalendarMeeting, viewerId: string) {
+  return m.employeeId && m.reporterId ? absenceChips(m.absence, { employeeId: m.employeeId, reporterId: m.reporterId }, viewerId) : []
+}
 
 interface CalendarMeeting {
   id: string
@@ -13,6 +20,10 @@ interface CalendarMeeting {
   status: string
   employee?: { name: string | null }
   reporter?: { name: string | null }
+  employeeId?: string
+  reporterId?: string
+  /** Keka leave / holiday of either participant (upcoming meetings only) */
+  absence?: MeetingAbsenceInfo
 }
 
 interface WeekCalendarProps {
@@ -21,6 +32,7 @@ interface WeekCalendarProps {
   /** End of the preloaded range (the dashboard sends 8 weeks). When navigating within this range, filter from initialMeetings instead of fetching. */
   initialRangeEnd?: string
   userRole: string
+  currentUserId: string
 }
 
 type ViewMode = 'week' | 'month'
@@ -122,7 +134,8 @@ const statusDot: Record<string, string> = {
 
 // ── Week View ────────────────────────────────────────────────────────────────
 
-function WeekView({ meetings, days, todayKey, userRole }: {
+function WeekView({ meetings, days, todayKey, userRole, viewerId }: {
+  viewerId: string
   meetings: CalendarMeeting[]
   days: Date[]
   /** "YYYY-MM-DD" of today in the viewer's zone */
@@ -165,6 +178,9 @@ function WeekView({ meetings, days, todayKey, userRole }: {
                         </p>
                         <p className="text-[10px] text-medium-gray">{time}</p>
                         <MeetingStatusPill status={m.status} className="mt-0.5 px-1.5 py-0.5 text-[9px]" />
+                        <span className="mt-0.5 flex flex-wrap gap-0.5">
+                          <AbsenceChips chips={chipsOf(m, viewerId)} className="px-1.5 py-0.5 text-[9px]" />
+                        </span>
                       </Link>
                     )
                   })}
@@ -210,7 +226,10 @@ function WeekView({ meetings, days, todayKey, userRole }: {
                           <Clock className="w-4 h-4 text-blue-500" />
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-dark-gray dark:text-white truncate">{name || 'Meeting'}</p>
+                          <p className="flex items-center gap-1.5 min-w-0">
+                            <span className="text-sm font-medium text-dark-gray dark:text-white truncate">{name || 'Meeting'}</span>
+                            <AbsenceChips chips={chipsOf(m, viewerId)} className="px-2 py-0.5 text-[10px]" />
+                          </p>
                           <p className="text-xs text-medium-gray">{time}</p>
                         </div>
                         <MeetingStatusPill status={m.status} className="px-2 py-0.5 text-[10px]" />
@@ -238,7 +257,8 @@ function WeekView({ meetings, days, todayKey, userRole }: {
 
 // ── Month View ───────────────────────────────────────────────────────────────
 
-function MonthView({ meetings, monthDate, todayKey, userRole }: {
+function MonthView({ meetings, monthDate, todayKey, userRole, viewerId }: {
+  viewerId: string
   meetings: CalendarMeeting[]
   monthDate: Date
   /** "YYYY-MM-DD" of today in the viewer's zone */
@@ -312,6 +332,11 @@ function MonthView({ meetings, monthDate, todayKey, userRole }: {
                             <span className="text-[10px] text-dark-gray dark:text-white truncate leading-tight">
                               {name || 'Meeting'}
                             </span>
+                            {chipsOf(m, viewerId).length > 0 && (
+                              <span className="text-[9px] font-medium text-red-500 flex-shrink-0" title={chipsOf(m, viewerId).map((c) => c.label).join(', ')}>
+                                {chipsOf(m, viewerId)[0].label}
+                              </span>
+                            )}
                           </div>
                         )
                       })
@@ -405,7 +430,10 @@ function MonthView({ meetings, monthDate, todayKey, userRole }: {
                       <Clock className="w-4 h-4 text-blue-500" />
                     </div>
                     <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-dark-gray dark:text-white truncate">{name || 'Meeting'}</p>
+                      <p className="flex items-center gap-1.5 min-w-0">
+                        <span className="text-sm font-medium text-dark-gray dark:text-white truncate">{name || 'Meeting'}</span>
+                        <AbsenceChips chips={chipsOf(m, viewerId)} className="px-2 py-0.5 text-[10px]" />
+                      </p>
                       <p className="text-xs text-medium-gray">{time}</p>
                     </div>
                     <MeetingStatusPill status={m.status} className="px-2 py-0.5 text-[10px] flex-shrink-0" />
@@ -422,7 +450,7 @@ function MonthView({ meetings, monthDate, todayKey, userRole }: {
 
 // ── Main Calendar Component ──────────────────────────────────────────────────
 
-export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEnd, userRole }: WeekCalendarProps) {
+export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEnd, userRole, currentUserId }: WeekCalendarProps) {
   const f = useFormat()
   // "Today" is a calendar day in the VIEWER's zone; grid cells are local-parts Dates keyed by gridDayKey.
   const todayKey = f.dateKey(new Date())
@@ -659,9 +687,9 @@ export function WeekCalendar({ initialMeetings, initialWeekStart, initialRangeEn
 
       {/* View content */}
       {view === 'week' ? (
-        <WeekView meetings={weekMeetings} days={days} todayKey={todayKey} userRole={userRole} />
+        <WeekView meetings={weekMeetings} days={days} todayKey={todayKey} userRole={userRole} viewerId={currentUserId} />
       ) : (
-        <MonthView meetings={monthMeetings} monthDate={monthDate} todayKey={todayKey} userRole={userRole} />
+        <MonthView meetings={monthMeetings} monthDate={monthDate} todayKey={todayKey} userRole={userRole} viewerId={currentUserId} />
       )}
     </div>
   )
