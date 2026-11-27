@@ -23,12 +23,13 @@ import { MicTroubleshooting } from './mic-troubleshooting'
 import { MicPicker } from './mic-picker'
 import { Select } from '@/components/ui/select'
 import { plural } from '@/lib/ui'
+import { useRecordingHost } from '@/components/recording/recording-context'
 
 // ---------------------------------------------------------------------------
 // Types & Constants
 // ---------------------------------------------------------------------------
 
-interface MeetingRecorderProps {
+export interface MeetingRecorderProps {
   meetingId: string
   hasExistingRecording: boolean
   recordingStatus?: string
@@ -39,6 +40,8 @@ interface MeetingRecorderProps {
   hasAudio?: boolean
   /** Transcript exists (reprocess can re-run analysis only) */
   hasTranscript?: boolean
+  /** Who the meeting is with — shown in the floating recording bar on other pages */
+  meetingLabel?: string
 }
 
 interface PipelineJob {
@@ -102,6 +105,7 @@ export function MeetingRecorder({
   maxRecordingMins = DEFAULT_MAX_MINS,
   hasAudio = false,
   hasTranscript = false,
+  meetingLabel = 'Meeting',
 }: MeetingRecorderProps) {
   const MAX_DURATION = maxRecordingMins * 60
   const router = useRouter()
@@ -145,6 +149,8 @@ export function MeetingRecorder({
   const [isReprocessing, setIsReprocessing] = useState(false)
   const { toastError, toastSuccess } = useToast()
   const confirm = useConfirm()
+  // App-wide host (components/recording): keeps this recorder alive across pages + floating bar
+  const host = useRecordingHost()
 
   // Chunk tracking refs (avoid stale closures)
   const sessionKeyRef = useRef<string | null>(null)
@@ -319,6 +325,12 @@ export function MeetingRecorder({
       setSubmitError(null)
       setChunkError(null)
 
+      // One recording per browser: another meeting (here or in another tab) is still recording / unsaved
+      const other = host?.busyElsewhere(meetingId)
+      if (other) {
+        throw new Error(`A recording is already in progress for ${other.label}. Stop and save it before starting another.`)
+      }
+
       // 1. Check secure context (HTTPS required for microphone in most browsers)
       if (typeof window !== 'undefined' && !window.isSecureContext) {
         throw new Error(
@@ -484,6 +496,23 @@ export function MeetingRecorder({
   useEffect(() => {
     stopRecordingRef.current = stopRecording
   })
+
+  // Tell the app-wide host about this session (floating bar, keep-alive, tab-close warning)
+  const busy = isRecording || parts.length > 0 || !!unsavedPart || isSubmitting
+  const sessionSeconds = usedSeconds + recordingTime
+  useEffect(() => {
+    host?.report({ meetingId, label: meetingLabel, busy, recording: isRecording, paused: isPaused, seconds: sessionSeconds })
+  }, [host, meetingId, meetingLabel, busy, isRecording, isPaused, sessionSeconds])
+  const pauseRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    pauseRef.current = pauseRecording
+  })
+  useEffect(() => {
+    host?.registerControls(meetingId, { togglePause: () => pauseRef.current() })
+    return () => host?.registerControls(meetingId, null)
+  }, [host, meetingId])
+  // Unmounted while still busy can only mean the app is going away: clear the bar
+  useEffect(() => () => host?.report({ meetingId, label: '', busy: false, recording: false, paused: false, seconds: 0 }), [host, meetingId])
 
   const discardRecording = async () => {
     if (parts.length > 1) {
