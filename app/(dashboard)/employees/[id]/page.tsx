@@ -22,13 +22,18 @@ import { StatCard } from '@/components/ui/stat-card'
 import { Avatar } from '@/components/ui/avatar'
 import { Pill, TodoPriorityPill, TodoStatusPill } from '@/components/ui/pill'
 import { plural } from '@/lib/ui'
+import { pageWindow, parsePage } from '@/lib/meeting-list'
+
+const HISTORY_PAGE_SIZE = 20
 
 export default async function EmployeeDetailPage({
   params: paramsPromise,
+  searchParams: searchParamsPromise,
 }: {
   params: Promise<{ id: string }>
+  searchParams: Promise<{ page?: string | string[] }>
 }) {
-  const params = await paramsPromise
+  const [params, searchParams] = await Promise.all([paramsPromise, searchParamsPromise])
   const user = await getCurrentUser()
   if (!user) return notFound()
 
@@ -50,62 +55,54 @@ export default async function EmployeeDetailPage({
   )
   if (!canAccess) return notFound()
 
-  // Fetch ALL meetings for this person (not just 10)
-  const meetings = await prisma.meeting.findMany({
-    where: { employeeId: employee.id },
-    include: {
-      reporter: { select: { name: true } },
-      recording: {
-        select: {
-          id: true,
-          status: true,
-          summary: true,
-          keyPoints: true,
-          sentiment: true,
-          qualityScore: true,
-          duration: true,
-          language: true,
-          processedAt: true,
-        },
-      },
-    },
-    orderBy: { meetingDate: 'desc' },
-  })
-
-  const todos = await prisma.todo.findMany({
-    where: { assignedToId: employee.id },
-    orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
-    take: 10,
-  })
-
   const now = new Date()
+  const mine = { employeeId: employee.id }
+  const analyzedWhere = { meeting: mine, status: 'COMPLETED' as const, summary: { not: null } }
 
-  // Calculate stats
-  const totalMeetings = meetings.length
-  const completedMeetings = meetings.filter((m) => m.status === 'COMPLETED').length
-  const missedMeetings = meetings.filter(
-    (m) =>
-      new Date(m.meetingDate) < now &&
-      m.status !== 'COMPLETED'
-  ).length
-  const upcomingMeetings = meetings.filter(
-    (m) => new Date(m.meetingDate) >= now && m.status === 'SCHEDULED'
-  ).length
-  const recordingsCompleted = meetings.filter(
-    (m) => m.recording && m.recording.status === 'COMPLETED'
-  ).length
-  const completedTodos = todos.filter((t) => t.status === 'DONE').length
+  // Stats are counts; only the history page and the analysis fields are loaded.
+  const [totalMeetings, completedMeetings, missedMeetings, recordingsCompleted, totalTodos, completedTodos, todos, analyzed] =
+    await Promise.all([
+      prisma.meeting.count({ where: mine }),
+      prisma.meeting.count({ where: { ...mine, status: 'COMPLETED' } }),
+      prisma.meeting.count({ where: { ...mine, meetingDate: { lt: now }, status: { not: 'COMPLETED' } } }),
+      prisma.meetingRecording.count({ where: { meeting: mine, status: 'COMPLETED' } }),
+      prisma.todo.count({ where: { assignedToId: employee.id } }),
+      prisma.todo.count({ where: { assignedToId: employee.id, status: 'DONE' } }),
+      prisma.todo.findMany({
+        where: { assignedToId: employee.id },
+        select: { id: true, title: true, status: true, priority: true, dueDate: true },
+        orderBy: [{ status: 'asc' }, { dueDate: 'asc' }],
+        take: 10,
+      }),
+      prisma.meetingRecording.findMany({
+        where: analyzedWhere,
+        select: { sentiment: true, keyPoints: true, qualityScore: true },
+        orderBy: { meeting: { meetingDate: 'desc' } },
+      }),
+    ])
+
+  const { offset: historyOffset } = pageWindow(parsePage(searchParams.page), totalMeetings, HISTORY_PAGE_SIZE)
+  const meetings = await prisma.meeting.findMany({
+    where: mine,
+    select: {
+      id: true,
+      meetingDate: true,
+      status: true,
+      formSubmittedAt: true,
+      reporter: { select: { name: true } },
+      recording: { select: { status: true, summary: true, sentiment: true, qualityScore: true } },
+    },
+    orderBy: [{ meetingDate: 'desc' }, { id: 'desc' }],
+    skip: historyOffset,
+    take: HISTORY_PAGE_SIZE,
+  })
+
   const attendanceRate =
     totalMeetings > 0 ? Math.round((completedMeetings / totalMeetings) * 100) : 0
 
-  // Gather all recording analyses for the combined summary
-  const analyzedMeetings = meetings.filter(
-    (m) => m.recording?.status === 'COMPLETED' && m.recording.summary
-  )
-
-  // Average quality score from all recordings
-  const qualityScores = analyzedMeetings
-    .map((m) => m.recording!.qualityScore)
+  // Average quality score from all analyzed recordings
+  const qualityScores = analyzed
+    .map((r) => r.qualityScore)
     .filter((s): s is number => s !== null)
   const avgQuality =
     qualityScores.length > 0
@@ -113,16 +110,16 @@ export default async function EmployeeDetailPage({
       : null
 
   // Sentiment distribution
-  const sentiments = analyzedMeetings
-    .map((m) => (m.recording!.sentiment as { label?: string } | null)?.label)
+  const sentiments = analyzed
+    .map((r) => (r.sentiment as { label?: string } | null)?.label)
     .filter(Boolean) as string[]
   const positiveSentiments = sentiments.filter((s) => s === 'positive').length
   const neutralSentiments = sentiments.filter((s) => s === 'neutral').length
   const negativeSentiments = sentiments.filter((s) => s === 'negative').length
 
   // Common key points across all meetings
-  const allKeyPoints = analyzedMeetings.flatMap(
-    (m) => (m.recording!.keyPoints as string[] | null) ?? []
+  const allKeyPoints = analyzed.flatMap(
+    (r) => (Array.isArray(r.keyPoints) ? r.keyPoints : []).filter((p): p is string => typeof p === 'string')
   )
 
   return (
@@ -169,16 +166,16 @@ export default async function EmployeeDetailPage({
         <StatCard label="Department" value={<span className="text-base sm:text-lg">{employee.department?.name || 'None'}</span>} icon={Building2} accent="neutral" />
         <StatCard label="Reports To" value={<span className="text-base sm:text-lg">{employee.reportsTo?.name || 'None'}</span>} icon={Users} accent="neutral" />
         <StatCard label="Attendance" value={`${attendanceRate}%`} icon={TrendingUp} accent="amber" />
-        <StatCard label="Tasks Done" value={`${completedTodos}/${todos.length}`} icon={CheckSquare} accent="orange" />
+        <StatCard label="Tasks Done" value={`${completedTodos}/${totalTodos}`} icon={CheckSquare} accent="orange" />
       </div>
 
       {/* Overall Analysis (combined from all recordings) */}
-      {analyzedMeetings.length > 0 && (
+      {analyzed.length > 0 && (
         <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">
           <div className="px-4 sm:px-6 py-4 border-b border-off-white dark:border-medium-gray/20">
             <h2 className="font-semibold text-dark-gray dark:text-white flex items-center gap-2">
               <TrendingUp className="w-5 h-5 text-orange" />
-              Overall Analysis ({plural(analyzedMeetings.length, 'recording')})
+              Overall Analysis ({plural(analyzed.length, 'recording')})
             </h2>
           </div>
           <div className="p-4 sm:p-6 space-y-5">
@@ -235,7 +232,7 @@ export default async function EmployeeDetailPage({
             {allKeyPoints.length > 0 && (
               <div>
                 <p className="text-xs text-medium-gray mb-2">
-                  Recurring Topics (from {analyzedMeetings.length} meetings)
+                  Recurring Topics (from {analyzed.length} meetings)
                 </p>
                 <div className="flex flex-wrap gap-2">
                   {/* Show unique points, max 12 */}
@@ -253,7 +250,7 @@ export default async function EmployeeDetailPage({
         </div>
       )}
 
-      {/* Meeting History (ALL meetings) */}
+      {/* Meeting History (paged) */}
       <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">
         <div className="px-4 sm:px-6 py-4 border-b border-off-white dark:border-medium-gray/20 flex items-center justify-between">
           <h2 className="font-semibold text-dark-gray dark:text-white flex items-center gap-2">
@@ -262,13 +259,18 @@ export default async function EmployeeDetailPage({
           </h2>
           <span className="text-xs text-medium-gray">{totalMeetings} total</span>
         </div>
-        {meetings.length === 0 ? (
+        {totalMeetings === 0 ? (
           <div className="p-8 text-center">
             <Calendar className="w-12 h-12 text-light-gray mx-auto mb-3" />
             <p className="text-medium-gray">No meetings yet</p>
           </div>
         ) : (
-          <MeetingHistoryList meetings={meetings} />
+          <MeetingHistoryList
+            meetings={meetings}
+            total={totalMeetings}
+            offset={historyOffset}
+            pageSize={HISTORY_PAGE_SIZE}
+          />
         )}
       </div>
 

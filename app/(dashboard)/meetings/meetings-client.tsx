@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useOptimistic, useTransition } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import {
@@ -24,6 +24,7 @@ import { MeetingStatusPill, Pill } from '@/components/ui/pill'
 import { formatDuration } from '@/lib/meeting-duration'
 import { DAY_NAMES } from '@/lib/ui'
 import { Pagination } from '@/components/ui/pagination'
+import type { MeetingListStats, MeetingTab } from '@/lib/meeting-list'
 
 interface Meeting {
   id: string
@@ -34,8 +35,8 @@ interface Meeting {
   recurringScheduleId?: string | null
   durationMinutes?: number
   rescheduleDate?: Date | string | null
-  reporter?: { name: string | null; email: string | null } | null
-  employee?: { name: string | null; email: string | null } | null
+  reporter?: { name: string | null } | null
+  employee?: { name: string | null } | null
 }
 
 interface RecurringSchedule {
@@ -45,12 +46,19 @@ interface RecurringSchedule {
   timeOfDay: string
   isActive: boolean
   nextMeetingDate: Date | null
-  employee: { id: string; name: string | null; email?: string | null }
+  employee: { id: string; name: string | null }
   reporter?: { name: string | null } | null
 }
 
 interface MeetingsClientProps {
+  /** The current page only — paging, tab filter and sort happen on the server (lib/meeting-list.ts). */
   meetings: Meeting[]
+  /** Meetings in the current tab. */
+  total: number
+  offset: number
+  pageSize: number
+  stats: MeetingListStats
+  tab: MeetingTab
   recurringSchedules: RecurringSchedule[]
   currentUserId: string
   userRole: UserRole
@@ -58,6 +66,11 @@ interface MeetingsClientProps {
 
 export function MeetingsClient({
   meetings,
+  total,
+  offset,
+  pageSize,
+  stats,
+  tab,
   recurringSchedules,
   currentUserId,
   userRole,
@@ -66,13 +79,24 @@ export function MeetingsClient({
   const { toastError } = useToast()
   const confirm = useConfirm()
   const f = useFormat()
-  const [activeTab, setActiveTab] = useState<'all' | 'one-time' | 'recurring'>('all')
+  const [isNavigating, startTransition] = useTransition()
+  const [activeTab, setActiveTab] = useOptimistic<MeetingTab>(tab)
   const [isDeleting, setIsDeleting] = useState<string | null>(null)
   const [isToggling, setIsToggling] = useState<string | null>(null)
   const [deletedScheduleIds, setDeletedScheduleIds] = useState<Set<string>>(new Set())
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
-  const [currentPage, setCurrentPage] = useState(1)
-  const ITEMS_PER_PAGE = 15
+
+  const navigate = (nextTab: MeetingTab, nextOffset: number) => {
+    const q = new URLSearchParams()
+    if (nextTab !== 'all') q.set('tab', nextTab)
+    const page = Math.floor(nextOffset / pageSize) + 1
+    if (page > 1) q.set('page', String(page))
+    const qs = q.toString()
+    startTransition(() => {
+      setActiveTab(nextTab)
+      router.push(qs ? `/meetings?${qs}` : '/meetings', { scroll: false })
+    })
+  }
 
   const showMessage = useCallback((type: 'success' | 'error', text: string) => {
     setMessage({ type, text })
@@ -89,42 +113,6 @@ export function MeetingsClient({
   const visibleRecurring = recurringSchedules.filter(
     (s) => !deletedScheduleIds.has(s.id)
   )
-
-  const upcomingMeetings = meetings.filter(
-    (m) => new Date(m.meetingDate) >= now && (m.status === 'SCHEDULED' || m.status === 'PROPOSED')
-  )
-  const completedMeetings = meetings.filter((m) => m.status === 'COMPLETED')
-  const pendingFormMeetings = meetings.filter(
-    (m) =>
-      m.status === 'SCHEDULED' &&
-      new Date(m.meetingDate) < now &&
-      !m.formSubmittedAt
-  )
-
-  // Filter meetings by tab
-  const tabFilteredMeetings = activeTab === 'one-time'
-    ? meetings.filter((m) => !m.recurringScheduleId)
-    : activeTab === 'recurring'
-      ? meetings.filter((m) => !!m.recurringScheduleId)
-      : meetings
-
-  // Sort: upcoming/active meetings first (nearest date first), then past meetings (most recent first)
-  const sortedMeetings = [...tabFilteredMeetings].sort((a, b) => {
-    const dateA = new Date(a.meetingDate).getTime()
-    const dateB = new Date(b.meetingDate).getTime()
-    const nowMs = now.getTime()
-    const aIsUpcoming = dateA >= nowMs && (a.status === 'SCHEDULED' || a.status === 'PROPOSED')
-    const bIsUpcoming = dateB >= nowMs && (b.status === 'SCHEDULED' || b.status === 'PROPOSED')
-
-    if (aIsUpcoming && !bIsUpcoming) return -1
-    if (!aIsUpcoming && bIsUpcoming) return 1
-    if (aIsUpcoming && bIsUpcoming) return dateA - dateB
-    return dateB - dateA
-  })
-
-  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
-  const endIndex = startIndex + ITEMS_PER_PAGE
-  const paginatedMeetings = sortedMeetings.slice(startIndex, endIndex)
 
   const handleDeleteRecurring = async (id: string) => {
     if (!await confirm('Are you sure you want to delete this recurring schedule?', { variant: 'danger' })) {
@@ -278,7 +266,7 @@ export function MeetingsClient({
     </div>
   )
 
-  const hasNoData = meetings.length === 0 && visibleRecurring.length === 0
+  const hasNoData = stats.all === 0 && visibleRecurring.length === 0
 
   return (
     <div className={hasNoData ? 'space-y-3 sm:space-y-5' : 'space-y-4 sm:space-y-5'}>
@@ -333,7 +321,7 @@ export function MeetingsClient({
               </div>
               <div>
                 <p className="text-lg sm:text-2xl font-bold text-dark-gray dark:text-white">
-                  {upcomingMeetings.length}
+                  {stats.upcoming}
                 </p>
                 <p className="text-xs sm:text-sm text-medium-gray">Upcoming</p>
               </div>
@@ -346,13 +334,13 @@ export function MeetingsClient({
               </div>
               <div>
                 <p className="text-lg sm:text-2xl font-bold text-dark-gray dark:text-white">
-                  {completedMeetings.length}
+                  {stats.completed}
                 </p>
                 <p className="text-xs sm:text-sm text-medium-gray">Completed</p>
               </div>
             </div>
           </div>
-          {pendingFormMeetings.length > 0 ? (
+          {stats.pendingForm > 0 ? (
             <div className="rounded-2xl bg-amber-500/5 border border-amber-500/20 p-2.5 sm:p-5">
               <div className="flex items-center gap-2 sm:gap-4">
                 <div className="w-8 h-8 sm:w-12 sm:h-12 rounded-xl bg-amber-500/10 flex items-center justify-center flex-shrink-0">
@@ -360,7 +348,7 @@ export function MeetingsClient({
                 </div>
                 <div className="min-w-0">
                   <p className="text-lg sm:text-2xl font-bold text-amber-600 dark:text-amber-400">
-                    {pendingFormMeetings.length}
+                    {stats.pendingForm}
                   </p>
                   <p className="text-xs sm:text-sm text-medium-gray">Pending Form</p>
                 </div>
@@ -395,7 +383,7 @@ export function MeetingsClient({
               type="button"
               role="tab"
               aria-selected={activeTab === tab}
-              onClick={() => { setActiveTab(tab); setCurrentPage(1) }}
+              onClick={() => { if (tab !== activeTab) navigate(tab, 0) }}
               className={`flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg transition-colors focus-visible:ring-2 focus-visible:ring-orange/50 focus-visible:outline-none ${
                 activeTab === tab
                   ? 'bg-white dark:bg-charcoal text-dark-gray dark:text-white shadow-sm'
@@ -434,10 +422,13 @@ export function MeetingsClient({
       )}
 
       {/* Meetings list */}
-      {sortedMeetings.length > 0 ? (
-        <div className="rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden">
+      {meetings.length > 0 ? (
+        <div
+          aria-busy={isNavigating}
+          className={`rounded-2xl bg-white dark:bg-charcoal border border-off-white dark:border-medium-gray/20 overflow-hidden transition-opacity ${isNavigating ? 'opacity-60' : ''}`}
+        >
           <div className="divide-y divide-off-white dark:divide-medium-gray/20">
-            {paginatedMeetings.map((meeting) => {
+            {meetings.map((meeting) => {
               const meetingDate = new Date(meeting.meetingDate)
               const isPast = meetingDate < now
               const needsForm =
@@ -494,10 +485,10 @@ export function MeetingsClient({
             })}
           </div>
           <Pagination
-            offset={startIndex}
-            limit={ITEMS_PER_PAGE}
-            total={sortedMeetings.length}
-            onChange={(offset) => setCurrentPage(Math.floor(offset / ITEMS_PER_PAGE) + 1)}
+            offset={offset}
+            limit={pageSize}
+            total={total}
+            onChange={(next) => navigate(activeTab, next)}
             noun="meetings"
             className="px-4 py-3 border-t border-off-white dark:border-medium-gray/20"
           />

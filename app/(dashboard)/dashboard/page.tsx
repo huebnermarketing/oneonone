@@ -1,7 +1,8 @@
 import { getCurrentUser } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { UserRole } from '@prisma/client'
-import { formatMeetingShort, isTodoOverdue, toDateKey, startOfDayInTz, offsetMinutes } from '@/lib/dates'
+import { formatMeetingShort, toDateKey, startOfDayInTz, offsetMinutes } from '@/lib/dates'
+import { meetingScope } from '@/lib/meeting-list'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import { greeting } from '@/lib/ui'
 import Link from 'next/link'
@@ -11,141 +12,21 @@ import { MeetingStatusPill } from '@/components/ui/pill'
 import { WeekCalendar } from './week-calendar'
 import { PendingRequests } from './pending-requests'
 
+/** Weeks of meetings sent with the page; navigating past them fetches from /api/meetings. */
+const PRELOAD_WEEKS = 8
+
 export default async function DashboardPage() {
   const user = await getCurrentUser()
   if (!user) return null
   const tz = user.timeZone ?? DEFAULT_TIMEZONE
 
-  const stats = {
-    upcomingMeetings: 0,
-    pendingTodos: 0,
-    overdueTodos: 0,
-    directReports: 0,
-    completedMeetings: 0,
-  }
-
   const now = new Date()
+  const isEmployee = user.role === UserRole.EMPLOYEE
+  const scope = meetingScope(user)
+  const people = { employee: { select: { id: true, name: true } }, reporter: { select: { id: true, name: true } } }
+  const names = { employee: { select: { name: true } }, reporter: { select: { name: true } } }
 
-  if (user.role === UserRole.EMPLOYEE) {
-    const [meetings, todos, completedMeetings] = await Promise.all([
-      prisma.meeting.count({
-        where: {
-          employeeId: user.id,
-          status: 'SCHEDULED',
-          meetingDate: { gte: now },
-        },
-      }),
-      prisma.todo.findMany({
-        where: {
-          assignedToId: user.id,
-          status: { not: 'DONE' },
-        },
-      }),
-      prisma.meeting.count({
-        where: {
-          employeeId: user.id,
-          status: 'COMPLETED',
-        },
-      }),
-    ])
-    // Also count PROPOSED meetings (may fail if enum not yet migrated)
-    let proposedCount = 0
-    try {
-      proposedCount = await prisma.meeting.count({
-        where: { employeeId: user.id, status: 'PROPOSED', meetingDate: { gte: now } },
-      })
-    } catch { /* PROPOSED enum not yet in DB */ }
-    stats.upcomingMeetings = meetings + proposedCount
-    stats.pendingTodos = todos.length
-    stats.overdueTodos = todos.filter(t => isTodoOverdue(t.dueDate, now, t.status, tz)).length
-    stats.completedMeetings = completedMeetings
-  } else {
-    const directReports = user.role === UserRole.SUPER_ADMIN
-      ? await prisma.user.count({ where: { isActive: true } })
-      : await prisma.user.count({ where: { reportsToId: user.id, isActive: true } })
-
-    const baseMeetingFilter = user.role === UserRole.SUPER_ADMIN
-      ? { status: 'SCHEDULED' as const, meetingDate: { gte: now } }
-      : { OR: [
-          { employeeId: user.id, status: 'SCHEDULED' as const, meetingDate: { gte: now } },
-          { reporterId: user.id, status: 'SCHEDULED' as const, meetingDate: { gte: now } },
-        ] }
-
-    const [meetings, todos, completedMeetings] = await Promise.all([
-      prisma.meeting.count({ where: baseMeetingFilter }),
-      prisma.todo.findMany({
-        where: {
-          assignedToId: user.id,
-          status: { not: 'DONE' },
-        },
-      }),
-      prisma.meeting.count({
-        where: user.role === UserRole.SUPER_ADMIN
-          ? { status: 'COMPLETED' }
-          : { reporterId: user.id, status: 'COMPLETED' },
-      }),
-    ])
-    let proposedCount = 0
-    try {
-      const proposedFilter = user.role === UserRole.SUPER_ADMIN
-        ? { status: 'PROPOSED' as const, meetingDate: { gte: now } }
-        : { OR: [
-            { employeeId: user.id, status: 'PROPOSED' as const, meetingDate: { gte: now } },
-            { reporterId: user.id, status: 'PROPOSED' as const, meetingDate: { gte: now } },
-          ] }
-      proposedCount = await prisma.meeting.count({ where: proposedFilter })
-    } catch { /* PROPOSED enum not yet in DB */ }
-    stats.upcomingMeetings = meetings + proposedCount
-    stats.pendingTodos = todos.length
-    stats.overdueTodos = todos.filter(t => isTodoOverdue(t.dueDate, now, t.status, tz)).length
-    stats.directReports = directReports
-    stats.completedMeetings = completedMeetings
-  }
-
-  // ── Pending proposal requests (where user is receiver) ──────────
-  type ProposalMeeting = {
-    id: string
-    meetingDate: Date
-    proposedById: string | null
-    employeeId: string
-    reporterId: string
-    employee: { id: string; name: string | null }
-    reporter: { id: string; name: string | null }
-  }
-  let pendingRequestsForMe: ProposalMeeting[] = []
-  let awaitingAcceptance: ProposalMeeting[] = []
-  try {
-    pendingRequestsForMe = await prisma.meeting.findMany({
-      where: {
-        status: 'PROPOSED',
-        OR: [
-          { employeeId: user.id, proposedById: { not: user.id } },
-          { reporterId: user.id, proposedById: { not: user.id } },
-        ],
-      },
-      include: {
-        employee: { select: { id: true, name: true } },
-        reporter: { select: { id: true, name: true } },
-      },
-      orderBy: { meetingDate: 'asc' },
-    })
-
-    awaitingAcceptance = await prisma.meeting.findMany({
-      where: {
-        status: 'PROPOSED',
-        proposedById: user.id,
-      },
-      include: {
-        employee: { select: { id: true, name: true } },
-        reporter: { select: { id: true, name: true } },
-      },
-      orderBy: { meetingDate: 'asc' },
-    })
-  } catch {
-    // proposedById column may not exist yet if migration hasn't run
-  }
-
-  // ── Week calendar meetings (1 year ahead so calendar shows full year) ─────
+  // ── Week calendar preload: this week + the next PRELOAD_WEEKS-1; the calendar fetches anything else ──
   // Monday of the current week as a calendar day in the VIEWER's zone, then its start instant.
   const [ty, tm, td] = toDateKey(now, tz).split('-').map(Number)
   const todayUtc = new Date(Date.UTC(ty, tm - 1, td))
@@ -153,55 +34,69 @@ export default async function DashboardPage() {
   const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek
   todayUtc.setUTCDate(todayUtc.getUTCDate() + mondayOffset)
   const weekStart = startOfDayInTz(todayUtc.toISOString().slice(0, 10), tz)
-  const calendarEnd = new Date(weekStart.getTime() + 365 * 86_400_000)
+  const calendarEnd = new Date(weekStart.getTime() + PRELOAD_WEEKS * 7 * 86_400_000)
 
-  const weekMeetingsWhere = user.role === UserRole.EMPLOYEE
-    ? { employeeId: user.id, meetingDate: { gte: weekStart, lt: calendarEnd }, status: { in: ['SCHEDULED', 'PROPOSED', 'COMPLETED'] as ('SCHEDULED' | 'PROPOSED' | 'COMPLETED')[] } }
-    : user.role === UserRole.REPORTER
-      ? { OR: [{ employeeId: user.id }, { reporterId: user.id }], meetingDate: { gte: weekStart, lt: calendarEnd }, status: { in: ['SCHEDULED', 'PROPOSED', 'COMPLETED'] as ('SCHEDULED' | 'PROPOSED' | 'COMPLETED')[] } }
-      : { meetingDate: { gte: weekStart, lt: calendarEnd }, status: { in: ['SCHEDULED', 'PROPOSED', 'COMPLETED'] as ('SCHEDULED' | 'PROPOSED' | 'COMPLETED')[] } }
-
-  let weekMeetings: { id: string; meetingDate: Date; status: string; employee: { name: string | null }; reporter: { name: string | null } }[] = []
-  try {
-    weekMeetings = await prisma.meeting.findMany({
-      where: weekMeetingsWhere,
-      include: {
-        employee: { select: { name: true } },
-        reporter: { select: { name: true } },
+  const [
+    upcomingMeetings,
+    completedMeetings,
+    pendingTodos,
+    directReports,
+    pendingRequestsForMe,
+    awaitingAcceptance,
+    weekMeetings,
+    recentMeetings,
+  ] = await Promise.all([
+    prisma.meeting.count({
+      where: { AND: [scope, { status: { in: ['SCHEDULED', 'PROPOSED'] }, meetingDate: { gte: now } }] },
+    }),
+    prisma.meeting.count({
+      where:
+        user.role === UserRole.REPORTER
+          ? { reporterId: user.id, status: 'COMPLETED' }
+          : { AND: [scope, { status: 'COMPLETED' }] },
+    }),
+    prisma.todo.count({ where: { assignedToId: user.id, status: { not: 'DONE' } } }),
+    isEmployee
+      ? Promise.resolve(0)
+      : prisma.user.count({
+          where: user.role === UserRole.SUPER_ADMIN ? { isActive: true } : { reportsToId: user.id, isActive: true },
+        }),
+    // Pending proposals where the user is the receiver / the proposer
+    prisma.meeting.findMany({
+      where: {
+        status: 'PROPOSED',
+        OR: [
+          { employeeId: user.id, proposedById: { not: user.id } },
+          { reporterId: user.id, proposedById: { not: user.id } },
+        ],
       },
+      select: { id: true, meetingDate: true, proposedById: true, employeeId: true, reporterId: true, ...people },
       orderBy: { meetingDate: 'asc' },
-    })
-  } catch {
-    // PROPOSED status may not exist yet; fallback to simpler query
-    const fallbackWhere = user.role === UserRole.EMPLOYEE
-      ? { employeeId: user.id, meetingDate: { gte: weekStart, lt: calendarEnd } }
-      : user.role === UserRole.REPORTER
-        ? { OR: [{ employeeId: user.id }, { reporterId: user.id }], meetingDate: { gte: weekStart, lt: calendarEnd } }
-        : { meetingDate: { gte: weekStart, lt: calendarEnd } }
-    weekMeetings = await prisma.meeting.findMany({
-      where: fallbackWhere,
-      include: {
-        employee: { select: { name: true } },
-        reporter: { select: { name: true } },
+    }),
+    prisma.meeting.findMany({
+      where: { status: 'PROPOSED', proposedById: user.id },
+      select: { id: true, meetingDate: true, proposedById: true, employeeId: true, reporterId: true, ...people },
+      orderBy: { meetingDate: 'asc' },
+    }),
+    prisma.meeting.findMany({
+      where: {
+        AND: [
+          scope,
+          { meetingDate: { gte: weekStart, lt: calendarEnd }, status: { in: ['SCHEDULED', 'PROPOSED', 'COMPLETED'] } },
+        ],
       },
+      select: { id: true, meetingDate: true, status: true, ...names },
       orderBy: { meetingDate: 'asc' },
-    })
-  }
+    }),
+    prisma.meeting.findMany({
+      where: scope,
+      select: { id: true, meetingDate: true, status: true, ...names },
+      orderBy: { meetingDate: 'desc' },
+      take: 5,
+    }),
+  ])
 
-  // Get recent meetings
-  const recentMeetings = await prisma.meeting.findMany({
-    where: user.role === UserRole.EMPLOYEE
-      ? { employeeId: user.id }
-      : user.role === UserRole.REPORTER
-        ? { OR: [{ employeeId: user.id }, { reporterId: user.id }] }
-        : {},
-    include: {
-      employee: { select: { name: true } },
-      reporter: { select: { name: true } },
-    },
-    orderBy: { meetingDate: 'desc' },
-    take: 5,
-  })
+  const stats = { upcomingMeetings, completedMeetings, pendingTodos, directReports }
 
   // Hour of day in the viewer's zone (never the server's)
   const viewerHour = Math.floor((((now.getUTCHours() * 60 + now.getUTCMinutes() + offsetMinutes(now, tz)) % 1440) + 1440) % 1440 / 60)
