@@ -147,7 +147,8 @@ grep -q "have access to that page" /tmp/body && echo "  ok   access-denied copy"
 
 echo "## admin scheduling"
 ALEX_MGR=$($PSQL -c "select m.email from \"User\" u join \"User\" m on m.id=u.\"reportsToId\" where u.email='alex@test.com'")
-SCHED_AT=$(python3 -c "import datetime;print((datetime.datetime.now(datetime.UTC).replace(tzinfo=None)+datetime.timedelta(days=9)).replace(hour=6,minute=0,second=0,microsecond=0).isoformat()+'Z')")
+# 9+ days out, moved off the weekend (working-days policy)
+SCHED_AT=$(python3 -c "import datetime as d;t=(d.datetime.now(d.UTC).replace(tzinfo=None)+d.timedelta(days=9)).replace(hour=6,minute=0,second=0,microsecond=0);t+=d.timedelta(days=max(0,7-t.weekday()) if t.weekday()>4 else 0);print(t.isoformat()+'Z')")
 check "admin proposes 1:1 with someone else's report" 201 $(code -b "$ADMIN" -X POST $B/api/meetings -H 'content-type: application/json' -d "{\"employeeId\":\"$ALEX_ID\",\"meetingDate\":\"$SCHED_AT\",\"meetingType\":\"IN_PERSON\"}")
 ADM_MID=$(python3 -c "import json;print(json.load(open('/tmp/body'))['id'])")
 check "admin is the meeting owner (not $ALEX_MGR)" "nishant@test.com" "$($PSQL -c "select r.email from \"Meeting\" m join \"User\" r on r.id=m.\"reporterId\" where m.id='$ADM_MID'")"
@@ -243,7 +244,7 @@ FUT=$($PSQL -c "insert into \"Meeting\" (id,\"employeeId\",\"reporterId\",\"meet
 PAST=$($PSQL -c "insert into \"Meeting\" (id,\"employeeId\",\"reporterId\",\"meetingDate\",status,\"proposedById\",\"updatedAt\") values ('smoke-prop-past','$ALEX_ID','$REP_ID',now() - interval '2 days','PROPOSED','$REP_ID',now()) returning id" | head -1)
 check "cron confirms future proposals" 200 $(code -X POST $B/api/cron/meetings -H "x-cron-secret: $CRON")
 check "cron reports it" yes "$(python3 -c "import json;print('yes' if json.load(open('/tmp/body'))['proposalsConfirmed']>=1 else 'no')")"
-check "future proposal now SCHEDULED, past one untouched" "PROPOSED SCHEDULED" "$($PSQL -c "select string_agg(status::text,' ' order by id) from \"Meeting\" where id in ('$FUT','$PAST')")"
+check "future proposal now SCHEDULED, past one untouched" "SCHEDULED PROPOSED" "$($PSQL -c "select string_agg(status::text,' ' order by id) from \"Meeting\" where id in ('$FUT','$PAST')")"
 check "employee told it is booked" 1 "$($PSQL -c "select count(*) from \"Notification\" where link='/meetings/$FUT' and type='MEETING_BOOKED'")"
 check "cron rsvp watch ran" yes "$(python3 -c "import json;print('yes' if json.load(open('/tmp/body'))['calendarRsvp'] is not None else 'no')")"
 $PSQL -c "delete from \"Notification\" where link in ('/meetings/$FUT','/meetings/$PAST'); delete from \"Meeting\" where id in ('$FUT','$PAST');" >/dev/null
