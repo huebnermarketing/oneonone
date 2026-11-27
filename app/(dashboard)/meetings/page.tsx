@@ -2,6 +2,7 @@ import { getCurrentUser } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import { Prisma, UserRole } from '@prisma/client'
 import { listMeetingsPage, parsePage, parseTab } from '@/lib/meeting-list'
+import { absencesForMeetings } from '@/lib/absences'
 import { MeetingsClient } from './meetings-client'
 
 export default async function MeetingsPage(props: {
@@ -37,8 +38,12 @@ export default async function MeetingsPage(props: {
     }),
   ])
 
+  // Keka: "On leave" / "Holiday" chips on this page's upcoming meetings
+  const absences = await absencesForMeetings(list.meetings.filter((m) => m.status === 'SCHEDULED' || m.status === 'PROPOSED'))
+
   return (
     <MeetingsClient
+      absences={absences}
       meetings={list.meetings}
       total={list.total}
       offset={list.offset}

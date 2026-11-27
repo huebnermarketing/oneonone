@@ -524,6 +524,59 @@ export async function sendMeetingBookedEmail(
   await sendEmail({ to: toEmail, subject: `Meeting Scheduled - ${by}, ${when}`, html })
 }
 
+/** To the manager: a participant is on leave / holiday (Keka) at a booked meeting's time. */
+export async function sendLeaveConflictEmail(
+  managerEmail: string,
+  managerName: string | null,
+  personName: string,
+  reason: string,
+  meetingDate: Date,
+  meetingId: string
+) {
+  const name = managerName || 'Manager'
+  const when = whenFor(meetingDate, await recipientTimeZone(managerEmail))
+  const html = emailLayout({
+    preheader: `${esc(personName)}: ${esc(reason)} on ${when}`,
+    heading: 'Meeting Falls on Leave',
+    body: `
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
+      <p style="margin:0 0 20px;">Keka shows <strong>${esc(personName)}</strong> ${personName === 'You' ? 'are' : 'is'} away when this one-on-one is booked (${esc(reason.toLowerCase())}). The meeting is still scheduled &mdash; reschedule or cancel it from the meeting page.</p>
+      ${detailRow('Who', personName)}
+      ${detailRow('Reason', reason)}
+      ${detailRow('Date & Time', when)}
+    `,
+    ctaText: 'Reschedule or Cancel',
+    ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
+  })
+  await sendEmail({ to: managerEmail, subject: `On leave - ${personName}, ${when}`, html })
+}
+
+/** A recurring occurrence was not booked because someone is on leave / holiday (Keka). */
+export async function sendMeetingSkippedEmail(
+  toEmail: string,
+  toName: string | null,
+  withName: string,
+  reason: string,
+  meetingDate: Date
+) {
+  const name = toName || 'there'
+  const when = whenFor(meetingDate, await recipientTimeZone(toEmail))
+  const html = emailLayout({
+    preheader: `This one-on-one with ${esc(withName)} is skipped (${esc(reason)})`,
+    heading: 'Recurring Meeting Skipped',
+    body: `
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
+      <p style="margin:0 0 20px;">Your recurring one-on-one with <strong>${esc(withName)}</strong> on ${when} was not booked (${esc(reason)}, from Keka). It has been removed from Google Calendar. The schedule continues as usual after that.</p>
+      ${detailRow('With', withName)}
+      ${detailRow('Skipped', when)}
+      ${detailRow('Reason', reason)}
+    `,
+    ctaText: 'View Schedules',
+    ctaUrl: `${baseUrl()}/meetings?tab=recurring`,
+  })
+  await sendEmail({ to: toEmail, subject: `Skipped - one-on-one with ${withName}, ${when}`, html })
+}
+
 /** To the manager: the employee declined the meeting in Google Calendar. */
 export async function sendCalendarDeclinedEmail(
   managerEmail: string,

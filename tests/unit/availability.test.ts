@@ -6,17 +6,18 @@ vi.mock('@/lib/google-calendar', () => ({
   isCalendarEnabled: vi.fn(),
   isDateTimeFreeForBoth: vi.fn(),
 }))
-vi.mock('@/lib/keka', () => ({ isDateUnavailableForEitherUser: vi.fn() }))
+vi.mock('@/lib/absences', () => ({ blockingAbsence: vi.fn(), pairSlotFilter: vi.fn() }))
 
 import * as gcal from '@/lib/google-calendar'
-import * as keka from '@/lib/keka'
+import * as absences from '@/lib/absences'
 import { pairProfiles, workingHoursLabel, appMeetingsBusy, freeSlotsForDay, firstFreeOccurrence, calendarsConnected } from '@/lib/availability'
 
 const IST = { timeZone: 'Asia/Kolkata', workDayStart: '11:00', workDayEnd: '20:00' }
 const MT = { timeZone: 'America/Denver', workDayStart: '08:00', workDayEnd: '16:00' }
 
 beforeEach(() => {
-  vi.mocked(keka.isDateUnavailableForEitherUser).mockImplementation(async () => false)
+  vi.mocked(absences.blockingAbsence).mockImplementation(async () => null)
+  vi.mocked(absences.pairSlotFilter).mockImplementation(async () => ({ isBlocked: () => false, pending: () => [] }))
 })
 
 describe('profiles + label', () => {
@@ -68,7 +69,7 @@ describe('freeSlotsForDay', () => {
 describe('firstFreeOccurrence', () => {
   const dates = [new Date('2026-11-09T09:30:00Z'), new Date('2026-11-16T09:30:00Z'), new Date('2026-11-23T09:30:00Z')]
   it('skips Keka-unavailable days and busy times', async () => {
-    vi.mocked(keka.isDateUnavailableForEitherUser).mockImplementation(async (_r, _e, d) => d.getTime() === dates[0].getTime())
+    vi.mocked(absences.blockingAbsence).mockImplementation(async (_r, _e, d) => (d.getTime() === dates[0].getTime() ? { who: 'employee', absence: { date: '', kind: 'leave' } } : null))
     vi.mocked(gcal.isDateTimeFreeForBoth).mockImplementation(async (_r, _e, d) => d.getTime() === dates[2].getTime())
     expect(await firstFreeOccurrence('r', 'e', dates, pairProfiles(IST, IST), 15)).toEqual(dates[2])
     expect(gcal.isDateTimeFreeForBoth).toHaveBeenCalledTimes(2) // the leave day never hit the calendar API

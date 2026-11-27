@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { UserRole } from '@prisma/client'
 import { formatMeetingShort, toDateKey, startOfDayInTz, offsetMinutes } from '@/lib/dates'
 import { meetingScope } from '@/lib/meeting-list'
+import { absencesForMeetings } from '@/lib/absences'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import { greeting } from '@/lib/ui'
 import Link from 'next/link'
@@ -85,7 +86,7 @@ export default async function DashboardPage() {
           { meetingDate: { gte: weekStart, lt: calendarEnd }, status: { in: ['SCHEDULED', 'PROPOSED', 'COMPLETED'] } },
         ],
       },
-      select: { id: true, meetingDate: true, status: true, ...names },
+      select: { id: true, meetingDate: true, status: true, durationMinutes: true, employeeId: true, reporterId: true, ...names },
       orderBy: { meetingDate: 'asc' },
     }),
     prisma.meeting.findMany({
@@ -97,6 +98,8 @@ export default async function DashboardPage() {
   ])
 
   const stats = { upcomingMeetings, completedMeetings, pendingTodos, directReports }
+  // Keka: "On leave" / "Holiday" chips on upcoming calendar meetings
+  const absences = await absencesForMeetings(weekMeetings.filter((m) => m.status !== 'COMPLETED'), now)
 
   // Hour of day in the viewer's zone (never the server's)
   const viewerHour = Math.floor((((now.getUTCHours() * 60 + now.getUTCMinutes() + offsetMinutes(now, tz)) % 1440) + 1440) % 1440 / 60)
@@ -158,10 +161,14 @@ export default async function DashboardPage() {
           status: m.status,
           employee: m.employee,
           reporter: m.reporter,
+          employeeId: m.employeeId,
+          reporterId: m.reporterId,
+          absence: absences[m.id],
         }))}
         initialWeekStart={weekStart.toISOString()}
         initialRangeEnd={calendarEnd.toISOString()}
         userRole={user.role}
+        currentUserId={user.id}
       />
 
       {/* Recent Meetings & Quick Actions */}

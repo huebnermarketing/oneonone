@@ -11,6 +11,7 @@ import { getPolicies } from '@/lib/settings'
 import { resolveTimeZone } from '@/lib/dates'
 import { assertWorkingDay } from '@/lib/working-days'
 import { syncBookedMeetingToCalendar } from '@/lib/meeting-booking'
+import { absencesForMeetings } from '@/lib/absences'
 
 export const dynamic = 'force-dynamic'
 
@@ -43,7 +44,10 @@ export const GET = withApiAuth(async (req: NextRequest, { user }) => {
     include: meetingInclude,
     orderBy: { meetingDate: 'desc' },
   })
-  return NextResponse.json(meetings)
+  // Calendar ranges get Keka leave/holiday per meeting ("On leave" chips); unbounded lists don't
+  if (!start && !end) return NextResponse.json(meetings)
+  const absences = await absencesForMeetings(meetings.filter((m) => m.status === 'SCHEDULED' || m.status === 'PROPOSED'))
+  return NextResponse.json(meetings.map((m) => (absences[m.id] ? { ...m, absence: absences[m.id] } : m)))
 })
 
 /**

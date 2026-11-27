@@ -11,6 +11,8 @@ import {
   sendFormReminderEmail,
   sendFormSubmittedEmail,
   sendCalendarDeclinedEmail,
+  sendLeaveConflictEmail,
+  sendMeetingSkippedEmail,
   sendMeetingAcceptedEmail,
   sendMeetingBookedEmail,
   sendMeetingCancelledEmail,
@@ -30,6 +32,8 @@ import {
   notifyFormReminder,
   notifyFormSubmitted,
   notifyCalendarDeclined,
+  notifyLeaveConflict,
+  notifyMeetingSkipped,
   notifyMeetingAccepted,
   notifyMeetingBooked,
   notifyMeetingCancelled,
@@ -116,6 +120,27 @@ export function meetingBooked(args: {
   return fanOut('meetingBooked', meetingId, [
     ['email', () => sendMeetingBookedEmail(to.email, to.name, scheduledBy.name, date, meetingId, durationMinutes, args.recurringLabel)],
     ['in-app', () => notifyMeetingBooked(to.id, displayName(scheduledBy.name, 'Your manager'), date, meetingId)],
+  ])
+}
+
+/** A participant is on Keka leave / holiday at a booked meeting's time; tell the manager (once). */
+export function leaveConflict(args: { meetingId: string; date: Date; manager: Party; personName: string; reason: string }): Promise<NotifyResult> {
+  const { meetingId, date, manager, personName, reason } = args
+  return fanOut('leaveConflict', meetingId, [
+    ['email', () => sendLeaveConflictEmail(manager.email, manager.name, personName, reason, date, meetingId)],
+    ['in-app', () => notifyLeaveConflict(manager.id, personName, reason, date, meetingId)],
+  ])
+}
+
+/** A recurring occurrence wasn't booked (leave / holiday); tell both participants. */
+export function meetingSkipped(args: { scheduleId: string; date: Date; reporter: Party; employee: Party; reason: string }): Promise<NotifyResult> {
+  const { scheduleId, date, reporter, employee, reason } = args
+  const withName = (p: Party, fallback: string) => displayName(p.name, fallback)
+  return fanOut('meetingSkipped', scheduleId, [
+    ['email:reporter', () => sendMeetingSkippedEmail(reporter.email, reporter.name, withName(employee, 'your team member'), reason, date)],
+    ['in-app:reporter', () => notifyMeetingSkipped(reporter.id, withName(employee, 'your team member'), reason, date)],
+    ['email:employee', () => sendMeetingSkippedEmail(employee.email, employee.name, withName(reporter, 'your manager'), reason, date)],
+    ['in-app:employee', () => notifyMeetingSkipped(employee.id, withName(reporter, 'your manager'), reason, date)],
   ])
 }
 

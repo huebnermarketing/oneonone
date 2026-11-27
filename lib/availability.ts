@@ -7,7 +7,7 @@
 import { MeetingStatus } from '@prisma/client'
 import { prisma } from './prisma'
 import { getMutualFreeSlots, isCalendarEnabled, isDateTimeFreeForBoth, type MutualFreeSlotsOptions } from './google-calendar'
-import { isDateUnavailableForEitherUser } from './keka'
+import { blockingAbsence, pairSlotFilter } from './absences'
 import { DEFAULT_WORK_END, DEFAULT_WORK_START, formatWorkHoursLabel } from './timezones'
 import { DEFAULT_TIMEZONE } from './constants'
 import { MAX_MEETING_DURATION } from './meeting-duration'
@@ -115,7 +115,11 @@ export async function freeSlotsForDay(reporterId: string, employeeId: string, da
     getMutualFreeSlots(reporterId, employeeId, date, durationMinutes, profiles.options),
     appMeetingsBusy(reporterId, employeeId, date, profiles.reporter.timeZone, excludeMeetingId),
   ])
-  return calendarSlots.filter((s) => isIntervalFree(new Date(s.start).getTime(), new Date(s.end).getTime(), busy))
+  // Keka: drop slots that fall on approved leave (incl. one half of a half-day) or a holiday of either person
+  const absence = await pairSlotFilter(reporterId, employeeId, date.toISOString().slice(0, 10))
+  return calendarSlots.filter(
+    (s) => isIntervalFree(new Date(s.start).getTime(), new Date(s.end).getTime(), busy) && !absence.isBlocked(new Date(s.start), durationMinutes)
+  )
 }
 
 /** How many upcoming occurrences a recurring slot is checked against (one-off leave shouldn't block the series). */
@@ -127,7 +131,8 @@ export const MAX_OCCURRENCES_TO_CHECK = 6
  */
 export async function firstFreeOccurrence(reporterId: string, employeeId: string, candidates: Date[], profiles: PairProfiles, durationMinutes: number): Promise<Date | null> {
   for (const date of candidates) {
-    if (await isDateUnavailableForEitherUser(reporterId, employeeId, date)) continue
+    // Keka: approved leave (incl. the half of a half-day) or a public holiday for either person
+    if (await blockingAbsence(reporterId, employeeId, date, durationMinutes)) continue
     if (await isDateTimeFreeForBoth(reporterId, employeeId, date, durationMinutes, profiles.options)) return date
   }
   return null

@@ -108,3 +108,14 @@ export const reprocessRecordingSchema = z.object({
   from: z.enum(['TRANSCRIBE', 'ANALYZE']).optional(),
   language: z.string().trim().min(2).max(10).optional(),
 })
+
+/** GET /api/meetings/leave-days — Keka leave/holidays for a pair: the caller + employeeId, or a meeting's two people. */
+export const leaveDaysQuery = z
+  .object({
+    employeeId: uuid.optional(),
+    meetingId: uuid.optional(),
+    from: dateOnly,
+    to: dateOnly,
+  })
+  .refine((q) => !!q.employeeId !== !!q.meetingId, { message: 'Pass employeeId or meetingId' })
+  .refine((q) => q.from <= q.to && (Date.parse(q.to) - Date.parse(q.from)) / 86_400_000 <= 62, { message: 'Range must be 0–62 days' })

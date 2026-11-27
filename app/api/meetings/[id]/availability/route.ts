@@ -8,6 +8,7 @@ import { assertAccess, canViewMeeting } from '@/lib/meeting-access'
 import { CalendarUnavailableError } from '@/lib/google-calendar'
 import { calendarsConnected, freeSlotsForDay, loadPairProfiles, workingHoursLabel } from '@/lib/availability'
 import { availabilityDateQuery } from '@/lib/validation/meetings'
+import { fullDayMessage, leaveNoteFor, pairAbsenceDays } from '@/lib/absences'
 
 export const dynamic = 'force-dynamic'
 
@@ -41,6 +42,18 @@ export const GET = withApiAuth(async (req: NextRequest, { user, params }) => {
   }
 
   const parsedDate = new Date(date)
+  const dayKey = /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : parsedDate.toISOString().slice(0, 10)
+
+  // Keka: either participant away all day → no slots
+  const [dayInfo] = await pairAbsenceDays(meeting.reporterId, meeting.employeeId, dayKey, dayKey)
+  const names = await prisma.user.findMany({ where: { id: { in: [meeting.reporterId, meeting.employeeId] } }, select: { id: true, name: true } })
+  const nameOf = (side: 'reporter' | 'employee') => {
+    const id = side === 'reporter' ? meeting.reporterId : meeting.employeeId
+    return id === user.id ? 'You' : names.find((n) => n.id === id)?.name ?? 'The other participant'
+  }
+  if (dayInfo?.fullDay) {
+    return NextResponse.json({ slots: [], dateUnavailable: true, workingHoursLabel: null, message: fullDayMessage(dayInfo.fullDay, nameOf) })
+  }
 
   const unavailable = (message: string) => NextResponse.json({ slots: [], calendarUnavailable: true, workingHoursLabel: null, message })
   // One connected calendar is enough: it reads the other person's free/busy
@@ -57,5 +70,6 @@ export const GET = withApiAuth(async (req: NextRequest, { user, params }) => {
   }
 
   // The caller may be either participant, so no "your time" suffix
-  return NextResponse.json({ slots, calendarUnavailable: false, workingHoursLabel: workingHoursLabel(profiles, false) })
+  const leaveNote = leaveNoteFor(dayInfo, nameOf)
+  return NextResponse.json({ slots, calendarUnavailable: false, workingHoursLabel: workingHoursLabel(profiles, false), ...(leaveNote && { leaveNote }) })
 })

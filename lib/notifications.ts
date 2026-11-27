@@ -310,6 +310,26 @@ export async function notifyMeetingBooked(userId: string, scheduledByName: strin
   })
 }
 
+export async function notifyLeaveConflict(managerId: string, personName: string, reason: string, meetingDate: Date, meetingId: string) {
+  return createNotification({
+    userId: managerId,
+    type: 'LEAVE_CONFLICT',
+    title: 'Meeting falls on leave',
+    message: `${personName} ${personName === 'You' ? 'are' : 'is'} away (${reason.toLowerCase()}) at the one-on-one on ${await whenFor(managerId, meetingDate)}. Reschedule or cancel it.`,
+    link: `/meetings/${meetingId}`,
+  })
+}
+
+export async function notifyMeetingSkipped(userId: string, withName: string, reason: string, meetingDate: Date) {
+  return createNotification({
+    userId,
+    type: 'MEETING_SKIPPED',
+    title: 'Recurring meeting skipped',
+    message: `The one-on-one with ${withName} on ${await whenFor(userId, meetingDate)} was not booked (${reason}).`,
+    link: '/meetings?tab=recurring',
+  })
+}
+
 export async function notifyCalendarDeclined(managerId: string, employeeName: string, meetingDate: Date, meetingId: string) {
   return createNotification({
     userId: managerId,
