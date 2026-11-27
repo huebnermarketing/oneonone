@@ -1,18 +1,18 @@
 /**
  * The employee check-in form's answer fields (client-safe): order, display titles and which are
- * required on submit. Shared by the form API, the meeting page and the answer history.
+ * required on submit (all of them). components/forms/one-on-one-form.tsx shows the same set. Shared by the form API, the meeting page and the answer history.
  */
 export const FORM_FIELDS = [
   { key: 'checkInPersonal', title: 'Check-In: Personal Best', required: true },
   { key: 'checkInProfessional', title: 'Check-In: Professional Best', required: true },
   { key: 'priorityGoalProfessional', title: 'Priority Goal: Professional Growth', required: true },
-  { key: 'priorityGoalAgency', title: 'Priority Goal: Agency Growth', required: false },
+  { key: 'priorityGoalAgency', title: 'Priority Goal: Agency Growth', required: true },
   { key: 'progressReport', title: 'Progress Report', required: true },
-  { key: 'goodNews', title: 'Good News', required: false },
-  { key: 'supportNeeded', title: 'Support Needed', required: false },
-  { key: 'priorityDiscussions', title: 'Priority Discussions', required: false },
-  { key: 'headsUp', title: 'Heads Up', required: false },
-  { key: 'anythingElse', title: 'Anything Else', required: false },
+  { key: 'goodNews', title: 'Good News', required: true },
+  { key: 'supportNeeded', title: 'Support Needed', required: true },
+  { key: 'priorityDiscussions', title: 'Priority Discussions', required: true },
+  { key: 'headsUp', title: 'Heads Up', required: true },
+  { key: 'anythingElse', title: 'Anything Else', required: true },
 ] as const
 
 export type FormFieldKey = (typeof FORM_FIELDS)[number]['key']

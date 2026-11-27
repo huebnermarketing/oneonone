@@ -20,11 +20,18 @@ const draftSchema = z.object({
   anythingElse: z.string().optional(),
 })
 
+/** Every question must be answered to submit (drafts can be partial) — same rule as lib/form-fields.ts on the server. */
 const REQUIRED_FIELDS: { key: keyof FormData; label: string }[] = [
   { key: 'checkInPersonal', label: 'Personal best since we last met' },
   { key: 'checkInProfessional', label: 'Professional best since we last met' },
   { key: 'priorityGoalProfessional', label: 'Professional growth goals' },
+  { key: 'priorityGoalAgency', label: 'Agency growth goals' },
   { key: 'progressReport', label: 'Report on progress' },
+  { key: 'goodNews', label: 'Good news to report' },
+  { key: 'supportNeeded', label: 'Support I need' },
+  { key: 'priorityDiscussions', label: 'Priority issues to discuss' },
+  { key: 'headsUp', label: 'Client or internal issues' },
+  { key: 'anythingElse', label: 'Anything else' },
 ]
 
 type FormData = z.infer<typeof draftSchema>
@@ -152,7 +159,7 @@ export function OneOnOneForm({
 
           <div>
             <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
-              To serve the agency growth
+              To serve the agency growth <span className="text-red-500">*</span>
             </label>
             <textarea
               {...register('priorityGoalAgency')}
@@ -161,6 +168,9 @@ export function OneOnOneForm({
               placeholder="What are your goals to help the agency grow?"
               disabled={isReadOnly}
             />
+            {errors.priorityGoalAgency && (
+              <p className="mt-1.5 text-sm text-red-500">{errors.priorityGoalAgency.message}</p>
+            )}
           </div>
 
           <div>
@@ -188,7 +198,7 @@ export function OneOnOneForm({
         <CardContent>
           <div>
             <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
-              Good news to report
+              Good news to report <span className="text-red-500">*</span>
             </label>
             <textarea
               {...register('goodNews')}
@@ -197,6 +207,9 @@ export function OneOnOneForm({
               placeholder="Share any good news or wins..."
               disabled={isReadOnly}
             />
+            {errors.goodNews && (
+              <p className="mt-1.5 text-sm text-red-500">{errors.goodNews.message}</p>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -209,7 +222,7 @@ export function OneOnOneForm({
         <CardContent className="space-y-6">
           <div>
             <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
-              Support I need to do my job
+              Support I need to do my job <span className="text-red-500">*</span>
             </label>
             <textarea
               {...register('supportNeeded')}
@@ -218,11 +231,14 @@ export function OneOnOneForm({
               placeholder="What support or resources do you need?"
               disabled={isReadOnly}
             />
+            {errors.supportNeeded && (
+              <p className="mt-1.5 text-sm text-red-500">{errors.supportNeeded.message}</p>
+            )}
           </div>
 
           <div>
             <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
-              Priority issues to discuss / questions that need answers / input
+              Priority issues to discuss / questions that need answers / input <span className="text-red-500">*</span>
             </label>
             <textarea
               {...register('priorityDiscussions')}
@@ -231,6 +247,9 @@ export function OneOnOneForm({
               placeholder="What topics would you like to discuss?"
               disabled={isReadOnly}
             />
+            {errors.priorityDiscussions && (
+              <p className="mt-1.5 text-sm text-red-500">{errors.priorityDiscussions.message}</p>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -242,7 +261,7 @@ export function OneOnOneForm({
         <CardContent>
           <div>
             <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
-              Client or internal issues
+              Client or internal issues <span className="text-red-500">*</span>
             </label>
             <textarea
               {...register('headsUp')}
@@ -251,6 +270,9 @@ export function OneOnOneForm({
               placeholder="Any issues or concerns to flag?"
               disabled={isReadOnly}
             />
+            {errors.headsUp && (
+              <p className="mt-1.5 text-sm text-red-500">{errors.headsUp.message}</p>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -262,7 +284,7 @@ export function OneOnOneForm({
         <CardContent>
           <div>
             <label className="block text-sm font-medium text-dark-gray dark:text-white mb-2">
-              Anything else?
+              Anything else? <span className="text-red-500">*</span>
             </label>
             <textarea
               {...register('anythingElse')}
@@ -271,6 +293,9 @@ export function OneOnOneForm({
               placeholder="Any other thoughts or comments?"
               disabled={isReadOnly}
             />
+            {errors.anythingElse && (
+              <p className="mt-1.5 text-sm text-red-500">{errors.anythingElse.message}</p>
+            )}
           </div>
         </CardContent>
       </Card>
