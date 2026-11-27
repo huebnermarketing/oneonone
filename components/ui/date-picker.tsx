@@ -15,6 +15,12 @@ interface DatePickerProps {
   className?: string
   /** Weekdays that can't be picked (0 = Sunday … 6 = Saturday), e.g. non-working days */
   disabledWeekdays?: number[]
+  /** Specific days ("YYYY-MM-DD") that can't be picked, e.g. leave / holidays from Keka */
+  disabledDates?: string[]
+  /** Tooltip per day ("YYYY-MM-DD" -> text); days with a hint get a small dot (e.g. half-day leave) */
+  dateHints?: Record<string, string>
+  /** Called with the first and last day ("YYYY-MM-DD") of the month being shown, so callers can load its data */
+  onVisibleMonthChange?: (from: string, to: string) => void
 }
 
 const MONTHS = [
@@ -33,6 +39,9 @@ export function DatePicker({
   label,
   className,
   disabledWeekdays,
+  disabledDates,
+  dateHints,
+  onVisibleMonthChange,
 }: DatePickerProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [dropdownRect, setDropdownRect] = useState<{ top: number; left: number } | null>(null)
@@ -41,6 +50,14 @@ export function DatePicker({
     return new Date()
   })
   const containerRef = useRef<HTMLDivElement>(null)
+  const viewYear = viewDate.getFullYear()
+  const viewMonth = viewDate.getMonth()
+  useEffect(() => {
+    if (!isOpen || !onVisibleMonthChange) return
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const last = new Date(viewYear, viewMonth + 1, 0).getDate()
+    onVisibleMonthChange(`${viewYear}-${pad(viewMonth + 1)}-01`, `${viewYear}-${pad(viewMonth + 1)}-${pad(last)}`)
+  }, [isOpen, viewYear, viewMonth, onVisibleMonthChange])
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   // Parse the value to display
@@ -116,6 +133,7 @@ export function DatePicker({
     if (min && dateStr < min) return true
     if (max && dateStr > max) return true
     if (disabledWeekdays?.includes(date.getDay())) return true
+    if (disabledDates?.includes(dateStr)) return true
     return false
   }
 
@@ -331,15 +349,18 @@ export function DatePicker({
                 const disabled = isDateDisabled(item.date)
                 const selected = isDateSelected(item.date)
                 const today = isToday(item.date)
-                
+                const hint = item.isCurrentMonth ? dateHints?.[formatDateValue(item.date)] : undefined
+
                 return (
                   <button
                     key={index}
                     type="button"
+                    title={hint}
+                    aria-label={hint ? `${item.day}: ${hint}` : undefined}
                     onClick={() => item.isCurrentMonth && selectDate(item.day)}
                     disabled={disabled || !item.isCurrentMonth}
                     className={cn(
-                      'h-10 w-full rounded-xl text-sm font-medium transition-all',
+                      'relative h-10 w-full rounded-xl text-sm font-medium transition-all',
                       'flex items-center justify-center',
                       // Not current month
                       !item.isCurrentMonth && 'text-light-gray dark:text-medium-gray/50 cursor-default',
@@ -358,6 +379,9 @@ export function DatePicker({
                     )}
                   >
                     {item.day}
+                    {hint && (
+                      <span aria-hidden="true" className={cn('absolute bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full', disabled ? 'bg-red-400' : 'bg-amber-500')} />
+                    )}
                   </button>
                 )
               })}

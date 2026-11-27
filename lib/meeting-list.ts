@@ -68,6 +68,7 @@ export const meetingListSelect = {
   status: true,
   formSubmittedAt: true,
   employeeId: true,
+  reporterId: true,
   recurringScheduleId: true,
   durationMinutes: true,
   rescheduleDate: true,

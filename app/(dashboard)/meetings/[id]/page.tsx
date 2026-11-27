@@ -18,6 +18,9 @@ import { ProposalActions } from './proposal-actions'
 import { formatDuration } from '@/lib/meeting-duration'
 import { getPolicies } from '@/lib/settings'
 import { CancelMeetingButton } from './cancel-meeting-button'
+import { absencesForMeetings } from '@/lib/absences'
+import { absenceChips } from '@/lib/absence-format'
+import { AbsenceChips } from '@/components/ui/absence-chip'
 import { RescheduleBanner, RescheduleButton } from './reschedule'
 import { rescheduleRole } from '@/lib/reschedule'
 import { canCancel, canEditFormAnswers, canManageMeeting, canViewMeeting, canViewNotes, canViewRecording } from '@/lib/meeting-access'
@@ -81,6 +84,10 @@ export default async function MeetingDetailPage({
   const showEditFormCta = canEditForm && formSubmitted && !isPast
 
   const declinedInCalendar = meeting.status === 'SCHEDULED' && !isPast && !!meeting.calendarDeclinedAt
+  // Keka: either participant on leave / holiday at the meeting time
+  const leaveChips = !isPast && (meeting.status === 'SCHEDULED' || meeting.status === 'PROPOSED')
+    ? absenceChips((await absencesForMeetings([meeting]))[meeting.id], meeting, user.id)
+    : []
 
   // Proposal flow
   const isProposed = meeting.status === 'PROPOSED'
@@ -198,6 +205,7 @@ export default async function MeetingDetailPage({
           )}
           {reschedulePending && <Pill tone="amber" dot className="sm:text-sm sm:px-4 sm:py-2">Reschedule pending</Pill>}
           {declinedInCalendar && <Pill tone="red" dot className="sm:text-sm sm:px-4 sm:py-2">Declined in Google Calendar</Pill>}
+          <AbsenceChips chips={leaveChips} className="sm:text-sm sm:px-4 sm:py-2" />
         </div>
         {isReporter && meeting.status === 'SCHEDULED' && !formSubmitted && (settings?.requireFormBeforeComplete ?? true) && (
           <p className="text-sm text-amber-600 dark:text-amber-400">{FORM_REQUIRED_MESSAGE}</p>

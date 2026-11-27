@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { AlertCircle, CalendarClock, Check, Loader2, X } from 'lucide-react'
 import { Modal } from '@/components/ui/modal'
 import { DatePicker } from '@/components/ui/date-picker'
+import { useLeaveDays } from '@/components/forms/use-leave-days'
 import { useToast } from '@/components/ui/toast'
 import { useConfirm } from '@/components/ui/confirm-modal'
 import { useFormat } from '@/components/providers/timezone-provider'
@@ -48,6 +49,8 @@ function RescheduleDialog({ open, onClose, meetingId, durationMinutes, workingDa
   const [loading, setLoading] = useState(false)
   const [calendarUnavailable, setCalendarUnavailable] = useState(false)
   const [dayMessage, setDayMessage] = useState('')
+  const [leaveNote, setLeaveNote] = useState('')
+  const leaveDays = useLeaveDays({ meetingId })
   const [hoursLabel, setHoursLabel] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
 
@@ -60,6 +63,7 @@ function RescheduleDialog({ open, onClose, meetingId, durationMinutes, workingDa
       setTime('')
       setCalendarUnavailable(false)
       setDayMessage('')
+      setLeaveNote('')
       try {
         const res = await fetch(`/api/meetings/${meetingId}/availability?date=${encodeURIComponent(day)}&duration=${minutes}`)
         const data = await res.json()
@@ -68,6 +72,7 @@ function RescheduleDialog({ open, onClose, meetingId, durationMinutes, workingDa
           setSlots(data.slots ?? [])
           setHoursLabel(data.workingHoursLabel ?? null)
           if (data.dateUnavailable) setDayMessage(data.message || 'No meetings can be booked on this day.')
+          setLeaveNote(data.leaveNote ?? '')
         }
       } catch {
         toastError('Failed to load availability')
@@ -136,6 +141,7 @@ function RescheduleDialog({ open, onClose, meetingId, durationMinutes, workingDa
             min={today}
             placeholder="Pick a date"
             disabledWeekdays={[0, 1, 2, 3, 4, 5, 6].filter((d) => !workingDays.includes(d))}
+            {...leaveDays}
           />
         </div>
         {date && (
@@ -143,6 +149,12 @@ function RescheduleDialog({ open, onClose, meetingId, durationMinutes, workingDa
             <p id={slotsHeadingId} className="text-sm font-medium text-dark-gray dark:text-white mb-2">
               New time {hoursLabel && !calendarUnavailable && <span className="font-normal text-medium-gray">— {hoursLabel}</span>}
             </p>
+            {leaveNote && !loading && (
+              <p className="flex items-start gap-2 text-sm text-amber-700 dark:text-amber-400 mb-3" role="note">
+                <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" aria-hidden="true" />
+                <span>{leaveNote}</span>
+              </p>
+            )}
             {loading ? (
               <p className="flex items-center gap-2 py-4 text-sm text-medium-gray" role="status">
                 <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" /> Checking both calendars...

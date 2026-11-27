@@ -17,6 +17,8 @@ export const NOTIFICATION_META: Record<NotificationType, NotificationMeta> = {
   MEETING_PROPOSED: { icon: CalendarPlus, tone: 'text-orange bg-orange/10', label: 'Request', filterLabel: 'Meeting Requests' },
   MEETING_TIME_SUGGESTED: { icon: CalendarClock, tone: 'text-amber-500 bg-amber-500/10', label: 'New Time', filterLabel: 'New Time Suggested' },
   MEETING_BOOKED: { icon: CalendarCheck, tone: 'text-blue-500 bg-blue-500/10', label: 'Scheduled', filterLabel: 'Meeting Scheduled' },
+  LEAVE_CONFLICT: { icon: CalendarX, tone: 'text-amber-500 bg-amber-500/10', label: 'On leave', filterLabel: 'Meeting on Leave Day' },
+  MEETING_SKIPPED: { icon: CalendarX, tone: 'text-medium-gray bg-gray-500/10', label: 'Skipped', filterLabel: 'Recurring Meeting Skipped' },
   CALENDAR_DECLINED: { icon: CalendarX, tone: 'text-red-500 bg-red-500/10', label: 'Declined', filterLabel: 'Declined in Calendar' },
   MEETING_ACCEPTED: { icon: CalendarCheck, tone: 'text-green-500 bg-green-500/10', label: 'Confirmed', filterLabel: 'Meeting Confirmed' },
   MEETING_COMPLETED: { icon: CheckCircle2, tone: 'text-emerald-600 bg-emerald-600/10', label: 'Completed', filterLabel: 'Meeting Completed' },
