@@ -189,14 +189,18 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
 
       if (!response.ok) {
         const error = await response.json()
-        throw new Error(error.error || 'Failed to propose meeting')
+        throw new Error(error.error || 'Failed to schedule meeting')
       }
 
       const meeting = await response.json()
-      toastSuccess('Meeting proposal sent')
+      toastSuccess(
+        meeting.calendar?.calendar === 'no-calendar' || meeting.calendar?.calendar === 'failed'
+          ? 'Meeting scheduled. It could not be added to Google Calendar — reconnect your calendar.'
+          : 'Meeting scheduled and added to both calendars'
+      )
       router.push(`/meetings/${meeting.id}`)
     } catch (error) {
-      toastError(error instanceof Error ? error.message : 'Failed to propose meeting. Please try again.')
+      toastError(error instanceof Error ? error.message : 'Failed to schedule meeting. Please try again.')
     } finally {
       setIsLoading(false)
     }
@@ -411,12 +415,12 @@ export function NewMeetingForm({ employees, workDayStart, workDayEnd, workingDay
                 {isLoading ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" aria-hidden="true" />
-                    Sending proposal...
+                    Scheduling...
                   </>
                 ) : (
                   <>
                     <Calendar className="w-4 h-4" aria-hidden="true" />
-                    Propose Time
+                    Schedule Meeting
                   </>
                 )}
               </button>

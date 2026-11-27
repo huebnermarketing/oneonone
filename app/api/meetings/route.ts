@@ -10,6 +10,7 @@ import { createMeetingSchema, listMeetingsQuery } from '@/lib/validation/meeting
 import { getPolicies } from '@/lib/settings'
 import { resolveTimeZone } from '@/lib/dates'
 import { assertWorkingDay } from '@/lib/working-days'
+import { syncBookedMeetingToCalendar } from '@/lib/meeting-booking'
 
 export const dynamic = 'force-dynamic'
 
@@ -46,7 +47,8 @@ export const GET = withApiAuth(async (req: NextRequest, { user }) => {
 })
 
 /**
- * POST /api/meetings — propose a 1:1. Reporter or admin. Whoever schedules it is the meeting owner
+ * POST /api/meetings — book a 1:1. Reporter or admin. The meeting is SCHEDULED at once (no accept step):
+ * it goes on both Google Calendars with the employee's RSVP accepted (lib/meeting-booking.ts). Whoever schedules it is the meeting owner
  * (reporter): an admin scheduling with someone is having that 1:1 themselves, not booking it for the
  * employee's manager.
  */
@@ -69,7 +71,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
       reporterId,
       meetingDate,
       durationMinutes,
-      status: 'PROPOSED',
+      status: 'SCHEDULED',
       proposedById: user.id,
       meetingType,
       meetingLink: link,
@@ -86,15 +88,15 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
     durationMinutes,
   })
 
-  // No calendar event at proposal stage — created when accepted. Notifications are best effort.
-  await notify.meetingProposed({
+  // Calendar + notifications are best effort: the meeting is booked either way
+  const calendar = await syncBookedMeetingToCalendar(meeting.id)
+  await notify.meetingBooked({
     meetingId: meeting.id,
     date: meetingDate,
-    employee: meeting.employee,
-    reporter: meeting.reporter,
-    confirmToReporter: true,
+    to: meeting.employee,
+    scheduledBy: meeting.reporter,
     durationMinutes,
   })
 
-  return NextResponse.json(meeting, { status: 201 })
+  return NextResponse.json({ ...meeting, calendar }, { status: 201 })
 })

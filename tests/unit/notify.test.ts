@@ -4,7 +4,7 @@ vi.mock('@/lib/notifications', () => {
   const fns = [
     'createNotification', 'notifyFormReminder', 'notifyFormSubmitted', 'notifyMeetingAccepted', 'notifyMeetingCancelled',
     'notifyMeetingCompleted', 'notifyMeetingProposed', 'notifyMeetingReminder', 'notifyMeetingSuggested',
-    'notifyRecordingReady', 'notifyTodoAssigned',
+    'notifyRecordingReady', 'notifyTodoAssigned', 'notifyMeetingBooked', 'notifyCalendarDeclined',
   ]
   return Object.fromEntries(fns.map((name) => [name, vi.fn(async () => undefined)]))
 })
@@ -118,5 +118,20 @@ describe('other events', () => {
     await notify.todoAssigned({ todo: { id: 't1', title: 'Ship', description: null, dueDate: null }, assignee: employee, creatorName: 'Rep' })
     expect(email.sendTodoAssignedEmail).toHaveBeenCalledWith('emp@example.com', 'Emp', 'Ship', null, null, 'Rep', 't1')
     expect(inApp.notifyTodoAssigned).toHaveBeenCalledWith('e1', 'Rep', 'Ship', 't1')
+  })
+})
+
+describe('booking events', () => {
+  it('meetingBooked emails + notifies the person it was booked for', async () => {
+    const res = await notify.meetingBooked({ meetingId: 'm1', date, to: employee, scheduledBy: reporter, durationMinutes: 30, recurringLabel: 'Weekly on Monday' })
+    expect(res).toEqual({ ok: true, failures: [] })
+    expect(email.sendMeetingBookedEmail).toHaveBeenCalledWith(employee.email, employee.name, reporter.name, date, 'm1', 30, 'Weekly on Monday')
+    expect(inApp.notifyMeetingBooked).toHaveBeenCalledWith(employee.id, reporter.name, date, 'm1')
+  })
+
+  it('calendarDeclined goes to the manager only', async () => {
+    await notify.calendarDeclined({ meetingId: 'm1', date, manager: reporter, employeeName: null })
+    expect(email.sendCalendarDeclinedEmail).toHaveBeenCalledWith(reporter.email, reporter.name, null, date, 'm1')
+    expect(inApp.notifyCalendarDeclined).toHaveBeenCalledWith(reporter.id, 'Your team member', date, 'm1')
   })
 })

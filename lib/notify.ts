@@ -10,7 +10,9 @@
 import {
   sendFormReminderEmail,
   sendFormSubmittedEmail,
+  sendCalendarDeclinedEmail,
   sendMeetingAcceptedEmail,
+  sendMeetingBookedEmail,
   sendMeetingCancelledEmail,
   sendMeetingProposalEmail,
   sendMeetingReminderEmail,
@@ -27,7 +29,9 @@ import {
   notifyFormEdited,
   notifyFormReminder,
   notifyFormSubmitted,
+  notifyCalendarDeclined,
   notifyMeetingAccepted,
+  notifyMeetingBooked,
   notifyMeetingCancelled,
   notifyMeetingCompleted,
   notifyMeetingProposed,
@@ -93,6 +97,35 @@ export function meetingProposed(args: {
     deliveries.push(['email:reporter', () => sendProposalConfirmationEmail(reporter.email, reporter.name, employee.name, date, meetingId, durationMinutes)])
   }
   return fanOut('meetingProposed', meetingId, deliveries)
+}
+
+/**
+ * A meeting was booked straight onto both calendars (manual, a new recurring schedule's first meeting,
+ * cron's next occurrence, or an old proposal auto-confirmed). Tells `to`; `scheduledBy` is the other side.
+ * `recurringLabel` (e.g. "Weekly on Monday") only for the first meeting of a new schedule.
+ */
+export function meetingBooked(args: {
+  meetingId: string
+  date: Date
+  to: Party
+  scheduledBy: Pick<Party, 'name'>
+  durationMinutes?: number
+  recurringLabel?: string
+}): Promise<NotifyResult> {
+  const { meetingId, date, to, scheduledBy, durationMinutes } = args
+  return fanOut('meetingBooked', meetingId, [
+    ['email', () => sendMeetingBookedEmail(to.email, to.name, scheduledBy.name, date, meetingId, durationMinutes, args.recurringLabel)],
+    ['in-app', () => notifyMeetingBooked(to.id, displayName(scheduledBy.name, 'Your manager'), date, meetingId)],
+  ])
+}
+
+/** The employee declined a booked meeting in Google Calendar; tell the manager (once per decline). */
+export function calendarDeclined(args: { meetingId: string; date: Date; manager: Party; employeeName: string | null }): Promise<NotifyResult> {
+  const { meetingId, date, manager } = args
+  return fanOut('calendarDeclined', meetingId, [
+    ['email', () => sendCalendarDeclinedEmail(manager.email, manager.name, args.employeeName, date, meetingId)],
+    ['in-app', () => notifyCalendarDeclined(manager.id, displayName(args.employeeName, 'Your team member'), date, meetingId)],
+  ])
 }
 
 /**

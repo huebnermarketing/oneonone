@@ -80,3 +80,41 @@ describe('detectLanguageByScript', () => {
     expect(detectLanguageByScript('123 456')).toBeUndefined()
   })
 })
+
+import { evenSegmentSeconds, isUnreadableAudioError } from '@/lib/transcription-quality'
+
+describe('evenSegmentSeconds', () => {
+  it('keeps the cap when one piece fits or the length is unknown', () => {
+    expect(evenSegmentSeconds(590, 600)).toBe(600)
+    expect(evenSegmentSeconds(0, 600)).toBe(600)
+  })
+
+  it('never leaves a sliver at the end', () => {
+    // 20:00.4 used to become 600 + 600 + 0.4 s
+    const total = 1200.4
+    const seg = evenSegmentSeconds(total, 600)
+    const pieces = Math.ceil(total / seg)
+    const tail = total - (pieces - 1) * seg
+    expect(seg).toBeLessThanOrEqual(600)
+    expect(pieces).toBe(3)
+    expect(tail).toBeGreaterThan(300)
+  })
+
+  it('stays within the cap for long recordings', () => {
+    for (const total of [601, 1799, 3600.2, 5400]) {
+      const seg = evenSegmentSeconds(total, 600)
+      expect(seg).toBeLessThanOrEqual(600)
+      expect(total - (Math.ceil(total / seg) - 1) * seg).toBeGreaterThan(seg / 3)
+    }
+  })
+})
+
+describe('isUnreadableAudioError', () => {
+  it('matches the provider 400s for undecodable audio only', () => {
+    expect(isUnreadableAudioError({ status: 400, message: '400 HTTP 400: Audio file might be corrupted or unsupported' })).toBe(true)
+    expect(isUnreadableAudioError({ status: 400, message: 'Audio file is too short. Minimum audio length is 0.1 seconds.' })).toBe(true)
+    expect(isUnreadableAudioError({ status: 400, message: "response_format 'verbose_json' is not compatible" })).toBe(false)
+    expect(isUnreadableAudioError({ status: 429, message: 'corrupted' })).toBe(false)
+    expect(isUnreadableAudioError(null)).toBe(false)
+  })
+})

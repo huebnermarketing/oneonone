@@ -262,7 +262,7 @@ export function RecurringSchedulesClient({ employees, initialSchedules, workingD
           timeOfDay: '',
           durationMinutes: DEFAULT_MEETING_DURATION,
         })
-        toastSuccess('Schedule created')
+        toastSuccess('Schedule created. The first meetings are on both calendars.')
         router.refresh()
       } else {
         const error = await response.json()

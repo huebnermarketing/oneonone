@@ -489,6 +489,69 @@ export async function sendMeetingProposalEmail(
   await sendEmail({ to: employeeEmail, subject: `Meeting Request - ${mgrName}, ${when}`, html })
 }
 
+/**
+ * A meeting was booked straight onto both calendars (no accept step). `recurringLabel` (e.g.
+ * "Weekly on Monday") marks the first meeting of a recurring schedule.
+ */
+export async function sendMeetingBookedEmail(
+  toEmail: string,
+  toName: string | null,
+  scheduledByName: string | null,
+  meetingDate: Date,
+  meetingId: string,
+  durationMinutes?: number,
+  recurringLabel?: string
+) {
+  const name = toName || 'Team Member'
+  const by = scheduledByName || 'Your manager'
+  const when = whenFor(meetingDate, await recipientTimeZone(toEmail))
+
+  const html = emailLayout({
+    preheader: `${esc(by)} scheduled a one-on-one with you for ${when}`,
+    heading: 'Meeting Scheduled',
+    body: `
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(by)}</strong> has scheduled ${recurringLabel ? 'a recurring' : 'a'} one-on-one meeting with you. It is already on your Google Calendar &mdash; no need to accept. If you can't make it, request a reschedule from the meeting page.</p>
+      ${detailRow('Scheduled By', by)}
+      ${detailRow(recurringLabel ? 'First Meeting' : 'Date & Time', when)}
+      ${recurringLabel ? detailRow('Repeats', recurringLabel) : ''}
+      ${durationMinutes ? detailRow('Length', formatDuration(durationMinutes)) : ''}
+    `,
+    ctaText: 'View Meeting',
+    ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
+  })
+
+  await sendEmail({ to: toEmail, subject: `Meeting Scheduled - ${by}, ${when}`, html })
+}
+
+/** To the manager: the employee declined the meeting in Google Calendar. */
+export async function sendCalendarDeclinedEmail(
+  managerEmail: string,
+  managerName: string | null,
+  employeeName: string | null,
+  meetingDate: Date,
+  meetingId: string
+) {
+  const name = managerName || 'Manager'
+  const emp = employeeName || 'Your team member'
+  const when = whenFor(meetingDate, await recipientTimeZone(managerEmail))
+
+  const html = emailLayout({
+    preheader: `${esc(emp)} declined the one-on-one on ${when} in Google Calendar`,
+    heading: 'Meeting Declined in Calendar',
+    body: `
+      <p style="margin:0 0 16px;">Hi ${esc(name)},</p>
+      <p style="margin:0 0 20px;"><strong>${esc(emp)}</strong> declined this one-on-one in Google Calendar. The meeting is still scheduled in AMI. Follow up with them, or reschedule or cancel it from the meeting page.</p>
+      ${detailRow('Employee', emp)}
+      ${detailRow('Date & Time', when)}
+    `,
+    ctaText: 'View Meeting',
+    ctaUrl: `${baseUrl()}/meetings/${meetingId}`,
+  })
+
+  await sendEmail({ to: managerEmail, subject: `Declined in Google Calendar - ${emp}, ${when}`, html })
+}
+
 /** Email sent to the proposer when the receiver accepts. */
 export async function sendMeetingAcceptedEmail(
   proposerEmail: string,

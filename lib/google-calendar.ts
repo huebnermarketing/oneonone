@@ -44,6 +44,13 @@ async function getAuthenticatedClient(userId: string) {
   return oauth2Client
 }
 
+function confirmedAttendees(employeeEmail: string, reporterEmail: string) {
+  return [
+    { email: employeeEmail, responseStatus: 'accepted' },
+    { email: reporterEmail, responseStatus: 'accepted' },
+  ]
+}
+
 export async function createCalendarEvent(
   meetingId: string,
   employeeEmail: string,
@@ -75,10 +82,9 @@ export async function createCalendarEvent(
         dateTime: new Date(meetingDate.getTime() + durationMinutes * 60_000).toISOString(),
         timeZone: calendarTz,
       },
-      attendees: [
-        { email: employeeEmail },
-        { email: reporterEmail },
-      ],
+      // Meetings are confirmed when booked: both guests go in as accepted (the employee's own copy is
+      // also marked accepted with their token — lib/meeting-booking.ts acceptAsEmployee)
+      attendees: confirmedAttendees(employeeEmail, reporterEmail),
       reminders: {
         useDefault: false,
         overrides: [
@@ -170,10 +176,7 @@ export async function createRecurringCalendarEvent(
       timeZone: calendarTz,
     },
     recurrence: buildRecurrenceRule(frequency, firstOccurrenceDate, calendarTz),
-    attendees: [
-      { email: employeeEmail },
-      { email: reporterEmail },
-    ],
+    attendees: confirmedAttendees(employeeEmail, reporterEmail),
     reminders: {
       useDefault: false,
       overrides: [
@@ -337,6 +340,64 @@ export async function cancelCalendarOccurrence(seriesEventId: string, userId: st
   if (!occurrence?.id) return false
   await calendar.events.delete({ calendarId: 'primary', eventId: occurrence.id, sendUpdates: 'all' })
   return true
+}
+
+export type RsvpStatus = 'accepted' | 'declined' | 'tentative' | 'needsAction'
+
+const asRsvp = (v: string | null | undefined): RsvpStatus | null =>
+  v === 'accepted' || v === 'declined' || v === 'tentative' || v === 'needsAction' ? v : null
+
+function isNotFound(err: unknown): boolean {
+  const code = err && typeof err === 'object' && 'code' in err ? (err as { code: unknown }).code : undefined
+  return code === 404 || code === 410
+}
+
+/**
+ * Accept an invitation as the attendee, with THEIR Google connection: their RSVP on `eventId` (a single
+ * event or a whole series) becomes "accepted", no emails sent. A declined RSVP is left alone.
+ * 'missing' = the event isn't on their calendar (yet).
+ */
+export async function acceptInvitationAs(userId: string, attendeeEmail: string, eventId: string): Promise<'accepted' | 'declined' | 'missing'> {
+  const calendar = google.calendar({ version: 'v3', auth: await getAuthenticatedClient(userId) })
+  let event
+  try {
+    event = (await calendar.events.get({ calendarId: 'primary', eventId })).data
+  } catch (err) {
+    if (isNotFound(err)) return 'missing'
+    throw err
+  }
+  const attendees = event.attendees ?? []
+  const email = attendeeEmail.toLowerCase()
+  const me = attendees.find((a) => a.self || a.email?.toLowerCase() === email)
+  if (!me) return 'missing'
+  if (me.responseStatus === 'declined') return 'declined'
+  if (me.responseStatus === 'accepted') return 'accepted'
+  await calendar.events.patch({
+    calendarId: 'primary',
+    eventId,
+    requestBody: { attendees: attendees.map((a) => (a === me ? { ...a, responseStatus: 'accepted' } : a)) },
+    sendUpdates: 'none',
+  })
+  return 'accepted'
+}
+
+/**
+ * The attendee's RSVP as the organizer sees it. For a series pass `occurrenceStart` to read that one
+ * occurrence (a guest can decline a single week). null = event/occurrence/attendee not found.
+ */
+export async function getAttendeeRsvp(organizerId: string, eventId: string, attendeeEmail: string, occurrenceStart?: Date): Promise<RsvpStatus | null> {
+  const calendar = google.calendar({ version: 'v3', auth: await getAuthenticatedClient(organizerId) })
+  let event
+  try {
+    event = occurrenceStart
+      ? await findSeriesOccurrence(calendar, eventId, occurrenceStart)
+      : (await calendar.events.get({ calendarId: 'primary', eventId })).data
+  } catch (err) {
+    if (isNotFound(err)) return null
+    throw err
+  }
+  const email = attendeeEmail.toLowerCase()
+  return asRsvp(event?.attendees?.find((a) => a.email?.toLowerCase() === email)?.responseStatus)
 }
 
 export async function deleteCalendarEvent(googleEventId: string, userId: string) {
