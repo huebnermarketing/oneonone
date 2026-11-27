@@ -8,7 +8,7 @@ import { formatDateOnly, formatMeetingLong, timeZoneAbbrev } from '@/lib/dates'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
 import { getSettings } from '@/lib/settings'
 import { AddTodoForm } from './add-todo-form'
-import { MeetingRecorder } from './meeting-recorder'
+import { RecorderSlot } from '@/components/recording/recording-host'
 import { MarkCompletedButton } from './mark-completed-button'
 import { FORM_REQUIRED_MESSAGE } from './messages'
 import { TranscriptViewer } from './transcript-viewer'
@@ -349,7 +349,8 @@ export default async function MeetingDetailPage({
             </p>
           )}
           {isReporter && (
-            <MeetingRecorder
+            <RecorderSlot
+              label={meeting.employee.name || 'Meeting'}
               meetingId={meeting.id}
               hasExistingRecording={!!meeting.recording}
               recordingStatus={meeting.recording?.status}

@@ -23,7 +23,8 @@
     "typecheck": "tsc --noEmit",
     "db:studio": "prisma studio",
     "db:seed": "npx tsx prisma/seed.ts",
-    "secrets:reencrypt": "npx tsx scripts/reencrypt-secrets.ts"
+    "secrets:reencrypt": "npx tsx scripts/reencrypt-secrets.ts",
+    "recordings:remux": "npx tsx scripts/remux-recordings.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.981.0",
