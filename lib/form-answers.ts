@@ -17,6 +17,15 @@ export function requireComplete(answers: FormAnswers) {
   if (missing.length > 0) throw badRequest(`Please fill in the required fields: ${missing.join(', ')}`)
 }
 
+/**
+ * Manager corrections: an answer may not be cleared. Blanks that were already there (forms submitted while
+ * fewer questions were required) can stay, so old forms remain editable.
+ */
+export function requireNoClearedAnswers(before: FormAnswers, after: FormAnswers) {
+  const cleared = FORM_FIELDS.filter((f) => f.required && before[f.key] && !after[f.key]).map((f) => f.title)
+  if (cleared.length > 0) throw badRequest(`These answers can't be left empty: ${cleared.join(', ')}`)
+}
+
 export function recordRevision(
   db: Prisma.TransactionClient | typeof prisma,
   args: { meetingId: string; editedById: string; kind: FormRevisionKind; changes: FormAnswerChange[] }
@@ -49,7 +58,7 @@ export async function editFormAnswers(meeting: EditableMeeting, actor: ActorRef 
   const current = pickAnswers(row)
   const provided = Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined))
   const next = pickAnswers({ ...current, ...provided })
-  requireComplete(next)
+  requireNoClearedAnswers(current, next)
   const changes = diffAnswers(current, next)
   if (changes.length === 0) return changes
 

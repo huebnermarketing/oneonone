@@ -4,7 +4,7 @@ import { ids, reporter, admin, employee, otherReporter } from '../helpers/fixtur
 
 vi.mock('@/lib/notifications', () => ({ notifyFormEdited: vi.fn(async () => undefined) }))
 
-import { diffAnswers, missingRequired, pickAnswers } from '@/lib/form-fields'
+import { FORM_FIELDS, diffAnswers, missingRequired, pickAnswers } from '@/lib/form-fields'
 import { editFormAnswers } from '@/lib/form-answers'
 import { canEditFormAnswers } from '@/lib/meeting-access'
 import { notifyFormEdited } from '@/lib/notifications'
@@ -13,6 +13,8 @@ const full = {
   checkInPersonal: 'a', checkInProfessional: 'b', priorityGoalProfessional: 'c', priorityGoalAgency: null,
   progressReport: 'd', goodNews: null, supportNeeded: null, priorityDiscussions: null, headsUp: null, anythingElse: null,
 }
+/** Every question answered (forms submitted from now on) */
+const complete = { ...full, priorityGoalAgency: 'e', goodNews: 'f', supportNeeded: 'g', priorityDiscussions: 'h', headsUp: 'i', anythingElse: 'j' }
 const submitted = { id: ids.meeting, employeeId: ids.employee, reporterId: ids.reporter, formSubmittedAt: new Date(), status: 'COMPLETED' }
 
 describe('form-fields', () => {
@@ -21,8 +23,11 @@ describe('form-fields', () => {
     expect(diffAnswers(full, { ...full, progressReport: 'D', checkInPersonal: 'A' }).map((c) => c.field)).toEqual(['checkInPersonal', 'progressReport'])
     expect(diffAnswers({}, { goodNews: 'yay' })).toEqual([{ field: 'goodNews', before: null, after: 'yay' }])
   })
-  it('missing required fields by title', () => {
-    expect(missingRequired({ ...full, progressReport: '  ' })).toEqual(['Progress Report'])
+  it('every question is required on submit', () => {
+    expect(FORM_FIELDS.every((f) => f.required)).toBe(true)
+    expect(missingRequired({ ...complete, progressReport: '  ' })).toEqual(['Progress Report'])
+    expect(missingRequired(full)).toEqual(['Priority Goal: Agency Growth', 'Good News', 'Support Needed', 'Priority Discussions', 'Heads Up', 'Anything Else'])
+    expect(missingRequired(complete)).toEqual([])
   })
   it('pickAnswers normalises every field', () => {
     expect(pickAnswers({ goodNews: '' }).goodNews).toBeNull()
@@ -68,5 +73,19 @@ describe('editFormAnswers', () => {
   it('403 for others, 400 before submission', async () => {
     await expect(editFormAnswers(submitted, otherReporter, {})).rejects.toMatchObject({ status: 403 })
     await expect(editFormAnswers({ ...submitted, formSubmittedAt: null }, reporter, {})).rejects.toMatchObject({ status: 400 })
+  })
+})
+
+describe('editFormAnswers with all questions required', () => {
+  it('an old form with blank answers can still be corrected', async () => {
+    prismaMock.meeting.findUniqueOrThrow.mockResolvedValue(full) // 6 blanks from before
+    const changes = await editFormAnswers(submitted, reporter, { progressReport: 'fixed typo' })
+    expect(changes.map((c) => c.field)).toEqual(['progressReport'])
+  })
+
+  it('an answer cannot be cleared', async () => {
+    prismaMock.meeting.findUniqueOrThrow.mockResolvedValue(complete)
+    await expect(editFormAnswers(submitted, reporter, { goodNews: '  ' })).rejects.toThrow("These answers can't be left empty: Good News")
+    expect(prismaMock.meeting.update).not.toHaveBeenCalled()
   })
 })
