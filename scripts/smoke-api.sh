@@ -147,7 +147,8 @@ grep -q "have access to that page" /tmp/body && echo "  ok   access-denied copy"
 
 echo "## admin scheduling"
 ALEX_MGR=$($PSQL -c "select m.email from \"User\" u join \"User\" m on m.id=u.\"reportsToId\" where u.email='alex@test.com'")
-SCHED_AT=$(python3 -c "import datetime;print((datetime.datetime.now(datetime.UTC).replace(tzinfo=None)+datetime.timedelta(days=9)).replace(hour=6,minute=0,second=0,microsecond=0).isoformat()+'Z')")
+# 9+ days out, moved off the weekend (working-days policy)
+SCHED_AT=$(python3 -c "import datetime as d;t=(d.datetime.now(d.UTC).replace(tzinfo=None)+d.timedelta(days=9)).replace(hour=6,minute=0,second=0,microsecond=0);t+=d.timedelta(days=max(0,7-t.weekday()) if t.weekday()>4 else 0);print(t.isoformat()+'Z')")
 check "admin proposes 1:1 with someone else's report" 201 $(code -b "$ADMIN" -X POST $B/api/meetings -H 'content-type: application/json' -d "{\"employeeId\":\"$ALEX_ID\",\"meetingDate\":\"$SCHED_AT\",\"meetingType\":\"IN_PERSON\"}")
 ADM_MID=$(python3 -c "import json;print(json.load(open('/tmp/body'))['id'])")
 check "admin is the meeting owner (not $ALEX_MGR)" "nishant@test.com" "$($PSQL -c "select r.email from \"Meeting\" m join \"User\" r on r.id=m.\"reporterId\" where m.id='$ADM_MID'")"
@@ -180,7 +181,9 @@ $PSQL -c "delete from \"Notification\" where link in ('/meetings/$D1','/meetings
 echo "## reschedule"
 check "meeting to reschedule created" 201 $(mk 08:00 ',"durationMinutes":15')
 D3=$(python3 -c "import json;print(json.load(open('/tmp/body'))['id'])")
-check "employee accepts it" 200 $(code -b "$ALEX" -X POST $B/api/meetings/$D3/accept)
+check "booked straight away (no accept step)" SCHEDULED "$($PSQL -c "select status from \"Meeting\" where id='$D3'")"
+check "nothing to accept" 400 $(code -b "$ALEX" -X POST $B/api/meetings/$D3/accept)
+check "employee told it is booked" 1 "$($PSQL -c "select count(*) from \"Notification\" where link='/meetings/$D3' and type='MEETING_BOOKED' and \"userId\"='$ALEX_ID'")"
 rs() { code -b "$1" -X POST $B/api/meetings/$D3/reschedule -H 'content-type: application/json' -d "{\"meetingDate\":\"${MON}T$2:00.000Z\"$3}"; }
 check "employee asks to move it" 200 $(rs "$ALEX" 09:00 ',"reason":"smoke"')
 check "old time kept while pending" "${MON} 08:00 $ALEX_ID" "$($PSQL -c "select to_char(\"meetingDate\" at time zone 'UTC','YYYY-MM-DD HH24:MI')||' '||\"rescheduleRequestedById\" from \"Meeting\" where id='$D3'")"
@@ -197,7 +200,7 @@ $PSQL -c "delete from \"Notification\" where link like '/meetings/$D3%'; delete 
 echo "## form answers + history"
 check "meeting for form created" 201 $(mk 11:00 '')
 D4=$(python3 -c "import json;print(json.load(open('/tmp/body'))['id'])")
-check "employee accepts it" 200 $(code -b "$ALEX" -X POST $B/api/meetings/$D4/accept)
+check "booked as SCHEDULED" SCHEDULED "$($PSQL -c "select status from \"Meeting\" where id='$D4'")"
 FORM='"checkInPersonal":"p","checkInProfessional":"q","priorityGoalProfessional":"r","progressReport":"s"'
 frm() { code -b "$1" -X "$2" $B/api/meetings/$D4/form -H 'content-type: application/json' -d "{$3}"; }
 check "employee saves draft" 200 $(frm "$ALEX" POST "$FORM,\"draft\":true")
@@ -226,8 +229,8 @@ echo "## recurring schedule edit moves the series"
 check "schedule Mon 10:00 created" 201 $(code -b "$REP" -X POST $B/api/recurring-schedules -H 'content-type: application/json' -d "{\"employeeId\":\"$ALEX_ID\",\"frequency\":\"WEEKLY\",\"dayOfWeek\":1,\"timeOfDay\":\"10:00\",\"durationMinutes\":30,\"meetingType\":\"IN_PERSON\"}")
 RS=$(python3 -c "import json;print(json.load(open('/tmp/body'))['schedule']['id'])")
 RM=$(python3 -c "import json;print(json.load(open('/tmp/body'))['meeting']['id'])")
-check "employee accepts first meeting" 200 $(code -b "$ALEX" -X POST $B/api/meetings/$RM/accept)
-check "accept created the next one with the schedule's length" "2 30" "$($PSQL -c "select count(*)||' '||min(\"durationMinutes\") from \"Meeting\" where \"recurringScheduleId\"='$RS' and status='SCHEDULED'")"
+check "first meeting booked, no accept step" SCHEDULED "$($PSQL -c "select status from \"Meeting\" where id='$RM'")"
+check "creation booked the next one too, with the schedule's length" "2 30" "$($PSQL -c "select count(*)||' '||min(\"durationMinutes\") from \"Meeting\" where \"recurringScheduleId\"='$RS' and status='SCHEDULED'")"
 check "move to Wed 16:30" 200 $(code -b "$REP" -X PATCH $B/api/recurring-schedules/$RS -H 'content-type: application/json' -d '{"dayOfWeek":3,"timeOfDay":"16:30"}')
 check "both upcoming meetings moved" 2 "$(python3 -c "import json;print(json.load(open('/tmp/body'))['movedMeetingCount'])")"
 TZQ="(select replace(coalesce(\"timeZone\",'Asia/Kolkata'),'Asia/Calcutta','Asia/Kolkata') from \"User\" where id='$REP_ID')"
@@ -235,6 +238,16 @@ check "all upcoming on Wed 16:30 (reporter time)" "3 16:30" "$($PSQL -c "select 
 check "one week apart, next generation after the last" "7 7" "$($PSQL -c "with m as (select \"meetingDate\" d from \"Meeting\" where \"recurringScheduleId\"='$RS' order by 1) select extract(day from max(d)-min(d))::int||' '||extract(day from (select \"nextMeetingDate\" from \"RecurringSchedule\" where id='$RS')-max(d))::int from m")"
 check "Sunday still refused on edit" 400 $(code -b "$REP" -X PATCH $B/api/recurring-schedules/$RS -H 'content-type: application/json' -d '{"dayOfWeek":0}')
 $PSQL -c "delete from \"Notification\" where link like '/meetings/%' and \"createdAt\" > now() - interval '5 minutes' and \"userId\" in ('$ALEX_ID','$REP_ID'); delete from \"AuditLog\" where \"entityId\"='$RS' or \"entityId\" in (select id from \"Meeting\" where \"recurringScheduleId\"='$RS'); delete from \"Meeting\" where \"recurringScheduleId\"='$RS'; delete from \"RecurringSchedule\" where id='$RS';" >/dev/null
+
+echo "## old proposals are confirmed by the cron"
+FUT=$($PSQL -c "insert into \"Meeting\" (id,\"employeeId\",\"reporterId\",\"meetingDate\",status,\"proposedById\",\"updatedAt\") values ('smoke-prop-future','$ALEX_ID','$REP_ID','${MON} 13:00+00','PROPOSED','$REP_ID',now()) returning id" | head -1)
+PAST=$($PSQL -c "insert into \"Meeting\" (id,\"employeeId\",\"reporterId\",\"meetingDate\",status,\"proposedById\",\"updatedAt\") values ('smoke-prop-past','$ALEX_ID','$REP_ID',now() - interval '2 days','PROPOSED','$REP_ID',now()) returning id" | head -1)
+check "cron confirms future proposals" 200 $(code -X POST $B/api/cron/meetings -H "x-cron-secret: $CRON")
+check "cron reports it" yes "$(python3 -c "import json;print('yes' if json.load(open('/tmp/body'))['proposalsConfirmed']>=1 else 'no')")"
+check "future proposal now SCHEDULED, past one untouched" "SCHEDULED PROPOSED" "$($PSQL -c "select string_agg(status::text,' ' order by id) from \"Meeting\" where id in ('$FUT','$PAST')")"
+check "employee told it is booked" 1 "$($PSQL -c "select count(*) from \"Notification\" where link='/meetings/$FUT' and type='MEETING_BOOKED'")"
+check "cron rsvp watch ran" yes "$(python3 -c "import json;print('yes' if json.load(open('/tmp/body'))['calendarRsvp'] is not None else 'no')")"
+$PSQL -c "delete from \"Notification\" where link in ('/meetings/$FUT','/meetings/$PAST'); delete from \"Meeting\" where id in ('$FUT','$PAST');" >/dev/null
 
 echo "## user import"
 check "employee cannot download template" 403 $(code -b "$ALEX" "$B/api/admin/import-users?format=template")

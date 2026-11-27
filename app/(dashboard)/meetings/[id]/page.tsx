@@ -2,7 +2,7 @@ import { getCurrentUser } from '@/lib/auth-helpers'
 import { prisma } from '@/lib/prisma'
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { Calendar, User, FileText, CheckSquare, Clock, ArrowLeft, Mic, Video, MapPin, ExternalLink } from 'lucide-react'
+import { Calendar, CalendarX, User, FileText, CheckSquare, Clock, ArrowLeft, Mic, Video, MapPin, ExternalLink } from 'lucide-react'
 import { UserRole } from '@prisma/client'
 import { formatDateOnly, formatMeetingLong, timeZoneAbbrev } from '@/lib/dates'
 import { DEFAULT_TIMEZONE } from '@/lib/constants'
@@ -79,6 +79,8 @@ export default async function MeetingDetailPage({
   const canEditForm = isEmployee && (meeting.status === 'SCHEDULED' || (meeting.status === 'COMPLETED' && !isPast))
   const showFillFormCta = canEditForm && !formSubmitted
   const showEditFormCta = canEditForm && formSubmitted && !isPast
+
+  const declinedInCalendar = meeting.status === 'SCHEDULED' && !isPast && !!meeting.calendarDeclinedAt
 
   // Proposal flow
   const isProposed = meeting.status === 'PROPOSED'
@@ -195,6 +197,7 @@ export default async function MeetingDetailPage({
             <MeetingStatusPill status={meeting.status} isPast={isPast} className="sm:text-sm sm:px-4 sm:py-2" />
           )}
           {reschedulePending && <Pill tone="amber" dot className="sm:text-sm sm:px-4 sm:py-2">Reschedule pending</Pill>}
+          {declinedInCalendar && <Pill tone="red" dot className="sm:text-sm sm:px-4 sm:py-2">Declined in Google Calendar</Pill>}
         </div>
         {isReporter && meeting.status === 'SCHEDULED' && !formSubmitted && (settings?.requireFormBeforeComplete ?? true) && (
           <p className="text-sm text-amber-600 dark:text-amber-400">{FORM_REQUIRED_MESSAGE}</p>
@@ -215,7 +218,22 @@ export default async function MeetingDetailPage({
         />
       )}
 
-      {/* Proposal Actions – accept or suggest new time */}
+      {/* The employee declined in Google Calendar (hourly check, lib/meeting-booking.ts) — managers only */}
+      {declinedInCalendar && isReporter && (
+        <div role="status" className="rounded-2xl bg-red-500/5 border border-red-500/20 p-4 sm:p-5 flex items-start gap-3">
+          <CalendarX className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" aria-hidden="true" />
+          <div className="text-sm">
+            <p className="font-medium text-dark-gray dark:text-white">
+              {meeting.employee.name || 'The employee'} declined this meeting in Google Calendar
+            </p>
+            <p className="text-medium-gray mt-0.5">
+              It is still scheduled here. Follow up with them, or reschedule or cancel the meeting.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Proposal Actions – accept or suggest new time (only meetings proposed before booking replaced proposing) */}
       {isProposed && (
         <ProposalActions
           meetingId={meeting.id}

@@ -10,6 +10,7 @@ import * as notify from '@/lib/notify'
 import { createRecurringScheduleSchema } from '@/lib/validation/recurring'
 import { getPolicies } from '@/lib/settings'
 import { assertWorkingWeekday } from '@/lib/working-days'
+import { createNextOccurrence, recurringLabel, syncBookedMeetingToCalendar } from '@/lib/meeting-booking'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,8 +54,9 @@ async function pickFirstMeetingDate(reporterId: string, employeeId: string, prof
 }
 
 /**
- * POST /api/recurring-schedules — create a schedule for the caller and propose its first meeting.
- * Schedule create + first meeting + nextMeetingDate advance are atomic.
+ * POST /api/recurring-schedules — create a schedule for the caller and book its first meeting
+ * (SCHEDULED, no accept step) plus the next occurrence. Schedule + meetings + nextMeetingDate are atomic;
+ * the Google series is created right after, with the employee's RSVP accepted.
  */
 export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { user }) => {
   const { employeeId, frequency, dayOfWeek, timeOfDay, durationMinutes, meetingType, meetingLink } = await parseBody(req, createRecurringScheduleSchema)
@@ -107,7 +109,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
       },
     })
 
-    // First meeting is PROPOSED (needs the employee's acceptance)
+    // First meeting is booked straight away
     const first = await tx.meeting.create({
       data: {
         employeeId,
@@ -115,7 +117,7 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
         meetingDate: firstMeetingDate,
         durationMinutes: created.durationMinutes,
         recurringScheduleId: created.id,
-        status: 'PROPOSED',
+        status: 'SCHEDULED',
         proposedById: user.id,
         meetingType: created.meetingType,
         meetingLink: created.meetingLink,
@@ -123,10 +125,13 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
     })
 
     // Advance nextMeetingDate so the cron doesn't duplicate the first meeting
-    const updated = await tx.recurringSchedule.update({
+    await tx.recurringSchedule.update({
       where: { id: created.id },
       data: { nextMeetingDate: advanceToNextOccurrence(dayOfWeek, timeOfDay, frequency, firstMeetingDate, reporterTz) },
     })
+    // …and the one after it, as accepting the first meeting used to
+    await createNextOccurrence(tx, created.id)
+    const updated = await tx.recurringSchedule.findUniqueOrThrow({ where: { id: created.id } })
 
     return { schedule: updated, meeting: first }
   })
@@ -139,7 +144,15 @@ export const POST = withApiAuth(REPORTER_OR_ADMIN, async (req: NextRequest, { us
     details: { employeeId, employeeName: employee.name, frequency: schedule.frequency, dayOfWeek, timeOfDay, durationMinutes },
   })
 
-  await notify.meetingProposed({ meetingId: meeting.id, date: firstMeetingDate, employee: { id: employeeId, email: employee.email, name: employee.name }, reporter: { email: user.email, name: user.name }, durationMinutes })
+  const calendar = await syncBookedMeetingToCalendar(meeting.id)
+  await notify.meetingBooked({
+    meetingId: meeting.id,
+    date: firstMeetingDate,
+    to: { id: employeeId, email: employee.email, name: employee.name },
+    scheduledBy: { name: user.name },
+    durationMinutes,
+    recurringLabel: recurringLabel(frequency, dayOfWeek),
+  })
 
-  return NextResponse.json({ schedule, meeting }, { status: 201 })
+  return NextResponse.json({ schedule, meeting, calendar }, { status: 201 })
 })

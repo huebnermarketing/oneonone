@@ -19,6 +19,7 @@ vi.mock('@/lib/email', () => {
     'sendMeetingProposalEmail', 'sendMeetingAcceptedEmail', 'sendProposalConfirmationEmail', 'sendMeetingReminderEmail',
     'sendFormReminderEmail', 'sendMeetingSuggestionEmail', 'sendRecurringScheduleUpdatedEmail', 'sendMeetingCancelledEmail',
     'sendRescheduleRequestEmail', 'sendRescheduleAcceptedEmail', 'sendRescheduleDeclinedEmail',
+    'sendMeetingBookedEmail', 'sendCalendarDeclinedEmail',
   ]
   return Object.fromEntries(senders.map((name) => [name, vi.fn(async () => undefined)]))
 })
@@ -34,6 +35,8 @@ vi.mock('@/lib/google-calendar', () => ({
   isDateTimeFreeForBoth: vi.fn(async () => true),
   CalendarUnavailableError: class CalendarUnavailableError extends Error {},
   isCalendarEnabled: vi.fn(async () => false),
+  acceptInvitationAs: vi.fn(async () => 'accepted'),
+  getAttendeeRsvp: vi.fn(async () => 'accepted'),
 }))
 
 beforeEach(() => {
