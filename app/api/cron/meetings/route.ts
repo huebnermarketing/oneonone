@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import * as notify from '@/lib/notify'
-import { createCalendarEvent, isCalendarEnabled } from '@/lib/google-calendar'
+import { confirmPendingProposals, syncBookedMeetingToCalendar, watchCalendarRsvps, type RsvpWatchResult } from '@/lib/meeting-booking'
 import { advanceToNextOccurrence } from '@/lib/recurring-dates'
 import { getPolicies } from '@/lib/settings'
 import { checkRateLimit } from '@/lib/rate-limit'
@@ -40,11 +40,29 @@ export async function POST(request: NextRequest) {
       recordingJobsFailed: 0,
       kekaSync: null as null | { created: number; updated: number; deactivated: number; failed: number },
       retention: null as null | RetentionResult,
+      proposalsConfirmed: 0,
+      calendarRsvp: null as null | RsvpWatchResult,
       errors: [] as string[],
+    }
+
+    // 0. Meetings still waiting for an accept from before booking replaced proposing
+    try {
+      const { confirmed, failed } = await confirmPendingProposals()
+      results.proposalsConfirmed = confirmed
+      if (failed) results.errors.push(`confirm proposals: ${failed} failed`)
+    } catch (err) {
+      results.errors.push(`confirm proposals: ${err instanceof Error ? err.message : String(err)}`)
     }
 
     // 1. Generate recurring meetings that are due
     await generateRecurringMeetings(results)
+
+    // 1b. Google RSVPs for the coming week: alert managers about declines, re-accept pending ones
+    try {
+      results.calendarRsvp = await watchCalendarRsvps()
+    } catch (err) {
+      results.errors.push(`calendar rsvp: ${err instanceof Error ? err.message : String(err)}`)
+    }
 
     // 2. Send meeting reminders
     await sendMeetingReminders(results)
@@ -138,17 +156,7 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
         continue
       }
 
-      // Check if the recurring schedule has been accepted before (any SCHEDULED or COMPLETED meeting)
-      const hasAcceptedMeeting = await prisma.meeting.findFirst({
-        where: {
-          recurringScheduleId: schedule.id,
-          status: { in: ['SCHEDULED', 'COMPLETED'] },
-        },
-        select: { id: true },
-      })
-      const autoSchedule = !!hasAcceptedMeeting
-
-      // Create the meeting — auto-schedule if the schedule was already accepted
+      // Booked, never proposed: every occurrence is SCHEDULED and goes on the calendars
       const meeting = await prisma.meeting.create({
         data: {
           employeeId: schedule.employeeId,
@@ -156,7 +164,7 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
           meetingDate,
           durationMinutes: schedule.durationMinutes,
           recurringScheduleId: schedule.id,
-          status: autoSchedule ? 'SCHEDULED' : 'PROPOSED',
+          status: 'SCHEDULED',
           proposedById: schedule.reporterId,
           meetingType: schedule.meetingType ?? 'IN_PERSON',
           meetingLink: schedule.meetingLink,
@@ -176,47 +184,15 @@ async function generateRecurringMeetings(results: { recurringMeetingsCreated: nu
         data: { nextMeetingDate: nextDate, lastGeneratedAt: now },
       })
 
-      if (autoSchedule) {
-        // Recurring series: 1-year event is created on accept; only create single event when no series exists
-        if (!schedule.googleRecurringEventId) {
-          try {
-            const calendarEnabled = await isCalendarEnabled(schedule.reporterId)
-            if (calendarEnabled) {
-              await createCalendarEvent(
-                meeting.id,
-                schedule.employee.email,
-                schedule.reporter.email,
-                schedule.reporterId,
-                meetingDate,
-                schedule.employee.name,
-                schedule.reporter.name,
-                schedule.durationMinutes
-              )
-            }
-          } catch (calError) {
-            console.error('Failed to create calendar event for auto-scheduled recurring meeting:', calError)
-          }
-        }
-
-        // Next occurrence of an accepted series is confirmed straight away
-        await notify.meetingAccepted({
-          meetingId: meeting.id,
-          date: meetingDate,
-          to: { id: schedule.employeeId, email: schedule.employee.email, name: schedule.employee.name },
-          acceptorName: schedule.reporter.name,
-          acceptorFallback: 'Your manager',
-          durationMinutes: schedule.durationMinutes,
-        })
-      } else {
-        // First-time proposal
-        await notify.meetingProposed({
-          meetingId: meeting.id,
-          date: meetingDate,
-          employee: { id: schedule.employeeId, email: schedule.employee.email, name: schedule.employee.name },
-          reporter: schedule.reporter,
-          durationMinutes: schedule.durationMinutes,
-        })
-      }
+      // Part of the schedule's Google series (created if missing) + employee RSVP; best effort
+      await syncBookedMeetingToCalendar(meeting.id)
+      await notify.meetingBooked({
+        meetingId: meeting.id,
+        date: meetingDate,
+        to: { id: schedule.employeeId, email: schedule.employee.email, name: schedule.employee.name },
+        scheduledBy: schedule.reporter,
+        durationMinutes: schedule.durationMinutes,
+      })
 
       results.recurringMeetingsCreated++
     } catch (error) {

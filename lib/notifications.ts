@@ -300,6 +300,26 @@ export async function notifyMeetingProposed(
   })
 }
 
+export async function notifyMeetingBooked(userId: string, scheduledByName: string, meetingDate: Date, meetingId: string) {
+  return createNotification({
+    userId,
+    type: 'MEETING_BOOKED',
+    title: 'Meeting Scheduled',
+    message: `${scheduledByName} scheduled a one-on-one with you for ${await whenFor(userId, meetingDate)}. It's on your calendar.`,
+    link: `/meetings/${meetingId}`,
+  })
+}
+
+export async function notifyCalendarDeclined(managerId: string, employeeName: string, meetingDate: Date, meetingId: string) {
+  return createNotification({
+    userId: managerId,
+    type: 'CALENDAR_DECLINED',
+    title: 'Declined in Google Calendar',
+    message: `${employeeName} declined the one-on-one on ${await whenFor(managerId, meetingDate)} in Google Calendar.`,
+    link: `/meetings/${meetingId}`,
+  })
+}
+
 export async function notifyMeetingAccepted(
   proposerId: string,
   acceptorName: string,
